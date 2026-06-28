@@ -1,21 +1,18 @@
-# Build stage
 FROM node:22-alpine AS build
 
 WORKDIR /app
 
-COPY package*.json ./
-
+# IMPORTANT: copy relative to build context
+COPY my-arcgis-app/package*.json ./
 RUN npm install
 
-COPY . .
+COPY my-arcgis-app/. .
 
 RUN npm run build
 
-# Runtime stage
 FROM nginx:alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
