@@ -21,6 +21,11 @@ Implementation:
    <img width="1035" height="896" alt="image" src="https://github.com/user-attachments/assets/9b0f958f-84ec-4431-8da9-a27fef1cbdfa" />
    <img width="1457" height="785" alt="image" src="https://github.com/user-attachments/assets/8289b341-39d4-4181-8a3e-307333ae691f" />
 
+4) Reskined the UI
+   <img width="1906" height="936" alt="image" src="https://github.com/user-attachments/assets/70ecba05-1010-4a48-902d-87f5ef1d0bc0" />
+   <img width="1896" height="892" alt="image" src="https://github.com/user-attachments/assets/c7c83f6d-5c9e-43c2-9b28-60fe64404d1f" />
+
+
 
 
 If using ArcGIS Enterprise:
