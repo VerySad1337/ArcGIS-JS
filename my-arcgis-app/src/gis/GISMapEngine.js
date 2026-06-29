@@ -2,22 +2,43 @@ import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 
+import {HEATMAP_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration.js";
+
 export default class GISMapEngine {
 constructor() {
-this.routeLayer = new GraphicsLayer();
-this.stopLayer = new GraphicsLayer();
+this.routeLayer =
+new GraphicsLayer();
+
+this.stopLayer =
+  new GraphicsLayer();
+
 this.heatLayer = null;
+
+this.heatIntensity = 50;
+
 }
 
 attachToView(view) {
 if (!view) return;
 
-if (!view.map.layers.includes(this.routeLayer)) {
-  view.map.add(this.routeLayer);
+if (
+  !view.map.layers.includes(
+    this.routeLayer
+  )
+) {
+  view.map.add(
+    this.routeLayer
+  );
 }
 
-if (!view.map.layers.includes(this.stopLayer)) {
-  view.map.add(this.stopLayer);
+if (
+  !view.map.layers.includes(
+    this.stopLayer
+  )
+) {
+  view.map.add(
+    this.stopLayer
+  );
 }
 
 }
@@ -66,59 +87,116 @@ this.stopLayer.add(
 }
 
 toggleRoute(visible) {
-this.routeLayer.visible = visible;
-this.stopLayer.visible = visible;
+this.routeLayer.visible =
+visible;
+
+this.stopLayer.visible =
+  visible;
+
 }
 
-enableHeatmap(view, intensity) {
-  this.heatIntensity = intensity;
+enableHeatmap(
+view,
+intensity
+) {
+this.heatIntensity =
+intensity;
 
-  if (this.heatLayer) {
-    this.heatLayer.visible = true;
+if (this.heatLayer) {
+  this.heatLayer.visible =
+    true;
 
-    const renderer = this.heatLayer.renderer.clone();
-    renderer.maxPixelIntensity = intensity;
-    this.heatLayer.renderer = renderer;
+  const renderer =
+    this.heatLayer.renderer.clone();
 
-    return;
-  }
+  renderer.maxPixelIntensity =
+    intensity;
 
-  this.heatLayer = new FeatureLayer({
-    url: "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer",
+  this.heatLayer.renderer =
+    renderer;
+
+  return;
+}
+
+this.heatLayer =
+  new FeatureLayer({
+    url:
+      HEATMAP_FEATURE_LAYER_URL,
+
     opacity: 0.8,
+
     renderer: {
       type: "heatmap",
+
       radius: 25,
+
       colorStops: [
-        { ratio: 0, color: "rgba(0,0,255,0)" },
-        { ratio: 0.2, color: "blue" },
-        { ratio: 0.4, color: "cyan" },
-        { ratio: 0.6, color: "lime" },
-        { ratio: 0.8, color: "yellow" },
-        { ratio: 1, color: "red" }
+        {
+          ratio: 0,
+          color:
+            "rgba(0,0,255,0)"
+        },
+        {
+          ratio: 0.2,
+          color: "blue"
+        },
+        {
+          ratio: 0.4,
+          color: "cyan"
+        },
+        {
+          ratio: 0.6,
+          color: "lime"
+        },
+        {
+          ratio: 0.8,
+          color: "yellow"
+        },
+        {
+          ratio: 1,
+          color: "red"
+        }
       ],
-      maxPixelIntensity: intensity,
+
+      maxPixelIntensity:
+        intensity,
+
       minPixelIntensity: 1
     }
   });
 
-  view.map.add(this.heatLayer);
+view.map.add(
+  this.heatLayer
+);
+
 }
+
 disableHeatmap() {
-  if (!this.heatLayer) return;
+if (!this.heatLayer)
+return;
 
-  this.heatLayer.visible = false;
+this.heatLayer.visible =
+  false;
+
 }
 
-updateHeatmapIntensity(value) {
-  this.heatIntensity = value;
+updateHeatmapIntensity(
+value
+) {
+this.heatIntensity =
+value;
 
-  if (!this.heatLayer) return;
+if (!this.heatLayer)
+  return;
 
-  const renderer = this.heatLayer.renderer.clone();
+const renderer =
+  this.heatLayer.renderer.clone();
 
-  renderer.maxPixelIntensity = value;
+renderer.maxPixelIntensity =
+  value;
 
-  this.heatLayer.renderer = renderer;
+this.heatLayer.renderer =
+  renderer;
+
 }
 }
