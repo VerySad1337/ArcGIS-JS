@@ -11,13 +11,13 @@ export default function RouteInput({ onRoute }) {
   return (
   <div className="route-panel">
     <input
-      placeholder="Start (lon,lat)"
+      placeholder="Start Address / Postal Code"
       value={start}
       onChange={(e) => setStart(e.target.value)}
     />
 
     <input
-      placeholder="End (lon,lat)"
+      placeholder="End Address / Postal Code"
       value={end}
       onChange={(e) => setEnd(e.target.value)}
     />
