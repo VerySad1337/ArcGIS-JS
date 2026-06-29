@@ -2,6 +2,7 @@ import { useState } from "react";
 import RouteInput from "./components/RouteInput";
 import RouteMap from "./components/RouteMap";
 import { solveRoute } from "./services/routeService";
+import { geocodeAddress } from "./services/geocodeService";
 
 function App() {
 const [is3D, setIs3D] = useState(false);
@@ -12,20 +13,23 @@ const webSceneId = "54e3ba44a26243f0867d52bb1cc454fc";
 
 const handleRoute = async (startStr, endStr) => {
 try {
-const [sx, sy] = startStr.split(",").map(Number);
-const [ex, ey] = endStr.split(",").map(Number);
+const startLocation =
+await geocodeAddress(startStr);
 
-  const start = {
-    type: "point",
-    longitude: sx,
-    latitude: sy
-  };
+const endLocation =
+await geocodeAddress(endStr);
 
-  const end = {
-    type: "point",
-    longitude: ex,
-    latitude: ey
-  };
+const start = {
+type: "point",
+longitude: startLocation.longitude,
+latitude: startLocation.latitude
+};
+
+const end = {
+type: "point",
+longitude: endLocation.longitude,
+latitude: endLocation.latitude
+};
 
   console.log("Start:", start);
   console.log("End:", end);
