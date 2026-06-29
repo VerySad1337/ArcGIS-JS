@@ -53,7 +53,9 @@ await geocodeAddress(startStr);
   const route =
     await solveRoute(start, end);
 
-  engineRef.current.drawRoute(route);
+  console.log(route);
+  console.log(route.spatialReference);
+    engineRef.current.drawRoute(route);
 
   engineRef.current.drawStops(
     start,
