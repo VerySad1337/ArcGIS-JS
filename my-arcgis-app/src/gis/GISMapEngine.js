@@ -71,45 +71,54 @@ this.stopLayer.visible = visible;
 }
 
 enableHeatmap(view, intensity) {
-if (this.heatLayer) return;
+  this.heatIntensity = intensity;
 
-this.heatLayer = new FeatureLayer({
-  url: "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer",
-  opacity: 0.8,
-  renderer: {
-    type: "heatmap",
-    colorStops: [
-      { ratio: 0, color: "rgba(0,0,255,0)" },
-      { ratio: 0.2, color: "blue" },
-      { ratio: 0.4, color: "cyan" },
-      { ratio: 0.6, color: "lime" },
-      { ratio: 0.8, color: "yellow" },
-      { ratio: 1, color: "red" }
-    ],
-    maxPixelIntensity: intensity,
-    minPixelIntensity: 0
+  if (this.heatLayer) {
+    this.heatLayer.visible = true;
+
+    const renderer = this.heatLayer.renderer.clone();
+    renderer.maxPixelIntensity = intensity;
+    this.heatLayer.renderer = renderer;
+
+    return;
   }
-});
 
-view.map.add(this.heatLayer);
+  this.heatLayer = new FeatureLayer({
+    url: "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer",
+    opacity: 0.8,
+    renderer: {
+      type: "heatmap",
+      radius: 25,
+      colorStops: [
+        { ratio: 0, color: "rgba(0,0,255,0)" },
+        { ratio: 0.2, color: "blue" },
+        { ratio: 0.4, color: "cyan" },
+        { ratio: 0.6, color: "lime" },
+        { ratio: 0.8, color: "yellow" },
+        { ratio: 1, color: "red" }
+      ],
+      maxPixelIntensity: intensity,
+      minPixelIntensity: 1
+    }
+  });
 
+  view.map.add(this.heatLayer);
 }
+disableHeatmap() {
+  if (!this.heatLayer) return;
 
-disableHeatmap(view) {
-if (!this.heatLayer) return;
-
-view.map.remove(this.heatLayer);
-this.heatLayer = null;
-
+  this.heatLayer.visible = false;
 }
 
 updateHeatmapIntensity(value) {
-if (!this.heatLayer) return;
+  this.heatIntensity = value;
 
-this.heatLayer.renderer = {
-  ...this.heatLayer.renderer,
-  maxPixelIntensity: value
-};
+  if (!this.heatLayer) return;
 
+  const renderer = this.heatLayer.renderer.clone();
+
+  renderer.maxPixelIntensity = value;
+
+  this.heatLayer.renderer = renderer;
 }
 }

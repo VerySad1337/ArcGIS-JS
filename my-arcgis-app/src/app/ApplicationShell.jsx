@@ -73,7 +73,7 @@ if (!heatOn) {
     heatIntensity
   );
 } else {
-  engineRef.current.disableHeatmap(view);
+  engineRef.current.disableHeatmap();
 }
 
 setHeatOn(!heatOn);
