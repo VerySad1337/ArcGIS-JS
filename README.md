@@ -1,4 +1,4 @@
-React JS -> ArcGIS Server sdk
+React JS -> ArcGIS Server
 
 Instruction:
 1) Clone the repo
