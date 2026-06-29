@@ -1,3 +1,5 @@
+React JS -> ArcGIS Server
+
 Instruction:
 1) Clone the repo
 2) Change the .env for api key for routing engine etc.
@@ -14,5 +16,11 @@ Implementation:
 <img width="1647" height="905" alt="image" src="https://github.com/user-attachments/assets/4d02617b-0fb0-442b-885b-65961a87d06b" />
 <img width="1002" height="940" alt="image" src="https://github.com/user-attachments/assets/f523d381-2190-4058-8ac0-dbb5a6a3a0a4" />
 <img width="1917" height="746" alt="image" src="https://github.com/user-attachments/assets/6cf6e234-b9c4-4b7d-a743-7efe08f3775e" />
+
+3) Implemented toggle on off for heat map and routing, routing start and end point, intensity bar for heatmap
+   <img width="1071" height="942" alt="image" src="https://github.com/user-attachments/assets/78471920-8c72-4f6e-82d9-a9129f6d1a6a" />
+   <img width="1035" height="896" alt="image" src="https://github.com/user-attachments/assets/9b0f958f-84ec-4431-8da9-a27fef1cbdfa" />
+   
+
 
 
