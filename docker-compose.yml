@@ -2,5 +2,7 @@ services:
   arcgis-app:
     build:
       context: .
+      args:
+        VITE_ARCGIS_API_KEY: ${VITE_ARCGIS_API_KEY}
     ports:
       - "8080:80"

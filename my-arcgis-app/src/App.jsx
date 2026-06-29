@@ -1,15 +1,41 @@
 import { useState } from "react";
 
-import "@arcgis/map-components/components/arcgis-map";
-import "@arcgis/map-components/components/arcgis-scene";
-import "@arcgis/map-components/components/arcgis-zoom";
+import RouteInput from "./components/RouteInput";
+import RouteMap from "./components/RouteMap";
+
+import { solveRoute } from "./services/routeService";
 
 function App() {
   const [is3D, setIs3D] = useState(false);
+  const [routeGeometry, setRouteGeometry] = useState(null);
 
-  // Replace with your IDs
   const webMapId = "e64141e618654205b8e4849c39f23212";
   const webSceneId = "54e3ba44a26243f0867d52bb1cc454fc";
+
+  const handleRoute = async (startStr, endStr) => {
+    try {
+      const [sx, sy] = startStr.split(",").map(Number);
+      const [ex, ey] = endStr.split(",").map(Number);
+
+      const start = {
+        type: "point",
+        longitude: sx,
+        latitude: sy
+      };
+
+      const end = {
+        type: "point",
+        longitude: ex,
+        latitude: ey
+      };
+
+      const route = await solveRoute(start, end);
+
+      setRouteGeometry(route);
+    } catch (error) {
+      console.error(error);
+    }
+  };
 
   return (
     <div className="app">
@@ -20,21 +46,14 @@ function App() {
         {is3D ? "Switch to 2D" : "Switch to 3D"}
       </button>
 
-      {!is3D ? (
-        <arcgis-map
-          item-id={webMapId}
-          class="map-view"
-        >
-          <arcgis-zoom slot="top-left"></arcgis-zoom>
-        </arcgis-map>
-      ) : (
-        <arcgis-scene
-          item-id={webSceneId}
-          class="scene-view"
-        >
-          <arcgis-zoom slot="top-left"></arcgis-zoom>
-        </arcgis-scene>
-      )}
+      <RouteInput onRoute={handleRoute} />
+
+      <RouteMap
+        is3D={is3D}
+        webMapId={webMapId}
+        webSceneId={webSceneId}
+        routeGeometry={routeGeometry}
+      />
     </div>
   );
 }
