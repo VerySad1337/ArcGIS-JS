@@ -3,9 +3,8 @@ React JS -> ArcGIS Server
 Instruction:
 1) Clone the repo
 2) Change the .env for api key for routing engine etc.
-3) edit arcgis config for portal address and routing service url
-4) change app.jsx map / scene id to your own.
-5) docker compose up -- build
+3) Edit ArcGISConfiguration.js WEBMAP_ID,WEBSCENE_ID, HEATMAP_FEATURE_LAYER_URL to your own.
+4) docker compose up -- build
 
 
 Implementation:
@@ -24,4 +23,5 @@ Implementation:
 
 
 
-
+If using ArcGIS Enterprise:
+Remember to switch the ROUTE_SERVICE_URL and GEO_CODER_URL to arcgis enterprise's url
