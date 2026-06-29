@@ -20,7 +20,8 @@ Implementation:
 3) Implemented toggle on off for heat map and routing, routing start and end point, intensity bar for heatmap
    <img width="1071" height="942" alt="image" src="https://github.com/user-attachments/assets/78471920-8c72-4f6e-82d9-a9129f6d1a6a" />
    <img width="1035" height="896" alt="image" src="https://github.com/user-attachments/assets/9b0f958f-84ec-4431-8da9-a27fef1cbdfa" />
-   
+   <img width="1457" height="785" alt="image" src="https://github.com/user-attachments/assets/8289b341-39d4-4181-8a3e-307333ae691f" />
+
 
 
 
