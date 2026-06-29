@@ -1,10 +1,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import ApplicationShell from "./app/ApplicationShell";
-import "./index.css";
+import "./styles/gis-theme.css"; // IMPORTANT (your futuristic UI)
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <ApplicationShell  />
+    <ApplicationShell />
   </React.StrictMode>
 );
