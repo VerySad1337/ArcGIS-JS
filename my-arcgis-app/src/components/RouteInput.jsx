@@ -5,26 +5,32 @@ export default function RouteInput({ onRoute }) {
   const [end, setEnd] = useState("");
 
   const handleSubmit = () => {
+    if (!start || !end) return;
     onRoute(start, end);
   };
 
   return (
-  <div className="route-panel">
-    <input
-      placeholder="Start Address / Postal Code"
-      value={start}
-      onChange={(e) => setStart(e.target.value)}
-    />
+    <div className="route-panel">
 
-    <input
-      placeholder="End Address / Postal Code"
-      value={end}
-      onChange={(e) => setEnd(e.target.value)}
-    />
+      <input
+        placeholder="Start location"
+        value={start}
+        onChange={(e) => setStart(e.target.value)}
+      />
 
-    <button onClick={handleSubmit}>
-      Calculate Route
-    </button>
-  </div>
+      <input
+        placeholder="End location"
+        value={end}
+        onChange={(e) => setEnd(e.target.value)}
+      />
+
+      <button
+        className="gis-button"
+        onClick={handleSubmit}
+      >
+        Calculate Route
+      </button>
+
+    </div>
   );
 }

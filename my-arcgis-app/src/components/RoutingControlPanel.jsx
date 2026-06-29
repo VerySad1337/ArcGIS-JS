@@ -1,57 +1,78 @@
 import RouteInput from "./RouteInput";
 
 export default function RoutingControlPanel({
-is3D,
-setIs3D,
-routeOn,
-toggleRoute,
-heatOn,
-toggleHeatmap,
-heatIntensity,
-updateIntensity,
-onRoute
+  is3D,
+  setIs3D,
+  routeOn,
+  toggleRoute,
+  heatOn,
+  toggleHeatmap,
+  heatIntensity,
+  updateIntensity,
+  onRoute
 }) {
-return (
-<>
-<div
-style={{
-position: "absolute",
-top: 10,
-left: 10,
-zIndex: 1000,
-background: "white",
-padding: 8,
-display: "flex",
-gap: 10
-}}
->
-<button onClick={() => setIs3D(!is3D)}>
-{is3D ? "2D" : "3D"}
-</button>
+  return (
+    <>
 
-    <button onClick={toggleRoute}>
-      {routeOn ? "Hide Route" : "Show Route"}
-    </button>
+      {/* VIEW MODE */}
+      <div className="panel-card">
+        <div className="panel-title">
+          VIEW MODE
+        </div>
 
-    <button onClick={toggleHeatmap}>
-      {heatOn ? "Hide Heatmap" : "Show Heatmap"}
-    </button>
+        <button
+          className="gis-button"
+          onClick={() => setIs3D(!is3D)}
+        >
+          {is3D ? "Switch to 2D" : "Switch to 3D"}
+        </button>
+      </div>
 
-    <input
-      type="range"
-      min="1"
-      max="100"
-      value={heatIntensity}
-      onChange={(e) =>
-        updateIntensity(Number(e.target.value))
-      }
-    />
+      {/* ROUTE */}
+      <div className="panel-card">
+        <div className="panel-title">
+          ROUTE SEARCH
+        </div>
 
-    <span>{heatIntensity}</span>
-  </div>
+        <RouteInput onRoute={onRoute} />
+      </div>
 
-  <RouteInput onRoute={onRoute} />
-</>
+      {/* ROUTE TOGGLE */}
+      <div className="panel-card">
+        <div className="panel-title">
+          ROUTE LAYER
+        </div>
 
-);
+        <button className="gis-button" onClick={toggleRoute}>
+          {routeOn ? "Hide Route" : "Show Route"}
+        </button>
+      </div>
+
+      {/* HEATMAP */}
+      <div className="panel-card">
+        <div className="panel-title">
+          HEATMAP
+        </div>
+
+        <button className="gis-button" onClick={toggleHeatmap}>
+          {heatOn ? "Hide Heatmap" : "Show Heatmap"}
+        </button>
+
+        <input
+          type="range"
+          min="1"
+          max="100"
+          value={heatIntensity}
+          onChange={(e) =>
+            updateIntensity(Number(e.target.value))
+          }
+        />
+
+        <div className="slider-value">
+          {heatIntensity}
+        </div>
+      </div>
+
+    </>
+  );
 }
