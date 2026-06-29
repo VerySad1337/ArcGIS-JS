@@ -1,7 +1,7 @@
-import * as route from "@arcgis/core/rest/route";
-import RouteParameters from "@arcgis/core/rest/support/RouteParameters";
-import FeatureSet from "@arcgis/core/rest/support/FeatureSet";
-import Graphic from "@arcgis/core/Graphic";
+import { solve } from "@arcgis/core/rest/route.js";
+import RouteParameters from "@arcgis/core/rest/support/RouteParameters.js";
+import FeatureSet from "@arcgis/core/rest/support/FeatureSet.js";
+import Graphic from "@arcgis/core/Graphic.js";
 
 import { ROUTE_SERVICE_URL } from "../config/arcgisConfig";
 
@@ -17,12 +17,11 @@ export async function solveRoute(start, end) {
         })
       ]
     }),
-
     returnDirections: true,
     returnRoutes: true
   });
 
-  const result = await route.solve(
+  const result = await solve(
     ROUTE_SERVICE_URL,
     params
   );
