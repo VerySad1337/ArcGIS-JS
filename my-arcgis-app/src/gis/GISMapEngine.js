@@ -1,18 +1,20 @@
 import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
-
 import {HEATMAP_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration.js";
 
 export default class GISMapEngine {
 constructor() {
-this.routeLayer =
-new GraphicsLayer();
+this.routeLayer = null;
+this.stopLayer = null;
 
-this.stopLayer =
-  new GraphicsLayer();
+this.routeGraphic = null;
+this.startGraphic = null;
+this.endGraphic = null;
 
 this.heatLayer = null;
+
+this.currentMap = null;
 
 this.heatIntensity = 50;
 
@@ -21,59 +23,89 @@ this.heatIntensity = 50;
 attachToView(view) {
 if (!view) return;
 
-if (
-  !view.map.layers.includes(
-    this.routeLayer
-  )
-) {
-  view.map.add(
-    this.routeLayer
+const map = view.map;
+
+if (this.currentMap === map) {
+  return;
+}
+
+this.currentMap = map;
+
+this.routeLayer = new GraphicsLayer({
+  title: "Route Layer"
+});
+
+this.stopLayer = new GraphicsLayer({
+  title: "Stop Layer"
+});
+
+if (this.routeGraphic) {
+  this.routeLayer.add(
+    this.routeGraphic
   );
 }
 
+if (this.startGraphic) {
+  this.stopLayer.add(
+    this.startGraphic
+  );
+}
+
+if (this.endGraphic) {
+  this.stopLayer.add(
+    this.endGraphic
+  );
+}
+
+map.add(this.routeLayer);
+map.add(this.stopLayer);
+
 if (
-  !view.map.layers.includes(
-    this.stopLayer
+  this.heatLayer &&
+  !map.layers.includes(
+    this.heatLayer
   )
 ) {
-  view.map.add(
-    this.stopLayer
-  );
+  map.add(this.heatLayer);
 }
 
 }
 
 drawRoute(routeGeometry) {
+this.routeGraphic =
+new Graphic({
+geometry: routeGeometry,
+symbol: {
+type: "simple-line",
+color: [255, 0, 0],
+width: 6
+}
+});
+
+if (!this.routeLayer) {
+  return;
+}
+
 this.routeLayer.removeAll();
 
 this.routeLayer.add(
-  new Graphic({
-    geometry: routeGeometry,
-    symbol: {
-      type: "simple-line",
-      color: [255, 0, 0],
-      width: 6
-    }
-  })
+  this.routeGraphic
 );
 
 }
 
 drawStops(start, end) {
-this.stopLayer.removeAll();
+this.startGraphic =
+new Graphic({
+geometry: start,
+symbol: {
+type: "simple-marker",
+color: "green",
+size: 10
+}
+});
 
-this.stopLayer.add(
-  new Graphic({
-    geometry: start,
-    symbol: {
-      type: "simple-marker",
-      color: "green",
-      size: 10
-    }
-  })
-);
-
-this.stopLayer.add(
+this.endGraphic =
   new Graphic({
     geometry: end,
     symbol: {
@@ -81,17 +113,31 @@ this.stopLayer.add(
       color: "red",
       size: 10
     }
-  })
-);
+  });
+
+if (!this.stopLayer) {
+  return;
+}
+
+this.stopLayer.removeAll();
+
+this.stopLayer.addMany([
+  this.startGraphic,
+  this.endGraphic
+]);
 
 }
 
 toggleRoute(visible) {
+if (this.routeLayer) {
 this.routeLayer.visible =
 visible;
+}
 
-this.stopLayer.visible =
-  visible;
+if (this.stopLayer) {
+  this.stopLayer.visible =
+    visible;
+}
 
 }
 
@@ -172,8 +218,9 @@ view.map.add(
 }
 
 disableHeatmap() {
-if (!this.heatLayer)
+if (!this.heatLayer) {
 return;
+}
 
 this.heatLayer.visible =
   false;
@@ -186,8 +233,9 @@ value
 this.heatIntensity =
 value;
 
-if (!this.heatLayer)
+if (!this.heatLayer) {
   return;
+}
 
 const renderer =
   this.heatLayer.renderer.clone();
