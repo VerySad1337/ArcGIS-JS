@@ -8,5 +8,5 @@ Instruction:
 
 Implementation:
 1) Displaying 2D and 3D Map layer from arcgis.
-2) Routing engine using ArcGIS Network analyst.
-3) Implemented geocode service using arcgis SDK.
+2) Routing engine using ArcGIS Network analyst with lat / long.
+3) Implemented geocode service using arcgis SDK now using postal code / building name.
