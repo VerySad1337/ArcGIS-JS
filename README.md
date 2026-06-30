@@ -24,6 +24,13 @@ Implementation:
 4) Reskined the UI
    <img width="1906" height="936" alt="image" src="https://github.com/user-attachments/assets/70ecba05-1010-4a48-902d-87f5ef1d0bc0" />
    <img width="1896" height="892" alt="image" src="https://github.com/user-attachments/assets/c7c83f6d-5c9e-43c2-9b28-60fe64404d1f" />
+5) Full UI Rework to toggle between layer view
+   <img width="1907" height="917" alt="image" src="https://github.com/user-attachments/assets/f853dc80-7cdd-4593-ba92-91cf52d95b93" />
+   <img width="1902" height="931" alt="image" src="https://github.com/user-attachments/assets/97a3ad65-1d73-4cec-bb16-4c245518af20" />
+   <img width="1892" height="910" alt="image" src="https://github.com/user-attachments/assets/6364b2bb-614f-4d3f-a384-0385a3dc0c20" />
+   <img width="1912" height="852" alt="image" src="https://github.com/user-attachments/assets/53a68111-4838-4628-abc3-335bd0c627a1" />
+
+
 
 
 
