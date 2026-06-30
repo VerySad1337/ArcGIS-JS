@@ -1,100 +1,83 @@
 import { useRef, useState } from "react";
-
 import GISMapView from "../components/GISMapView";
 import RoutingControlPanel from "../components/RoutingControlPanel";
-
+import LayerControlPanel from "../components/LayerControlPanel";
 import GISMapEngine from "../gis/GISMapEngine";
-
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
-
-import {
-  WEBMAP_ID,
-  WEBSCENE_ID
-} from "../config/ArcGISConfiguration";
+import { WEBMAP_ID, WEBSCENE_ID } from "../config/ArcGISConfiguration";
 
 export default function ApplicationShell() {
-
   const [is3D, setIs3D] = useState(false);
-
-  // ✅ RESTORED STATES (IMPORTANT)
   const [routeOn, setRouteOn] = useState(true);
   const [heatOn, setHeatOn] = useState(false);
   const [heatIntensity, setHeatIntensity] = useState(50);
-
+  const [layers, setLayers] = useState([]);
   const viewRef = useRef(null);
   const engineRef = useRef(new GISMapEngine());
+
+  const refreshLayers = () => {
+    const updated = engineRef.current.getLayers();
+    setLayers([...updated]);
+  };
 
   const handleViewReady = (view) => {
     viewRef.current = view;
     engineRef.current.attachToView(view);
+    refreshLayers();
   };
 
-  // ---------------- ROUTE ----------------
   const handleRoute = async (start, end) => {
-    try {
-      const s = await geocodeAddress(start);
-      const e = await geocodeAddress(end);
-
-      const startPoint = {
-        type: "point",
-        longitude: s.longitude,
-        latitude: s.latitude
-      };
-
-      const endPoint = {
-        type: "point",
-        longitude: e.longitude,
-        latitude: e.latitude
-      };
-
-      const route = await solveRoute(startPoint, endPoint);
-
-      engineRef.current.drawRoute(route);
-      engineRef.current.drawStops(startPoint, endPoint);
-
-    } catch (err) {
-      console.error("Route Error:", err);
-    }
+    const s = await geocodeAddress(start);
+    const e = await geocodeAddress(end);
+    const route = await solveRoute(
+      { type: "point", longitude: s.longitude, latitude: s.latitude },
+      { type: "point", longitude: e.longitude, latitude: e.latitude }
+    );
+    engineRef.current.drawRoute(route);
+    engineRef.current.drawStops(
+      { type: "point", longitude: s.longitude, latitude: s.latitude },
+      { type: "point", longitude: e.longitude, latitude: e.latitude }
+    );
+    refreshLayers();
   };
 
-  // ---------------- ROUTE TOGGLE FIX ----------------
   const toggleRoute = () => {
-    const newValue = !routeOn;
-
-    engineRef.current.toggleRoute(newValue);
-
-    setRouteOn(newValue);
+    const next = !routeOn;
+    engineRef.current.toggleRoute(next);
+    setRouteOn(next);
+    refreshLayers();
   };
 
-  // ---------------- HEATMAP TOGGLE FIX ----------------
   const toggleHeatmap = () => {
-    const view = viewRef.current;
-    if (!view) return;
-
-    const newValue = !heatOn;
-
-    if (newValue) {
-      engineRef.current.enableHeatmap(view, heatIntensity);
+    const next = !heatOn;
+    if (next) {
+      engineRef.current.enableHeatmap(viewRef.current, heatIntensity);
     } else {
       engineRef.current.disableHeatmap();
     }
-
-    setHeatOn(newValue);
+    setHeatOn(next);
+    refreshLayers();
   };
 
-  // ---------------- INTENSITY ----------------
   const updateIntensity = (value) => {
     setHeatIntensity(value);
     engineRef.current.updateHeatmapIntensity(value);
   };
 
+  const toggleLayer = (id) => {
+    engineRef.current.toggleLayer(id);
+    refreshLayers();
+  };
+
+  const reorderLayer = (from, to) => {
+    engineRef.current.reorderLayers(from, to);
+    setLayers([...engineRef.current.getLayers()]);
+  };
+  
   return (
     <div className="app">
-
-      {/* SIDEBAR */}
-      <div className="sidebar">
-
+      <div className="side-panel">
         <RoutingControlPanel
           is3D={is3D}
           setIs3D={setIs3D}
@@ -107,20 +90,23 @@ export default function ApplicationShell() {
           onRoute={handleRoute}
         />
 
+        <LayerControlPanel
+          layers={layers}
+          onToggle={toggleLayer}
+          onReorder={reorderLayer}
+          heatIntensity={heatIntensity}
+          updateIntensity={updateIntensity}
+        />
       </div>
 
-      {/* MAP */}
       <div className="map-container">
-
         <GISMapView
           is3D={is3D}
           webMapId={WEBMAP_ID}
           webSceneId={WEBSCENE_ID}
           onViewReady={handleViewReady}
         />
-
       </div>
-
     </div>
   );
 }

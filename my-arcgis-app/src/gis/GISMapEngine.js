@@ -1,250 +1,202 @@
 import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
-import {HEATMAP_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration.js";
+import { HEATMAP_FEATURE_LAYER_URL } from "../config/ArcGISConfiguration";
 
 export default class GISMapEngine {
-constructor() {
-this.routeLayer = null;
-this.stopLayer = null;
+  constructor() {
+    this.currentMap = null;
+    this.routeLayer = null;
+    this.stopLayer = null;
+    this.heatLayer = null;
+    this.routeGraphic = null;
+    this.startGraphic = null;
+    this.endGraphic = null;
+    this.routeVisible = true;
+    this.heatVisible = false;
+    this.heatIntensity = 50;
+    this.layerOrder = ["route", "stops", "heat"];
+  }
 
-this.routeGraphic = null;
-this.startGraphic = null;
-this.endGraphic = null;
+  attachToView(view) {
+    if (!view) return;
+    const map = view.map;
+    this.currentMap = map;
+    map.removeAll();
+    this.routeLayer = new GraphicsLayer({
+      title: "Route Layer",
+      visible: this.routeVisible
+    });
 
-this.heatLayer = null;
+    this.stopLayer = new GraphicsLayer({
+      title: "Stop Layer",
+      visible: this.routeVisible
+    });
 
-this.currentMap = null;
+    if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
+    if (this.startGraphic) this.stopLayer.add(this.startGraphic);
+    if (this.endGraphic) this.stopLayer.add(this.endGraphic);
 
-this.heatIntensity = 50;
+    this.heatLayer = new FeatureLayer({
+      url: HEATMAP_FEATURE_LAYER_URL,
+      title: "Heat Layer",
+      visible: this.heatVisible,
+      opacity: 0.8,
+      renderer: {
+        type: "heatmap",
+        radius: 25,
+        colorStops: [
+          { ratio: 0, color: "rgba(0,0,255,0)" },
+          { ratio: 0.2, color: "blue" },
+          { ratio: 0.4, color: "cyan" },
+          { ratio: 0.6, color: "lime" },
+          { ratio: 0.8, color: "yellow" },
+          { ratio: 1, color: "red" }
+        ],
+        maxPixelIntensity: this.heatIntensity,
+        minPixelIntensity: 1
+      }
+    });
 
-}
+    const layerMap = {
+      route: this.routeLayer,
+      stops: this.stopLayer,
+      heat: this.heatLayer
+    };
 
-attachToView(view) {
-if (!view) return;
+    this.layerOrder.forEach((id) => {
+      const layer = layerMap[id];
+      if (layer) map.add(layer);
+    });
+  }
 
-const map = view.map;
+  drawRoute(routeGeometry) {
+    this.routeGraphic = new Graphic({
+      geometry: routeGeometry,
+      symbol: {
+        type: "simple-line",
+        color: [0, 0, 0],
+        width: 10
+      }
+    });
 
-if (this.currentMap === map) {
-  return;
-}
+    if (!this.routeLayer) return;
+    this.routeLayer.removeAll();
+    this.routeLayer.add(this.routeGraphic);
+  }
 
-this.currentMap = map;
+  drawStops(start, end) {
+    this.startGraphic = new Graphic({
+      geometry: start,
+      symbol: {
+        type: "simple-marker",
+        color: "green",
+        size: 10
+      }
+    });
 
-this.routeLayer = new GraphicsLayer({
-  title: "Route Layer"
-});
+    this.endGraphic = new Graphic({
+      geometry: end,
+      symbol: {
+        type: "simple-marker",
+        color: "red",
+        size: 10
+      }
+    });
 
-this.stopLayer = new GraphicsLayer({
-  title: "Stop Layer"
-});
+    if (!this.stopLayer) return;
+    this.stopLayer.removeAll();
+    this.stopLayer.addMany([this.startGraphic, this.endGraphic]);
+  }
 
-if (this.routeGraphic) {
-  this.routeLayer.add(
-    this.routeGraphic
-  );
-}
+  toggleRoute(visible) {
+    this.routeVisible = visible;
 
-if (this.startGraphic) {
-  this.stopLayer.add(
-    this.startGraphic
-  );
-}
+    if (this.routeLayer) this.routeLayer.visible = visible;
+    if (this.stopLayer) this.stopLayer.visible = visible;
+  }
 
-if (this.endGraphic) {
-  this.stopLayer.add(
-    this.endGraphic
-  );
-}
+  enableHeatmap(view, intensity) {
+    this.heatVisible = true;
+    this.heatIntensity = intensity;
 
-map.add(this.routeLayer);
-map.add(this.stopLayer);
+    if (!this.heatLayer) return;
 
-if (
-  this.heatLayer &&
-  !map.layers.includes(
-    this.heatLayer
-  )
-) {
-  map.add(this.heatLayer);
-}
+    this.heatLayer.visible = true;
 
-}
+    const renderer = this.heatLayer.renderer.clone();
+    renderer.maxPixelIntensity = intensity;
+    this.heatLayer.renderer = renderer;
+  }
 
-drawRoute(routeGeometry) {
-this.routeGraphic =
-new Graphic({
-geometry: routeGeometry,
-symbol: {
-type: "simple-line",
-color: [255, 0, 0],
-width: 6
-}
-});
+  disableHeatmap() {
+    this.heatVisible = false;
 
-if (!this.routeLayer) {
-  return;
-}
+    if (this.heatLayer) this.heatLayer.visible = false;
+  }
 
-this.routeLayer.removeAll();
+  updateHeatmapIntensity(value) {
+    this.heatIntensity = value;
 
-this.routeLayer.add(
-  this.routeGraphic
-);
+    if (!this.heatLayer) return;
 
-}
+    const renderer = this.heatLayer.renderer.clone();
+    renderer.maxPixelIntensity = value;
+    this.heatLayer.renderer = renderer;
+  }
 
-drawStops(start, end) {
-this.startGraphic =
-new Graphic({
-geometry: start,
-symbol: {
-type: "simple-marker",
-color: "green",
-size: 10
-}
-});
+  getLayers() {
+    const lookup = {
+      route: {
+        id: "route",
+        name: "Route Layer",
+        visible: this.routeLayer?.visible ?? true
+      },
+      stops: {
+        id: "stops",
+        name: "Stop Layer",
+        visible: this.stopLayer?.visible ?? true
+      },
+      heat: {
+        id: "heat",
+        name: "Heat Layer",
+        visible: this.heatLayer?.visible ?? false
+      }
+    };
 
-this.endGraphic =
-  new Graphic({
-    geometry: end,
-    symbol: {
-      type: "simple-marker",
-      color: "red",
-      size: 10
-    }
-  });
+    return this.layerOrder.map((id) => lookup[id]);
+  }
 
-if (!this.stopLayer) {
-  return;
-}
+  toggleLayer(id) {
+    const layerMap = {
+      route: this.routeLayer,
+      stops: this.stopLayer,
+      heat: this.heatLayer
+    };
 
-this.stopLayer.removeAll();
+    const layer = layerMap[id];
+    if (layer) layer.visible = !layer.visible;
+  }
 
-this.stopLayer.addMany([
-  this.startGraphic,
-  this.endGraphic
-]);
+  reorderLayers(fromIndex, toIndex) {
+    const order = [...this.layerOrder];
 
-}
+    const moved = order.splice(fromIndex, 1)[0];
+    order.splice(toIndex, 0, moved);
 
-toggleRoute(visible) {
-if (this.routeLayer) {
-this.routeLayer.visible =
-visible;
-}
+    this.layerOrder = order;
 
-if (this.stopLayer) {
-  this.stopLayer.visible =
-    visible;
-}
+    if (!this.currentMap) return;
 
-}
+    const layerMap = {
+      route: this.routeLayer,
+      stops: this.stopLayer,
+      heat: this.heatLayer
+    };
 
-enableHeatmap(
-view,
-intensity
-) {
-this.heatIntensity =
-intensity;
-
-if (this.heatLayer) {
-  this.heatLayer.visible =
-    true;
-
-  const renderer =
-    this.heatLayer.renderer.clone();
-
-  renderer.maxPixelIntensity =
-    intensity;
-
-  this.heatLayer.renderer =
-    renderer;
-
-  return;
-}
-
-this.heatLayer =
-  new FeatureLayer({
-    url:
-      HEATMAP_FEATURE_LAYER_URL,
-
-    opacity: 0.8,
-
-    renderer: {
-      type: "heatmap",
-
-      radius: 25,
-
-      colorStops: [
-        {
-          ratio: 0,
-          color:
-            "rgba(0,0,255,0)"
-        },
-        {
-          ratio: 0.2,
-          color: "blue"
-        },
-        {
-          ratio: 0.4,
-          color: "cyan"
-        },
-        {
-          ratio: 0.6,
-          color: "lime"
-        },
-        {
-          ratio: 0.8,
-          color: "yellow"
-        },
-        {
-          ratio: 1,
-          color: "red"
-        }
-      ],
-
-      maxPixelIntensity:
-        intensity,
-
-      minPixelIntensity: 1
-    }
-  });
-
-view.map.add(
-  this.heatLayer
-);
-
-}
-
-disableHeatmap() {
-if (!this.heatLayer) {
-return;
-}
-
-this.heatLayer.visible =
-  false;
-
-}
-
-updateHeatmapIntensity(
-value
-) {
-this.heatIntensity =
-value;
-
-if (!this.heatLayer) {
-  return;
-}
-
-const renderer =
-  this.heatLayer.renderer.clone();
-
-renderer.maxPixelIntensity =
-  value;
-
-this.heatLayer.renderer =
-  renderer;
-
-}
+    order.forEach((id, index) => {
+      const layer = layerMap[id];
+      if (layer) this.currentMap.reorder(layer, index);
+    });
+  }
 }

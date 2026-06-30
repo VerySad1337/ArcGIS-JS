@@ -5,119 +5,98 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
-
-  background: radial-gradient(
-    circle at top,
-    #0b1220,
-    #050814
-  );
+  background: linear-gradient(180deg, #0b1220, #050814);
+  font-family: "Segoe UI", sans-serif;
 }
 
 /* =========================
    MAIN LAYOUT
 ========================= */
+
 .app {
   display: flex;
-
-  height: 100vh;
   width: 100vw;
+  height: 100vh;
 }
 
 /* =========================
-   SIDEBAR (FUTURISTIC GLASS)
+   SIDEBAR
 ========================= */
+
 .side-panel {
   width: 380px;
-
   min-width: 380px;
-
   height: 100vh;
-
-  padding: 18px;
-
-  box-sizing: border-box;
-
   overflow-y: auto;
-
-  background: rgba(10, 18, 32, 0.75);
-
-  backdrop-filter: blur(18px);
-
-  border-right: 1px solid rgba(56, 189, 248, 0.25);
-
-  box-shadow: 0 0 25px rgba(0,0,0,0.4);
+  padding: 18px;
+  box-sizing: border-box;
+  background: rgba(12, 18, 28, 0.95);
+  border-right: 1px solid rgba(56, 189, 248, 0.2);
+  backdrop-filter: blur(20px);
+  z-index: 100;
 }
 
 /* =========================
-   CARD STYLE (GLASS PANEL)
+   MAP
 ========================= */
+
+.map-container {
+  flex: 1;
+  position: relative;
+}
+
+arcgis-map,
+arcgis-scene {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* =========================
+   PANELS
+========================= */
+
 .panel-card {
-  background: rgba(15, 23, 42, 0.6);
-
-  border: 1px solid rgba(56, 189, 248, 0.2);
-
-  border-radius: 14px;
-
+  background: rgba(20, 28, 40, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  border-radius: 12px;
   padding: 14px;
-
   margin-bottom: 14px;
-
-  box-shadow: 0 0 15px rgba(0,0,0,0.3);
 }
 
-/* =========================
-   TITLE (FIX "VIEW MODE")
-========================= */
 .panel-title {
-  font-size: 13px;
-
-  font-weight: 700;
-
   color: #38bdf8;
-
-  margin-bottom: 10px;
-
-  letter-spacing: 0.6px;
-
-  display: block; /* 🔥 FIX: ensures it's visible */
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
 }
 
 /* =========================
-   BUTTON (NEON STYLE)
+   BUTTONS
 ========================= */
+
 .gis-button {
   width: 100%;
-
-  padding: 10px;
-
-  border-radius: 10px;
-
   border: none;
-
-  cursor: pointer;
-
-  font-weight: 600;
-
+  padding: 10px;
+  border-radius: 8px;
   color: white;
-
-  background: linear-gradient(
-    90deg,
-    #0ea5e9,
-    #2563eb
-  );
-
-  transition: 0.2s ease;
+  cursor: pointer;
+  background: linear-gradient(90deg, #0ea5e9, #2563eb);
+  transition: 0.2s;
 }
 
 .gis-button:hover {
   transform: translateY(-1px);
-
-  box-shadow: 0 0 12px rgba(14,165,233,0.6);
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
 }
 
 /* =========================
-   INPUTS
+   ROUTE INPUT
 ========================= */
+
 .route-panel {
   display: flex;
   flex-direction: column;
@@ -126,59 +105,69 @@ body,
 
 .route-panel input {
   padding: 10px;
-
-  border-radius: 10px;
-
-  border: 1px solid rgba(148,163,184,0.3);
-
-  background: #0b1220;
-
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
   color: white;
-
-  outline: none;
 }
 
-.route-panel input:focus {
-  border-color: #38bdf8;
-
-  box-shadow: 0 0 10px rgba(56,189,248,0.4);
+.route-panel input::placeholder {
+  color: #94a3b8;
 }
 
 /* =========================
-   MAP (CRITICAL FIX)
+   HEATMAP
 ========================= */
-.map-container {
-  flex: 1;
 
-  height: 100vh;
-
-  position: relative;
+.heat-slider-container {
+  margin-top: 12px;
 }
 
-/* ArcGIS MUST fill parent */
-arcgis-map,
-arcgis-scene {
-  position: absolute;
-
-  inset: 0;
-
-  width: 100%;
-
-  height: 100%;
-}
-
-/* =========================
-   SLIDER
-========================= */
 .slider-value {
-  color: #ffffff;   /* FORCE WHITE TEXT */
-  font-weight: 600;
+  color: white;
   text-align: center;
-  margin-top: 6px;
+  margin-top: 8px;
+  font-weight: 600;
 }
 
-/* ALSO FIX RANGE INPUT (optional but recommended) */
 input[type="range"] {
   width: 100%;
-  accent-color: #fffff;
+  accent-color: #38bdf8;
+}
+
+/* =========================
+   LAYER PANEL
+========================= */
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 6px;
+  cursor: grab;
+}
+
+.layer-row:hover {
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.layer-eye-btn {
+  border: none;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.drag-handle {
+  color: #94a3b8;
+}
+
+.layer-name {
+  flex: 1;
+  color: white;
+  font-size: 13px;
 }
