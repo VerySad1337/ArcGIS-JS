@@ -5,6 +5,6 @@ export function useHeatmapAnalysis() {
 
   return {
     heatmapEnabled: enabled,
-    toggleHeatmap: () => setEnabled(v => !v)
+    toggleHeatmap: () => setEnabled((v) => !v)
   };
 }

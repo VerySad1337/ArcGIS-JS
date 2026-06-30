@@ -3,8 +3,6 @@ import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 export function createHeatmapLayer(url) {
   return new FeatureLayer({
     url,
-
-    // IMPORTANT: prevent portal metadata auth fallback
     outFields: ["*"],
 
     renderer: {

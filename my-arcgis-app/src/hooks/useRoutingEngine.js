@@ -8,7 +8,6 @@ export function useRoutingEngine() {
   const calculateRoute = async (start, end) => {
     const s = await geocodeAddress(start);
     const e = await geocodeAddress(end);
-
     const route = await solveRoute({
       type: "features",
       features: [
@@ -16,9 +15,7 @@ export function useRoutingEngine() {
         { geometry: e }
       ]
     });
-
     setRouteGeometry(route.routeResults[0].route.geometry);
   };
-
   return { routeGeometry, calculateRoute };
 }

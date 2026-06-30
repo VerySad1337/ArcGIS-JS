@@ -11,7 +11,6 @@ export default function RouteInput({ onRoute }) {
 
   return (
     <div className="route-panel">
-
       <input
         placeholder="Start location"
         value={start}
@@ -24,13 +23,9 @@ export default function RouteInput({ onRoute }) {
         onChange={(e) => setEnd(e.target.value)}
       />
 
-      <button
-        className="gis-button"
-        onClick={handleSubmit}
-      >
+      <button className="gis-button" onClick={handleSubmit}>
         Calculate Route
       </button>
-
     </div>
   );
 }
