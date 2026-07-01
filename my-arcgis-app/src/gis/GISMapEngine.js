@@ -25,14 +25,14 @@ export default class GISMapEngine {
     this.mrtLineLayer = null;
     this.mrtStationVisible = true;
     this.mrtLineVisible = true;
-    this.drawLayer = null;
+    this.drawLayer = new GraphicsLayer({title: "Drawings"});
     this.sketchVM = null;
   }
 
   attachToView(view) {
     if (!view) return;
     const map = view.map;
-
+    const existingDrawings = this.drawLayer.graphics.toArray();
     this.currentMap = map;
     map.removeAll();
     this.routeLayer = new GraphicsLayer({
@@ -81,10 +81,6 @@ export default class GISMapEngine {
         }
       }
     });
-    
-    this.drawLayer = new GraphicsLayer({
-    title: "Drawings"
-    });
 
     this.sketchVM = new SketchViewModel({
     view: view,
@@ -94,6 +90,11 @@ export default class GISMapEngine {
     if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
     if (this.startGraphic) this.stopLayer.add(this.startGraphic);
     if (this.endGraphic) this.stopLayer.add(this.endGraphic);
+    if (existingDrawings.length) {
+    this.drawLayer.removeAll();
+    this.drawLayer.addMany(existingDrawings);
+    }
+    this.drawLayer.elevationInfo = {mode: "on-the-ground"};
 
     this.heatLayer = new FeatureLayer({
       url: HEATMAP_FEATURE_LAYER_URL,
