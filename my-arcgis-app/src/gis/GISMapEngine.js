@@ -374,9 +374,9 @@ toGeoJSONGeometry(g){
 
 saveDrawingsAsGEOJSON(msg){
   const f=this.getDrawnFeatures();
-
   if(!f.length){
-    msg?.("No drawings to export");
+    msg?.("Unable to download: no drawings found");
+    setTimeout(()=>msg?.(""),10000);
     return;
   }
   const geojson={

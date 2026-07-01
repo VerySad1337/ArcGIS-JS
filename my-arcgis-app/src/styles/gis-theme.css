@@ -320,3 +320,34 @@ input[type="range"] {
   right:15px;
   bottom:75px;
 }
+/* =========================
+   TOAST NOTIFICATION
+========================= */
+.gis-toast{
+  position:absolute;
+  top:20px;
+  right:20px;
+
+  background:rgba(185,28,28,.95);
+  border:1px solid rgba(255,255,255,.2);
+
+  color:#fff;
+
+  padding:10px 14px;
+  border-radius:6px;
+
+  font-size:13px;
+
+  z-index:10000;
+
+  backdrop-filter:blur(6px);
+
+  box-shadow:0 6px 18px rgba(0,0,0,.4);
+
+  animation:toastIn .2s ease;
+}
+
+@keyframes fadeIn{
+  from{opacity:0; transform:translateY(5px);}
+  to{opacity:1; transform:translateY(0);}
+}

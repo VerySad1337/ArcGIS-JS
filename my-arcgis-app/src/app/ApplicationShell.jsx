@@ -16,6 +16,7 @@ export default function ApplicationShell() {
   const [layers, setLayers] = useState([]);
   const viewRef = useRef(null);
   const engineRef = useRef(new GISMapEngine());
+  const [toast, setToast] = useState("");
 
   const refreshLayers = () => {
     const updated = engineRef.current.getLayers();
@@ -88,7 +89,7 @@ export default function ApplicationShell() {
   engineRef.current.startPolygonDraw();
   };
 
-  const saveGeoJSON = () => {engineRef.current.saveDrawingsAsGEOJSON()};
+  const saveGeoJSON = () => {engineRef.current.saveDrawingsAsGEOJSON(setToast);};
   
   return (
     <div className="app">
@@ -128,6 +129,7 @@ export default function ApplicationShell() {
           saveGeoJSON={saveGeoJSON}
           />
       </div>
+      {toast && ( <div className="gis-toast"> {toast} </div> )}
     </div>
   );
 }
