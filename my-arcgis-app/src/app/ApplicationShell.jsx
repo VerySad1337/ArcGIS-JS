@@ -87,6 +87,8 @@ export default function ApplicationShell() {
   const drawPolygon = () => {
   engineRef.current.startPolygonDraw();
   };
+
+  const saveGeoJSON = () => {engineRef.current.saveDrawingsAsGEOJSON()};
   
   return (
     <div className="app">
@@ -123,6 +125,7 @@ export default function ApplicationShell() {
           drawPoint={drawPoint}
           drawLine={drawLine}
           drawPolygon={drawPolygon}
+          saveGeoJSON={saveGeoJSON}
           />
       </div>
     </div>
