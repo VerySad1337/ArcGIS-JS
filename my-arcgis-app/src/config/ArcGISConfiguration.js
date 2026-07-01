@@ -16,4 +16,11 @@ export const ROUTE_SERVICE_URL ="https://route.arcgis.com/arcgis/rest/services/W
 // Heatmap Feature Layer
 export const HEATMAP_FEATURE_LAYER_URL ="https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer";
 
+//MRT Station Feature Layer
+export const MRT_STATION_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Rail_Stations/FeatureServer";
+
+//MRT Line Station Feature Layer
+export const MRT_LINE_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Rail_Lines/FeatureServer";
+
+//Geocoding Service
 export const GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
