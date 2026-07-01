@@ -40,6 +40,7 @@ Snapshot of implementation process:
 7) Added ability to save the drawing via freehand on map to download to GEOJSON format.
    <img width="1895" height="952" alt="image" src="https://github.com/user-attachments/assets/411d8598-d379-410d-965a-7a0206e4bd31" />
    <img width="997" height="972" alt="image" src="https://github.com/user-attachments/assets/8c14284e-96b2-4201-9998-c7cd1179e36f" />
+   <img width="1907" height="937" alt="image" src="https://github.com/user-attachments/assets/77005da4-2ec7-4745-a30d-09272d83057f" />
 
 
 
