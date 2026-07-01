@@ -1,5 +1,5 @@
 React JS -> ArcGIS Server
-<img width="1901" height="941" alt="image" src="https://github.com/user-attachments/assets/5f2a183c-e684-4137-a5c3-d5c693f72b26" />
+<img width="1895" height="952" alt="image" src="https://github.com/user-attachments/assets/411d8598-d379-410d-965a-7a0206e4bd31" />
 
 
 
@@ -37,7 +37,9 @@ Snapshot of implementation process:
    <img width="1900" height="951" alt="image" src="https://github.com/user-attachments/assets/9b808744-ae75-48e2-827f-ebffdfcde6e4" />
    <img width="1901" height="941" alt="image" src="https://github.com/user-attachments/assets/cfaa4756-7ca8-4020-a132-4c94982ce68f" />
 
-
+7) Added ability to save the drawing via freehand on map to download to GEOJSON format.
+   <img width="1895" height="952" alt="image" src="https://github.com/user-attachments/assets/411d8598-d379-410d-965a-7a0206e4bd31" />
+   <img width="997" height="972" alt="image" src="https://github.com/user-attachments/assets/8c14284e-96b2-4201-9998-c7cd1179e36f" />
 
 
 
