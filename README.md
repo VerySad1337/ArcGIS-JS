@@ -1,5 +1,6 @@
 React JS -> ArcGIS Server
-<img width="1907" height="917" alt="image" src="https://github.com/user-attachments/assets/f853dc80-7cdd-4593-ba92-91cf52d95b93" />
+<img width="1901" height="941" alt="image" src="https://github.com/user-attachments/assets/5f2a183c-e684-4137-a5c3-d5c693f72b26" />
+
 
 
 Instruction:
@@ -32,6 +33,9 @@ Snapshot of implementation process:
    <img width="1892" height="910" alt="image" src="https://github.com/user-attachments/assets/6364b2bb-614f-4d3f-a384-0385a3dc0c20" />
    <img width="1912" height="852" alt="image" src="https://github.com/user-attachments/assets/53a68111-4838-4628-abc3-335bd0c627a1" />
 
+6) Added ability to draw feature via freehand on the map
+   <img width="1900" height="951" alt="image" src="https://github.com/user-attachments/assets/9b808744-ae75-48e2-827f-ebffdfcde6e4" />
+   <img width="1901" height="941" alt="image" src="https://github.com/user-attachments/assets/cfaa4756-7ca8-4020-a132-4c94982ce68f" />
 
 
 
