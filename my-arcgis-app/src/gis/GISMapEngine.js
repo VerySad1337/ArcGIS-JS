@@ -2,6 +2,7 @@ import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import { HEATMAP_FEATURE_LAYER_URL,MRT_STATION_FEATURE_LAYER_URL , MRT_LINE_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration";
+import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 
 export default class GISMapEngine {
   constructor() {
@@ -15,18 +16,21 @@ export default class GISMapEngine {
     this.routeVisible = true;
     this.heatVisible = false;
     this.heatIntensity = 50;
-    this.layerOrder = ["route", "stops", "touristAttractions", "heat", "mrtStations", "mrtLines"];
+    this.layerOrder = ["route", "stops", "touristAttractions", "heat", "mrtStations", "mrtLines", "drawings"];
     this.touristAttractionLayer = null;
     this.touristAttractionVisible = true;
     this.mrtStationLayer = null;
     this.mrtLineLayer = null;
     this.mrtStationVisible = true;
     this.mrtLineVisible = true;
+    this.drawLayer = null;
+    this.sketchVM = null;
   }
 
   attachToView(view) {
     if (!view) return;
     const map = view.map;
+
     this.currentMap = map;
     map.removeAll();
     this.routeLayer = new GraphicsLayer({
@@ -71,9 +75,18 @@ export default class GISMapEngine {
          symbol: {
           type: "simple-line",
           color: [0, 0, 0],
-          width: 4
+          width: 1
         }
       }
+    });
+    
+    this.drawLayer = new GraphicsLayer({
+    title: "Drawings"
+    });
+
+    this.sketchVM = new SketchViewModel({
+    view: view,
+    layer: this.drawLayer
     });
 
     if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
@@ -107,12 +120,17 @@ export default class GISMapEngine {
       touristAttractions: this.touristAttractionLayer,
       heat: this.heatLayer,
       mrtStations: this.mrtStationLayer,
-      mrtLines: this.mrtLineLayer
+      mrtLines: this.mrtLineLayer,
+      drawings: this.drawLayer
     };
 
     this.layerOrder.forEach((id) => {
       const layer = layerMap[id];
       if (layer) map.add(layer);
+      this.sketchVM = new SketchViewModel({
+        view: view,
+        layer: this.drawLayer
+        });
     });
   }
 
@@ -222,6 +240,11 @@ export default class GISMapEngine {
         id: "mrtLines",
         name: "MRT Lines Layer",
         visible: this.mrtLineLayer?.visible ?? true
+      },
+      drawings: {
+        id: "drawings",
+        name: "Drawings Layer",
+        visible: this.drawLayer?.visible ?? true
       }
     };
 
@@ -235,7 +258,8 @@ export default class GISMapEngine {
       touristAttractions: this.touristAttractionLayer,
       heat: this.heatLayer,
       mrtStations: this.mrtStationLayer,
-      mrtLines: this.mrtLineLayer
+      mrtLines: this.mrtLineLayer,
+      drawings: this.drawLayer
     };
 
     const layer = layerMap[id];
@@ -255,12 +279,30 @@ export default class GISMapEngine {
     const layerMap = {
       route: this.routeLayer,
       stops: this.stopLayer,
-      heat: this.heatLayer
+      heat: this.heatLayer,
+      touristAttractions: this.touristAttractionLayer,
+      mrtStations: this.mrtStationLayer,
+      mrtLines: this.mrtLineLayer,
+      drawings: this.drawLayer
     };
 
     order.forEach((id, index) => {
       const layer = layerMap[id];
       if (layer) this.currentMap.reorder(layer, index);
     });
+  }
+  startPointDraw() {
+  if (!this.sketchVM) return;
+  this.sketchVM.create("point");
+  }
+
+  startLineDraw() {
+  if (!this.sketchVM) return;
+  this.sketchVM.create("polyline");
+  }
+
+  startPolygonDraw() {
+  if (!this.sketchVM) return;
+  this.sketchVM.create("polygon");
   }
 }

@@ -6,6 +6,7 @@ import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
 import { WEBMAP_ID, WEBSCENE_ID } from "../config/ArcGISConfiguration";
+import FloatingDrawTools from "../components/FloatingDrawTools";
 
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
@@ -74,6 +75,18 @@ export default function ApplicationShell() {
     engineRef.current.reorderLayers(from, to);
     setLayers([...engineRef.current.getLayers()]);
   };
+
+  const drawPoint = () => {
+  engineRef.current.startPointDraw();
+  };
+
+  const drawLine = () => {
+  engineRef.current.startLineDraw();
+  };
+
+  const drawPolygon = () => {
+  engineRef.current.startPolygonDraw();
+  };
   
   return (
     <div className="app">
@@ -106,6 +119,11 @@ export default function ApplicationShell() {
           webSceneId={WEBSCENE_ID}
           onViewReady={handleViewReady}
         />
+          <FloatingDrawTools
+          drawPoint={drawPoint}
+          drawLine={drawLine}
+          drawPolygon={drawPolygon}
+          />
       </div>
     </div>
   );

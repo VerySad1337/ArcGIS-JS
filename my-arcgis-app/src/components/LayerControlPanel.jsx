@@ -13,7 +13,7 @@ export default function LayerControlPanel({
     <div className="panel-card">
       <div className="panel-title">LAYERS</div>
 
-      {layers.map((layer, index) => (
+      {layers.filter(Boolean).map((layer, index) => (
         <div key={layer.id} className="layer-row-wrapper">
           <div
             className="layer-row"
