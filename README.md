@@ -9,7 +9,7 @@ Instruction:
 4) docker compose up -- build
 
 
-Implementation:
+Snapshot of implementation process:
 1) Displaying 2D and 3D Map layer from arcgis.
    <img width="1080" height="730" alt="image" src="https://github.com/user-attachments/assets/0f7244f2-4861-4a26-a27c-a61178650329" />
    <img width="1907" height="805" alt="image" src="https://github.com/user-attachments/assets/58f377ea-b41d-461a-b228-e4965e70479e" />
