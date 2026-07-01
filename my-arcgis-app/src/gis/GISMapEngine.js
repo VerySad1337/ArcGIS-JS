@@ -1,7 +1,7 @@
 import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
-import { HEATMAP_FEATURE_LAYER_URL } from "../config/ArcGISConfiguration";
+import { HEATMAP_FEATURE_LAYER_URL,MRT_STATION_FEATURE_LAYER_URL , MRT_LINE_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration";
 
 export default class GISMapEngine {
   constructor() {
@@ -15,7 +15,13 @@ export default class GISMapEngine {
     this.routeVisible = true;
     this.heatVisible = false;
     this.heatIntensity = 50;
-    this.layerOrder = ["route", "stops", "heat"];
+    this.layerOrder = ["route", "stops", "touristAttractions", "heat", "mrtStations", "mrtLines"];
+    this.touristAttractionLayer = null;
+    this.touristAttractionVisible = true;
+    this.mrtStationLayer = null;
+    this.mrtLineLayer = null;
+    this.mrtStationVisible = true;
+    this.mrtLineVisible = true;
   }
 
   attachToView(view) {
@@ -31,6 +37,43 @@ export default class GISMapEngine {
     this.stopLayer = new GraphicsLayer({
       title: "Stop Layer",
       visible: this.routeVisible
+    });
+
+    this.touristAttractionLayer = new FeatureLayer({
+    url: HEATMAP_FEATURE_LAYER_URL,
+    title: "Tourist Attractions",
+    visible: this.touristAttractionVisible
+  });
+
+    this.mrtStationLayer = new FeatureLayer({
+      url: MRT_STATION_FEATURE_LAYER_URL,
+      title: "MRT Stations",
+      visible: this.mrtStationVisible,
+      renderer: {
+        type: "simple",
+        symbol: {
+          type: "simple-fill",
+          color: [0, 120, 255, 0.5],
+          outline: {
+            color: [0, 0, 0],
+            width: 1.5
+          }
+        }
+      }
+    });
+
+    this.mrtLineLayer = new FeatureLayer({
+      url: MRT_LINE_FEATURE_LAYER_URL,
+      title: "MRT Lines",
+      visible: this.mrtLineVisible,
+      renderer: {
+        type: "simple",
+         symbol: {
+          type: "simple-line",
+          color: [0, 0, 0],
+          width: 4
+        }
+      }
     });
 
     if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
@@ -61,7 +104,10 @@ export default class GISMapEngine {
     const layerMap = {
       route: this.routeLayer,
       stops: this.stopLayer,
-      heat: this.heatLayer
+      touristAttractions: this.touristAttractionLayer,
+      heat: this.heatLayer,
+      mrtStations: this.mrtStationLayer,
+      mrtLines: this.mrtLineLayer
     };
 
     this.layerOrder.forEach((id) => {
@@ -157,10 +203,25 @@ export default class GISMapEngine {
         name: "Stop Layer",
         visible: this.stopLayer?.visible ?? true
       },
+      touristAttractions: {
+        id: "touristAttractions",
+        name: "Tourist Attractions Layer",
+        visible: this.touristAttractionLayer?.visible ?? true
+      },
       heat: {
         id: "heat",
-        name: "Heat Layer",
+        name: "Tourist Attractions Heatmap Layer",
         visible: this.heatLayer?.visible ?? false
+      },
+      mrtStations: {
+        id: "mrtStations",
+        name: "MRT Stations Layer",
+        visible: this.mrtStationLayer?.visible ?? true
+      },
+      mrtLines: {
+        id: "mrtLines",
+        name: "MRT Lines Layer",
+        visible: this.mrtLineLayer?.visible ?? true
       }
     };
 
@@ -171,7 +232,10 @@ export default class GISMapEngine {
     const layerMap = {
       route: this.routeLayer,
       stops: this.stopLayer,
-      heat: this.heatLayer
+      touristAttractions: this.touristAttractionLayer,
+      heat: this.heatLayer,
+      mrtStations: this.mrtStationLayer,
+      mrtLines: this.mrtLineLayer
     };
 
     const layer = layerMap[id];
