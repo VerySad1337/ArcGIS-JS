@@ -3,6 +3,8 @@ import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import { HEATMAP_FEATURE_LAYER_URL,MRT_STATION_FEATURE_LAYER_URL , MRT_LINE_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
+import shp from "shpjs";
+import { saveAs } from "file-saver";
 
 export default class GISMapEngine {
   constructor() {
@@ -305,4 +307,94 @@ export default class GISMapEngine {
   if (!this.sketchVM) return;
   this.sketchVM.create("polygon");
   }
+
+  getDrawnFeatures(){
+  const f=[];
+
+  if(this.drawLayer){
+    f.push(...this.drawLayer.graphics.toArray());
+  }
+
+  if(this.routeGraphic)f.push(this.routeGraphic);
+  if(this.startGraphic)f.push(this.startGraphic);
+  if(this.endGraphic)f.push(this.endGraphic);
+
+  return f;
+}
+
+hasDrawings(){
+  return this.getDrawnFeatures().length>0;
+}
+
+saveDrawings(msg){
+  const f=this.getDrawnFeatures();
+  if(!f.length)return msg?.("No drawings to export");
+  const geojson={
+    type:"FeatureCollection",
+    features:f.map(x=>({
+      type:"Feature",
+      geometry:this.toGeoJSONGeometry(x.geometry),
+      properties:{}
+    }))
+  };
+  const url=URL.createObjectURL(
+    new Blob([JSON.stringify(geojson)],{type:"application/json"})
+  );
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="drawings.geojson";
+  a.click();
+  URL.revokeObjectURL(url);
+  msg?.("GeoJSON downloaded");
+}
+
+toGeoJSONGeometry(g){
+  if(!g) return null;
+  const t=g.type;
+  if(t==="point"){
+    return {
+      type:"Point",
+      coordinates:[g.x,g.y] 
+    };
+  }
+  if(t==="polyline"){
+    return {
+      type:"LineString",
+      coordinates:g.paths?.[0] || []
+    };
+  }
+  if(t==="polygon"){
+    return {
+      type:"Polygon",
+      coordinates:g.rings || []
+    };
+  }
+  return null;
+}
+
+saveDrawingsAsGEOJSON(msg){
+  const f=this.getDrawnFeatures();
+
+  if(!f.length){
+    msg?.("No drawings to export");
+    return;
+  }
+  const geojson={
+    type:"FeatureCollection",
+    features:f.map(x=>({
+      type:"Feature",
+      geometry:this.toGeoJSONGeometry(x.geometry),
+      properties:{}
+    }))
+  };
+  const blob=new Blob([JSON.stringify(geojson,null,2)],{
+    type:"application/json"
+  });
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="drawings.geojson";
+  a.click();
+  URL.revokeObjectURL(url);
+}
 }
