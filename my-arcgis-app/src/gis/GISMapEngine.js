@@ -5,6 +5,7 @@ import { HEATMAP_FEATURE_LAYER_URL,MRT_STATION_FEATURE_LAYER_URL , MRT_LINE_FEAT
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import shp from "shpjs";
 import { saveAs } from "file-saver";
+import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer";
 
 export default class GISMapEngine {
   constructor() {
@@ -27,6 +28,7 @@ export default class GISMapEngine {
     this.mrtLineVisible = true;
     this.drawLayer = new GraphicsLayer({title: "Drawings"});
     this.sketchVM = null;
+    this.uploadedLayers=[];
   }
 
   attachToView(view) {
@@ -397,5 +399,28 @@ saveDrawingsAsGEOJSON(msg){
   a.download="drawings.geojson";
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async uploadGeoJSON(file){
+  if(!file||!this.currentMap)return;
+
+  const blobUrl=URL.createObjectURL(file);
+
+  const layer=new GeoJSONLayer({
+    url:blobUrl,
+    title:file.name,
+    visible:true
+  });
+
+  await layer.load();
+
+  this.currentMap.add(layer);
+
+  this.uploadedLayers.push({
+    id:crypto.randomUUID(),
+    name:file.name,
+    layer,
+    blobUrl
+  });
 }
 }
