@@ -91,6 +91,7 @@ export default function ApplicationShell() {
 
   const uploadGeoJSON=async(file)=>{
   if(!file)return;
+  console.log("Uploading:", file.name);
   await engineRef.current.uploadGeoJSON(file);
   setLayers([...engineRef.current.getLayers()]);
   };
