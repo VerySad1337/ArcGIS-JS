@@ -89,6 +89,12 @@ export default function ApplicationShell() {
   engineRef.current.startPolygonDraw();
   };
 
+  const uploadGeoJSON=async(file)=>{
+  if(!file)return;
+  await engineRef.current.uploadGeoJSON(file);
+  setLayers([...engineRef.current.getLayers()]);
+  };
+
   const saveGeoJSON = () => {engineRef.current.saveDrawingsAsGEOJSON(setToast);};
   
   return (
@@ -127,6 +133,7 @@ export default function ApplicationShell() {
           drawLine={drawLine}
           drawPolygon={drawPolygon}
           saveGeoJSON={saveGeoJSON}
+          uploadGeoJSON={uploadGeoJSON}
           />
       </div>
       {toast && ( <div className="gis-toast"> {toast} </div> )}
