@@ -1,57 +1,73 @@
 import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
-import { HEATMAP_FEATURE_LAYER_URL,MRT_STATION_FEATURE_LAYER_URL , MRT_LINE_FEATURE_LAYER_URL} from "../config/ArcGISConfiguration";
+import {
+  HEATMAP_FEATURE_LAYER_URL,
+  MRT_STATION_FEATURE_LAYER_URL,
+  MRT_LINE_FEATURE_LAYER_URL
+} from "../config/ArcGISConfiguration";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
-import shp from "shpjs";
-import { saveAs } from "file-saver";
-import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer";
 
 export default class GISMapEngine {
   constructor() {
     this.currentMap = null;
+    this.currentView = null;
+
     this.routeLayer = null;
     this.stopLayer = null;
     this.heatLayer = null;
+
     this.routeGraphic = null;
     this.startGraphic = null;
     this.endGraphic = null;
+
     this.routeVisible = true;
     this.heatVisible = false;
     this.heatIntensity = 50;
-    this.layerOrder = ["route", "stops", "touristAttractions", "heat", "mrtStations", "mrtLines", "drawings"];
+
+    this.layerOrder = [
+      "route",
+      "stops",
+      "touristAttractions",
+      "heat",
+      "mrtStations",
+      "mrtLines",
+      "drawings"
+    ];
+
     this.touristAttractionLayer = null;
-    this.touristAttractionVisible = true;
     this.mrtStationLayer = null;
     this.mrtLineLayer = null;
+
+    this.touristAttractionVisible = true;
     this.mrtStationVisible = true;
     this.mrtLineVisible = true;
-    this.drawLayer = new GraphicsLayer({title: "Drawings"});
+
+    this.drawLayer = new GraphicsLayer({ title: "Drawings" });
     this.sketchVM = null;
-    this.uploadedLayers=[];
+
+    this.uploadedLayers = [];
   }
 
   attachToView(view) {
     if (!view) return;
+
     const map = view.map;
     const existingDrawings = this.drawLayer.graphics.toArray();
-    this.currentMap = map;
-    map.removeAll();
-    this.routeLayer = new GraphicsLayer({
-      title: "Route Layer",
-      visible: this.routeVisible
-    });
 
-    this.stopLayer = new GraphicsLayer({
-      title: "Stop Layer",
-      visible: this.routeVisible
-    });
+    this.currentMap = map;
+    this.currentView = view;
+
+    map.removeAll();
+
+    this.routeLayer = new GraphicsLayer({ title: "Route Layer", visible: this.routeVisible });
+    this.stopLayer  = new GraphicsLayer({ title: "Stop Layer",  visible: this.routeVisible });
 
     this.touristAttractionLayer = new FeatureLayer({
-    url: HEATMAP_FEATURE_LAYER_URL,
-    title: "Tourist Attractions",
-    visible: this.touristAttractionVisible
-  });
+      url: HEATMAP_FEATURE_LAYER_URL,
+      title: "Tourist Attractions",
+      visible: this.touristAttractionVisible
+    });
 
     this.mrtStationLayer = new FeatureLayer({
       url: MRT_STATION_FEATURE_LAYER_URL,
@@ -62,10 +78,7 @@ export default class GISMapEngine {
         symbol: {
           type: "simple-fill",
           color: [0, 120, 255, 0.5],
-          outline: {
-            color: [0, 0, 0],
-            width: 1.5
-          }
+          outline: { color: [0, 0, 0], width: 1.5 }
         }
       }
     });
@@ -76,27 +89,9 @@ export default class GISMapEngine {
       visible: this.mrtLineVisible,
       renderer: {
         type: "simple",
-         symbol: {
-          type: "simple-line",
-          color: [0, 0, 0],
-          width: 1
-        }
+        symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
       }
     });
-
-    this.sketchVM = new SketchViewModel({
-    view: view,
-    layer: this.drawLayer
-    });
-
-    if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
-    if (this.startGraphic) this.stopLayer.add(this.startGraphic);
-    if (this.endGraphic) this.stopLayer.add(this.endGraphic);
-    if (existingDrawings.length) {
-    this.drawLayer.removeAll();
-    this.drawLayer.addMany(existingDrawings);
-    }
-    this.drawLayer.elevationInfo = {mode: "on-the-ground"};
 
     this.heatLayer = new FeatureLayer({
       url: HEATMAP_FEATURE_LAYER_URL,
@@ -119,6 +114,22 @@ export default class GISMapEngine {
       }
     });
 
+    this.sketchVM = new SketchViewModel({
+      view,
+      layer: this.drawLayer
+    });
+
+    if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
+    if (this.startGraphic) this.stopLayer.add(this.startGraphic);
+    if (this.endGraphic) this.stopLayer.add(this.endGraphic);
+
+    if (existingDrawings.length) {
+      this.drawLayer.removeAll();
+      this.drawLayer.addMany(existingDrawings);
+    }
+
+    this.drawLayer.elevationInfo = { mode: "on-the-ground" };
+
     const layerMap = {
       route: this.routeLayer,
       stops: this.stopLayer,
@@ -132,21 +143,13 @@ export default class GISMapEngine {
     this.layerOrder.forEach((id) => {
       const layer = layerMap[id];
       if (layer) map.add(layer);
-      this.sketchVM = new SketchViewModel({
-        view: view,
-        layer: this.drawLayer
-        });
     });
   }
 
   drawRoute(routeGeometry) {
     this.routeGraphic = new Graphic({
       geometry: routeGeometry,
-      symbol: {
-        type: "simple-line",
-        color: [0, 0, 0],
-        width: 10
-      }
+      symbol: { type: "simple-line", color: [0, 0, 0], width: 10 }
     });
 
     if (!this.routeLayer) return;
@@ -157,20 +160,12 @@ export default class GISMapEngine {
   drawStops(start, end) {
     this.startGraphic = new Graphic({
       geometry: start,
-      symbol: {
-        type: "simple-marker",
-        color: "green",
-        size: 10
-      }
+      symbol: { type: "simple-marker", color: "green", size: 10 }
     });
 
     this.endGraphic = new Graphic({
       geometry: end,
-      symbol: {
-        type: "simple-marker",
-        color: "red",
-        size: 10
-      }
+      symbol: { type: "simple-marker", color: "red", size: 10 }
     });
 
     if (!this.stopLayer) return;
@@ -178,86 +173,56 @@ export default class GISMapEngine {
     this.stopLayer.addMany([this.startGraphic, this.endGraphic]);
   }
 
-  toggleRoute(visible) {
-    this.routeVisible = visible;
-
-    if (this.routeLayer) this.routeLayer.visible = visible;
-    if (this.stopLayer) this.stopLayer.visible = visible;
+  toggleRoute(v) {
+    this.routeVisible = v;
+    if (this.routeLayer) this.routeLayer.visible = v;
+    if (this.stopLayer) this.stopLayer.visible = v;
   }
 
-  enableHeatmap(view, intensity) {
+  enableHeatmap(_, intensity) {
     this.heatVisible = true;
     this.heatIntensity = intensity;
 
     if (!this.heatLayer) return;
-
     this.heatLayer.visible = true;
 
-    const renderer = this.heatLayer.renderer.clone();
-    renderer.maxPixelIntensity = intensity;
-    this.heatLayer.renderer = renderer;
+    const r = this.heatLayer.renderer.clone();
+    r.maxPixelIntensity = intensity;
+    this.heatLayer.renderer = r;
   }
 
   disableHeatmap() {
     this.heatVisible = false;
-
     if (this.heatLayer) this.heatLayer.visible = false;
   }
 
-  updateHeatmapIntensity(value) {
-    this.heatIntensity = value;
-
+  updateHeatmapIntensity(v) {
+    this.heatIntensity = v;
     if (!this.heatLayer) return;
 
-    const renderer = this.heatLayer.renderer.clone();
-    renderer.maxPixelIntensity = value;
-    this.heatLayer.renderer = renderer;
+    const r = this.heatLayer.renderer.clone();
+    r.maxPixelIntensity = v;
+    this.heatLayer.renderer = r;
   }
 
   getLayers() {
+    const l = this.layerOrder;
+
     const lookup = {
-      route: {
-        id: "route",
-        name: "Route Layer",
-        visible: this.routeLayer?.visible ?? true
-      },
-      stops: {
-        id: "stops",
-        name: "Stop Layer",
-        visible: this.stopLayer?.visible ?? true
-      },
-      touristAttractions: {
-        id: "touristAttractions",
-        name: "Tourist Attractions Layer",
-        visible: this.touristAttractionLayer?.visible ?? true
-      },
-      heat: {
-        id: "heat",
-        name: "Tourist Attractions Heatmap Layer",
-        visible: this.heatLayer?.visible ?? false
-      },
-      mrtStations: {
-        id: "mrtStations",
-        name: "MRT Stations Layer",
-        visible: this.mrtStationLayer?.visible ?? true
-      },
-      mrtLines: {
-        id: "mrtLines",
-        name: "MRT Lines Layer",
-        visible: this.mrtLineLayer?.visible ?? true
-      },
-      drawings: {
-        id: "drawings",
-        name: "Drawings Layer",
-        visible: this.drawLayer?.visible ?? true
-      }
+      route: { id: "route", name: "Route Layer", visible: this.routeLayer?.visible },
+      stops: { id: "stops", name: "Stop Layer", visible: this.stopLayer?.visible },
+      touristAttractions: { id: "touristAttractions", name: "Tourist Attractions", visible: this.touristAttractionLayer?.visible },
+      heat: { id: "heat", name: "Heatmap", visible: this.heatLayer?.visible },
+      mrtStations: { id: "mrtStations", name: "MRT Stations", visible: this.mrtStationLayer?.visible },
+      mrtLines: { id: "mrtLines", name: "MRT Lines", visible: this.mrtLineLayer?.visible },
+      drawings: { id: "drawings", name: "Drawings", visible: this.drawLayer?.visible }
     };
 
-    return this.layerOrder.map((id) => lookup[id]);
+    return l.map((id) => lookup[id]);
   }
 
   toggleLayer(id) {
-    const layerMap = {
+    const map = {
       route: this.routeLayer,
       stops: this.stopLayer,
       touristAttractions: this.touristAttractionLayer,
@@ -267,21 +232,19 @@ export default class GISMapEngine {
       drawings: this.drawLayer
     };
 
-    const layer = layerMap[id];
+    const layer = map[id];
     if (layer) layer.visible = !layer.visible;
   }
 
-  reorderLayers(fromIndex, toIndex) {
+  reorderLayers(from, to) {
     const order = [...this.layerOrder];
-
-    const moved = order.splice(fromIndex, 1)[0];
-    order.splice(toIndex, 0, moved);
-
+    const [moved] = order.splice(from, 1);
+    order.splice(to, 0, moved);
     this.layerOrder = order;
 
     if (!this.currentMap) return;
 
-    const layerMap = {
+    const map = {
       route: this.routeLayer,
       stops: this.stopLayer,
       heat: this.heatLayer,
@@ -291,136 +254,113 @@ export default class GISMapEngine {
       drawings: this.drawLayer
     };
 
-    order.forEach((id, index) => {
-      const layer = layerMap[id];
-      if (layer) this.currentMap.reorder(layer, index);
+    order.forEach((id, i) => {
+      const layer = map[id];
+      if (layer) this.currentMap.reorder(layer, i);
     });
   }
-  startPointDraw() {
-  if (!this.sketchVM) return;
-  this.sketchVM.create("point");
+
+  startPointDraw() { this.sketchVM?.create("point"); }
+  startLineDraw()  { this.sketchVM?.create("polyline"); }
+  startPolygonDraw(){ this.sketchVM?.create("polygon"); }
+
+  getDrawnFeatures() {
+    const f = [];
+
+    if (this.drawLayer) f.push(...this.drawLayer.graphics.toArray());
+    if (this.routeGraphic) f.push(this.routeGraphic);
+    if (this.startGraphic) f.push(this.startGraphic);
+    if (this.endGraphic) f.push(this.endGraphic);
+
+    return f;
   }
 
-  startLineDraw() {
-  if (!this.sketchVM) return;
-  this.sketchVM.create("polyline");
+  hasDrawings() {
+    return this.getDrawnFeatures().length > 0;
   }
 
-  startPolygonDraw() {
-  if (!this.sketchVM) return;
-  this.sketchVM.create("polygon");
+  toGeoJSONGeometry(g) {
+    if (!g) return null;
+
+    if (g.type === "point") return { type: "Point", coordinates: [g.x, g.y] };
+    if (g.type === "polyline") return { type: "LineString", coordinates: g.paths?.[0] || [] };
+    if (g.type === "polygon") return { type: "Polygon", coordinates: g.rings || [] };
+
+    return null;
   }
 
-  getDrawnFeatures(){
-  const f=[];
+  saveDrawings(msg) {
+    const f = this.getDrawnFeatures();
+    if (!f.length) return msg?.("No drawings to export");
 
-  if(this.drawLayer){
-    f.push(...this.drawLayer.graphics.toArray());
-  }
-
-  if(this.routeGraphic)f.push(this.routeGraphic);
-  if(this.startGraphic)f.push(this.startGraphic);
-  if(this.endGraphic)f.push(this.endGraphic);
-
-  return f;
-}
-
-hasDrawings(){
-  return this.getDrawnFeatures().length>0;
-}
-
-saveDrawings(msg){
-  const f=this.getDrawnFeatures();
-  if(!f.length)return msg?.("No drawings to export");
-  const geojson={
-    type:"FeatureCollection",
-    features:f.map(x=>({
-      type:"Feature",
-      geometry:this.toGeoJSONGeometry(x.geometry),
-      properties:{}
-    }))
-  };
-  const url=URL.createObjectURL(
-    new Blob([JSON.stringify(geojson)],{type:"application/json"})
-  );
-  const a=document.createElement("a");
-  a.href=url;
-  a.download="drawings.geojson";
-  a.click();
-  URL.revokeObjectURL(url);
-  msg?.("GeoJSON downloaded");
-}
-
-toGeoJSONGeometry(g){
-  if(!g) return null;
-  const t=g.type;
-  if(t==="point"){
-    return {
-      type:"Point",
-      coordinates:[g.x,g.y] 
+    const geojson = {
+      type: "FeatureCollection",
+      features: f.map(x => ({
+        type: "Feature",
+        geometry: this.toGeoJSONGeometry(x.geometry),
+        properties: {}
+      }))
     };
+
+    const url = URL.createObjectURL(new Blob([JSON.stringify(geojson)], { type: "application/json" }));
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "drawings.geojson";
+    a.click();
+
+    URL.revokeObjectURL(url);
+    msg?.("GeoJSON downloaded");
   }
-  if(t==="polyline"){
-    return {
-      type:"LineString",
-      coordinates:g.paths?.[0] || []
-    };
+
+  async uploadGeoJSON(file) {
+    if (!file || !this.currentMap || !this.currentView) return;
+
+    try {
+      const geojson = JSON.parse(await file.text());
+
+      const layer = new GraphicsLayer({ title: file.name });
+
+      const graphics = geojson.features.map(f => {
+        const g = f.geometry;
+
+        let geometry = null;
+
+        if (g.type === "Point") {
+          geometry = { type: "point", x: g.coordinates[0], y: g.coordinates[1], spatialReference: { wkid: 3857 } };
+        }
+
+        if (g.type === "LineString") {
+          geometry = { type: "polyline", paths: [g.coordinates], spatialReference: { wkid: 3857 } };
+        }
+
+        if (g.type === "Polygon") {
+          geometry = { type: "polygon", rings: g.coordinates, spatialReference: { wkid: 3857 } };
+        }
+
+        return new Graphic({
+          geometry,
+          symbol: {
+            type: g.type === "Point" ? "simple-marker" : g.type === "LineString" ? "simple-line" : "simple-fill",
+            color: g.type === "Point" ? "red" : g.type === "LineString" ? "blue" : [0, 120, 255, 0.3],
+            size: g.type === "Point" ? 8 : undefined,
+            width: g.type === "LineString" ? 2 : undefined
+          }
+        });
+      });
+
+      layer.addMany(graphics);
+      this.currentMap.add(layer);
+
+      this.uploadedLayers.push({
+        id: `upload_${Date.now()}`,
+        name: file.name,
+        layer
+      });
+
+      await this.currentView.goTo(layer);
+    } catch (err) {
+      console.error("Upload failed:", err);
+    }
   }
-  if(t==="polygon"){
-    return {
-      type:"Polygon",
-      coordinates:g.rings || []
-    };
-  }
-  return null;
-}
-
-saveDrawingsAsGEOJSON(msg){
-  const f=this.getDrawnFeatures();
-  if(!f.length){
-    msg?.("Unable to download: no drawings found");
-    setTimeout(()=>msg?.(""),10000);
-    return;
-  }
-  const geojson={
-    type:"FeatureCollection",
-    features:f.map(x=>({
-      type:"Feature",
-      geometry:this.toGeoJSONGeometry(x.geometry),
-      properties:{}
-    }))
-  };
-  const blob=new Blob([JSON.stringify(geojson,null,2)],{
-    type:"application/json"
-  });
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;
-  a.download="drawings.geojson";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-async uploadGeoJSON(file){
-  if(!file||!this.currentMap)return;
-
-  const blobUrl=URL.createObjectURL(file);
-
-  const layer=new GeoJSONLayer({
-    url:blobUrl,
-    title:file.name,
-    visible:true
-  });
-
-  await layer.load();
-
-  this.currentMap.add(layer);
-
-  this.uploadedLayers.push({
-    id:crypto.randomUUID(),
-    name:file.name,
-    layer,
-    blobUrl
-  });
-}
 }

@@ -10,6 +10,7 @@ export default function FloatingDrawTools({
     if (!file) return;
     uploadGeoJSON(file);
     target.value = "";
+    console.log("Selected file:", file);
   };
 
   return (
