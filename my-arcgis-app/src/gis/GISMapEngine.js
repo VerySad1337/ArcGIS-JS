@@ -313,54 +313,84 @@ export default class GISMapEngine {
     msg?.("GeoJSON downloaded");
   }
 
-  async uploadGeoJSON(file) {
-    if (!file || !this.currentMap || !this.currentView) return;
+  async uploadGeoJSON(file, msg) {
+  if (!file || !this.currentMap || !this.currentView) return;
 
-    try {
-      const geojson = JSON.parse(await file.text());
-
-      const layer = new GraphicsLayer({ title: file.name });
-
-      const graphics = geojson.features.map(f => {
-        const g = f.geometry;
-
-        let geometry = null;
-
-        if (g.type === "Point") {
-          geometry = { type: "point", x: g.coordinates[0], y: g.coordinates[1], spatialReference: { wkid: 3857 } };
-        }
-
-        if (g.type === "LineString") {
-          geometry = { type: "polyline", paths: [g.coordinates], spatialReference: { wkid: 3857 } };
-        }
-
-        if (g.type === "Polygon") {
-          geometry = { type: "polygon", rings: g.coordinates, spatialReference: { wkid: 3857 } };
-        }
-
-        return new Graphic({
-          geometry,
-          symbol: {
-            type: g.type === "Point" ? "simple-marker" : g.type === "LineString" ? "simple-line" : "simple-fill",
-            color: g.type === "Point" ? "red" : g.type === "LineString" ? "blue" : [0, 120, 255, 0.3],
-            size: g.type === "Point" ? 8 : undefined,
-            width: g.type === "LineString" ? 2 : undefined
-          }
-        });
-      });
-
-      layer.addMany(graphics);
-      this.currentMap.add(layer);
-
-      this.uploadedLayers.push({
-        id: `upload_${Date.now()}`,
-        name: file.name,
-        layer
-      });
-
-      await this.currentView.goTo(layer);
-    } catch (err) {
-      console.error("Upload failed:", err);
+  try {
+    // 🚨 BLOCK UPLOAD IF UNSAVED DRAWINGS EXIST
+    if (this.drawLayer?.graphics?.length > 0) {
+      msg?.("Please save current drawings before uploading new file.");
+      return;
     }
+
+    const geojson = JSON.parse(await file.text());
+
+    const graphics = geojson.features.map(f => {
+      const g = f.geometry;
+
+      let geometry = null;
+
+      if (g.type === "Point") {
+        geometry = {
+          type: "point",
+          x: g.coordinates[0],
+          y: g.coordinates[1],
+          spatialReference: { wkid: 3857 }
+        };
+      }
+
+      if (g.type === "LineString") {
+        geometry = {
+          type: "polyline",
+          paths: [g.coordinates],
+          spatialReference: { wkid: 3857 }
+        };
+      }
+
+      if (g.type === "Polygon") {
+        geometry = {
+          type: "polygon",
+          rings: g.coordinates,
+          spatialReference: { wkid: 3857 }
+        };
+      }
+
+      return new Graphic({
+        geometry,
+        symbol: {
+          type:
+            g.type === "Point"
+              ? "simple-marker"
+              : g.type === "LineString"
+              ? "simple-line"
+              : "simple-fill",
+
+          color:
+            g.type === "Point"
+              ? "red"
+              : g.type === "LineString"
+              ? "blue"
+              : [0, 120, 255, 0.3],
+
+          size: g.type === "Point" ? 8 : undefined,
+          width: g.type === "LineString" ? 2 : undefined
+        }
+      });
+    });
+
+    // 🔥 IMPORTANT FIX: bind to YOUR draw layer
+    this.drawLayer.addMany(graphics);
+
+    this.uploadedLayers.push({
+      id: `upload_${Date.now()}`,
+      name: file.name,
+      layer: this.drawLayer
+    });
+
+    await this.currentView.goTo(this.drawLayer);
+
+  } catch (err) {
+    console.error("Upload failed:", err);
   }
+}
 }
