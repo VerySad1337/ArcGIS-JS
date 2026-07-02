@@ -8,6 +8,7 @@ Instruction:
 
 
 Snapshot of implementation process:
+
 8) Added upload drawing function to bind to existing drawing layer.
 <img width="1910" height="927" alt="image" src="https://github.com/user-attachments/assets/425fd932-90ff-4ac8-834b-b532ef575801" />
 
