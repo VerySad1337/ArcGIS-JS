@@ -8,6 +8,9 @@ Instruction:
 
 
 Snapshot of implementation process:
+8) Added upload drawing function to bind to existing drawing layer.
+<img width="1910" height="927" alt="image" src="https://github.com/user-attachments/assets/425fd932-90ff-4ac8-834b-b532ef575801" />
+
 
 7) Added ability to save the drawing via freehand on map to download to GEOJSON format.
 <img width="1895" height="952" alt="image" src="https://github.com/user-attachments/assets/411d8598-d379-410d-965a-7a0206e4bd31" />
