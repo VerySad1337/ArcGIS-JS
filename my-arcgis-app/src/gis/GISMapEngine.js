@@ -10,6 +10,10 @@ import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import IdentityManager from "@arcgis/core/identity/IdentityManager";
 import esriRequest from "@arcgis/core/request";
 
+function colorToHex(color) {
+  return typeof color?.toHex === "function" ? color.toHex() : "#000000";
+}
+
 export default class GISMapEngine {
   constructor() {
     this.currentMap = null;
@@ -45,6 +49,35 @@ export default class GISMapEngine {
     this.mrtStationVisible = true;
     this.mrtLineVisible = true;
 
+    // FeatureLayers (touristAttractionLayer/mrtStationLayer/mrtLineLayer) are
+    // rebuilt from scratch on every attachToView call (e.g. 2D/3D switches),
+    // so their renderers can't be relied on to hold runtime style changes
+    // the way the persisted route/drawings graphics do. These fields are the
+    // actual source of truth for their styling: attachToView seeds each new
+    // layer from here, and setLayerStyle updates both the live layer's
+    // renderer and this field, so styling survives reattachment.
+    this.touristAttractionRenderer = {
+      type: "simple",
+      symbol: {
+        type: "simple-marker",
+        color: [255, 165, 0],
+        size: 8,
+        outline: { color: [255, 255, 255], width: 1 }
+      }
+    };
+    this.mrtStationRenderer = {
+      type: "simple",
+      symbol: {
+        type: "simple-fill",
+        color: [0, 120, 255, 0.5],
+        outline: { color: [0, 0, 0], width: 1.5 }
+      }
+    };
+    this.mrtLineRenderer = {
+      type: "simple",
+      symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
+    };
+
     this.drawLayer = new GraphicsLayer({ title: "Drawings" });
     this.sketchVM = null;
 
@@ -52,6 +85,7 @@ export default class GISMapEngine {
 
     this.onFeatureSelect = null;
     this.clickHandle = null;
+    this.onDrawingsChanged = null;
 
     // Client-side "schema" for the drawings layer: drawLayer is a local
     // GraphicsLayer with no backing service, so added columns are tracked
@@ -64,6 +98,14 @@ export default class GISMapEngine {
 
   setOnFeatureSelect(callback) {
     this.onFeatureSelect = callback;
+  }
+
+  // Notifies the shell whenever the set of drawn graphics changes shape
+  // (a new point/line/polygon completes), so the layer panel can re-derive
+  // the Drawings layer's style groups instead of holding onto the stale
+  // list from before the new graphic existed.
+  setOnDrawingsChanged(callback) {
+    this.onDrawingsChanged = callback;
   }
 
   attachToView(view) {
@@ -84,7 +126,8 @@ export default class GISMapEngine {
       url: HEATMAP_FEATURE_LAYER_URL,
       title: "Tourist Attractions",
       visible: this.touristAttractionVisible,
-      outFields: ["*"]
+      outFields: ["*"],
+      renderer: this.touristAttractionRenderer
     });
 
     this.mrtStationLayer = new FeatureLayer({
@@ -92,14 +135,7 @@ export default class GISMapEngine {
       title: "MRT Stations",
       visible: this.mrtStationVisible,
       outFields: ["*"],
-      renderer: {
-        type: "simple",
-        symbol: {
-          type: "simple-fill",
-          color: [0, 120, 255, 0.5],
-          outline: { color: [0, 0, 0], width: 1.5 }
-        }
-      }
+      renderer: this.mrtStationRenderer
     });
 
     this.mrtLineLayer = new FeatureLayer({
@@ -107,10 +143,7 @@ export default class GISMapEngine {
       title: "MRT Lines",
       visible: this.mrtLineVisible,
       outFields: ["*"],
-      renderer: {
-        type: "simple",
-        symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
-      }
+      renderer: this.mrtLineRenderer
     });
 
     this.heatLayer = new FeatureLayer({
@@ -142,6 +175,7 @@ export default class GISMapEngine {
     this.sketchVM.on("create", (event) => {
       if (event.state === "complete") {
         event.graphic.attributes = this.buildDrawingAttributes();
+        this.onDrawingsChanged?.();
       }
     });
 
@@ -296,17 +330,81 @@ export default class GISMapEngine {
     this.heatLayer.renderer = r;
   }
 
+  // Builds one style-group descriptor from a single symbol. A "style group"
+  // is what the layer panel renders as one row of color/border controls.
+  static symbolTypeLabels = {
+    "simple-marker": "Points",
+    "simple-line": "Lines",
+    "simple-fill": "Polygons"
+  };
+
+  symbolToStyleGroup(symbol, label) {
+    const type = symbol?.type ?? null;
+    return {
+      symbolType: type,
+      label: label ?? GISMapEngine.symbolTypeLabels[type] ?? "Style",
+      color: colorToHex(symbol?.color),
+      borderWidth: type === "simple-line" ? symbol?.width ?? null : symbol?.outline?.width ?? null,
+      outlineColor: type === "simple-fill" ? colorToHex(symbol?.outline?.color) : undefined
+    };
+  }
+
   getLayers() {
     const l = this.layerOrder;
 
+    const routeSymbol = this.routeGraphic?.symbol;
+    const touristAttractionSymbol = this.touristAttractionLayer?.renderer?.symbol;
+    const mrtStationSymbol = this.mrtStationLayer?.renderer?.symbol;
+    const mrtLineSymbol = this.mrtLineLayer?.renderer?.symbol;
+
+    // The drawings layer has no restriction on what geometry types coexist
+    // in it, so it can hold any mix of points, lines, and polygons at once.
+    // Rather than styling the whole layer off one arbitrarily-chosen
+    // graphic, build one style group per distinct symbol type actually
+    // present, so each geometry kind gets its own color/border controls.
+    const drawingsGroups = [];
+    if (this.drawLayer?.graphics?.length) {
+      const seenTypes = new Map();
+      this.drawLayer.graphics.forEach((g) => {
+        const type = g.symbol?.type;
+        if (type && !seenTypes.has(type)) seenTypes.set(type, g.symbol);
+      });
+      seenTypes.forEach((symbol) => drawingsGroups.push(this.symbolToStyleGroup(symbol)));
+    }
+
     const lookup = {
-      route: { id: "route", name: "Route Layer", visible: this.routeLayer?.visible },
+      route: {
+        id: "route",
+        name: "Route Layer",
+        visible: this.routeLayer?.visible,
+        styleGroups: routeSymbol ? [this.symbolToStyleGroup(routeSymbol, "Route")] : []
+      },
       stops: { id: "stops", name: "Stop Layer", visible: this.stopLayer?.visible },
-      touristAttractions: { id: "touristAttractions", name: "Tourist Attractions", visible: this.touristAttractionLayer?.visible },
+      touristAttractions: {
+        id: "touristAttractions",
+        name: "Tourist Attractions",
+        visible: this.touristAttractionLayer?.visible,
+        styleGroups: touristAttractionSymbol ? [this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions")] : []
+      },
       heat: { id: "heat", name: "Heatmap", visible: this.heatLayer?.visible },
-      mrtStations: { id: "mrtStations", name: "MRT Stations", visible: this.mrtStationLayer?.visible },
-      mrtLines: { id: "mrtLines", name: "MRT Lines", visible: this.mrtLineLayer?.visible },
-      drawings: { id: "drawings", name: "Drawings", visible: this.drawLayer?.visible }
+      mrtStations: {
+        id: "mrtStations",
+        name: "MRT Stations",
+        visible: this.mrtStationLayer?.visible,
+        styleGroups: mrtStationSymbol ? [this.symbolToStyleGroup(mrtStationSymbol, "Stations")] : []
+      },
+      mrtLines: {
+        id: "mrtLines",
+        name: "MRT Lines",
+        visible: this.mrtLineLayer?.visible,
+        styleGroups: mrtLineSymbol ? [this.symbolToStyleGroup(mrtLineSymbol, "Lines")] : []
+      },
+      drawings: {
+        id: "drawings",
+        name: "Drawings",
+        visible: this.drawLayer?.visible,
+        styleGroups: drawingsGroups
+      }
     };
 
     return l.map((id) => lookup[id]);
@@ -325,6 +423,73 @@ export default class GISMapEngine {
 
     const layer = map[id];
     if (layer) layer.visible = !layer.visible;
+  }
+
+  // Applies a fill/line color and border (outline) thickness to a layer's
+  // symbology. Only layers backed by a single, well-defined symbol are
+  // supported: Tourist Attractions/MRT stations/lines (FeatureLayer simple
+  // renderers), the route graphic (single simple-line), and drawings. Since the drawings
+  // layer can hold any mix of point/line/polygon graphics at once,
+  // `symbolType` scopes the update to only the graphics of that geometry
+  // type, so each style group in the panel can be edited independently.
+  // `outlineColor` only applies to polygon (`simple-fill`) symbols, which
+  // have a fill color distinct from their outline/border color.
+  setLayerStyle(id, { color, borderWidth, outlineColor, symbolType } = {}) {
+    const applySymbolStyle = (symbol) => {
+      if (!symbol) return symbol;
+      const next = symbol.clone();
+      if (color) next.color = color;
+      if (borderWidth != null) {
+        if (next.type === "simple-line") next.width = borderWidth;
+        else if (next.outline) next.outline.width = borderWidth;
+      }
+      if (outlineColor && next.type === "simple-fill" && next.outline) {
+        next.outline.color = outlineColor;
+      }
+      return next;
+    };
+
+    switch (id) {
+      case "touristAttractions": {
+        if (!this.touristAttractionLayer?.renderer) return;
+        const renderer = this.touristAttractionLayer.renderer.clone();
+        renderer.symbol = applySymbolStyle(renderer.symbol);
+        this.touristAttractionLayer.renderer = renderer;
+        this.touristAttractionRenderer = renderer;
+        break;
+      }
+      case "mrtStations": {
+        if (!this.mrtStationLayer?.renderer) return;
+        const renderer = this.mrtStationLayer.renderer.clone();
+        renderer.symbol = applySymbolStyle(renderer.symbol);
+        this.mrtStationLayer.renderer = renderer;
+        this.mrtStationRenderer = renderer;
+        break;
+      }
+      case "mrtLines": {
+        if (!this.mrtLineLayer?.renderer) return;
+        const renderer = this.mrtLineLayer.renderer.clone();
+        renderer.symbol = applySymbolStyle(renderer.symbol);
+        this.mrtLineLayer.renderer = renderer;
+        this.mrtLineRenderer = renderer;
+        break;
+      }
+      case "route": {
+        if (!this.routeGraphic) return;
+        this.routeGraphic.symbol = applySymbolStyle(this.routeGraphic.symbol);
+        break;
+      }
+      case "drawings": {
+        if (!this.drawLayer) return;
+        this.drawLayer.graphics.forEach((graphic) => {
+          if (symbolType && graphic.symbol?.type !== symbolType) return;
+          graphic.symbol = applySymbolStyle(graphic.symbol);
+        });
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   reorderLayers(from, to) {
