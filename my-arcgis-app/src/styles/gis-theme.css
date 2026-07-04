@@ -178,7 +178,7 @@ input[type="range"] {
 
 .fab-container{
   position:absolute;
-  right:130px;
+  right:100px;
   bottom:60px;
   width:60px;
   height:60px;
@@ -365,4 +365,60 @@ input[type="range"] {
   color:#fff;
   text-align:right;
   word-break:break-word;
+}
+
+.feature-attribute-input{
+  flex:1;
+  min-width:0;
+  background:rgba(255,255,255,0.06);
+  border:1px solid rgba(56, 189, 248, 0.3);
+  border-radius:6px;
+  color:#fff;
+  font-size:12px;
+  padding:4px 6px;
+  text-align:right;
+}
+
+.feature-attributes-add-column{
+  display:flex;
+  gap:6px;
+  margin-top:10px;
+  padding-top:10px;
+  border-top:1px dashed rgba(255,255,255,0.15);
+}
+
+.feature-attributes-add-column .feature-attribute-input{
+  text-align:left;
+}
+
+.feature-attributes-add-column button{
+  flex-shrink:0;
+  font-size:11px;
+}
+
+.feature-attributes-footer{
+  display:flex;
+  gap:8px;
+  padding:10px 14px;
+  border-top:1px solid rgba(56, 189, 248, 0.15);
+}
+
+.feature-attributes-footer button{
+  flex:1;
+  background:rgba(56, 189, 248, 0.15);
+  border:1px solid rgba(56, 189, 248, 0.3);
+  border-radius:6px;
+  color:#fff;
+  padding:6px 0;
+  font-size:12px;
+  cursor:pointer;
+}
+
+.feature-attributes-footer button:hover{
+  background:rgba(56, 189, 248, 0.25);
+}
+
+.feature-attributes-footer button:disabled{
+  opacity:0.6;
+  cursor:default;
 }
