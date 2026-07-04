@@ -8,6 +8,7 @@ import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
 import { WEBMAP_ID, WEBSCENE_ID } from "../config/ArcGISConfiguration";
 import FloatingDrawTools from "../components/FloatingDrawTools";
+import FeatureAttributesPanel from "../components/FeatureAttributesPanel";
 
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
@@ -19,6 +20,7 @@ export default function ApplicationShell() {
   const engineRef = useRef(new GISMapEngine());
   const [toast, setToast] = useState("");
   const toastTimeoutRef = useRef(null);
+  const [selectedFeature, setSelectedFeature] = useState(null);
 
   const showToast = (message) => {
     setToast(message);
@@ -33,6 +35,7 @@ export default function ApplicationShell() {
 
   const handleViewReady = (view) => {
     viewRef.current = view;
+    engineRef.current.setOnFeatureSelect(setSelectedFeature);
     engineRef.current.attachToView(view);
     refreshLayers();
   };
@@ -144,6 +147,10 @@ export default function ApplicationShell() {
           saveGeoJSON={saveGeoJSON}
           uploadGeoJSON={uploadGeoJSON}
           />
+        <FeatureAttributesPanel
+          feature={selectedFeature}
+          onClose={() => setSelectedFeature(null)}
+        />
       </div>
       {toast && ( <div className="gis-toast"> {toast} </div> )}
     </div>
