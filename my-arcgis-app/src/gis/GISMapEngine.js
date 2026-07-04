@@ -319,7 +319,7 @@ export default class GISMapEngine {
   try {
     // 🚨 BLOCK UPLOAD IF UNSAVED DRAWINGS EXIST
     if (this.drawLayer?.graphics?.length > 0) {
-      msg?.("Please save current drawings before uploading new file.");
+      msg?.("Please save your current drawing and refresh the page before uploading");
       return;
     }
 
