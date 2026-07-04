@@ -53,6 +53,15 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
   - Custom renderers
   - Visibility controls (`mrtStationVisible`, `mrtLineVisible`)
 
+## Feature Attribute Selection System
+
+**Purpose:** Displays a feature's attributes in an on-map panel when the user clicks a feature on a selectable feature layer.
+
+**Key Files:**
+- `src/gis/GISMapEngine.js` – `setOnFeatureSelect`, `handleFeatureClick` (view click handling, `hitTest` against Tourist Attractions/MRT Stations/MRT Lines layers).
+- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes.
+- `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel.
+
 ## 2D / 3D View System
 
 **Purpose:** Switches between 2D map and 3D scene views.

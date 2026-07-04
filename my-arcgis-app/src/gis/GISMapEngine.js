@@ -47,6 +47,13 @@ export default class GISMapEngine {
     this.sketchVM = null;
 
     this.uploadedLayers = [];
+
+    this.onFeatureSelect = null;
+    this.clickHandle = null;
+  }
+
+  setOnFeatureSelect(callback) {
+    this.onFeatureSelect = callback;
   }
 
   attachToView(view) {
@@ -66,13 +73,15 @@ export default class GISMapEngine {
     this.touristAttractionLayer = new FeatureLayer({
       url: HEATMAP_FEATURE_LAYER_URL,
       title: "Tourist Attractions",
-      visible: this.touristAttractionVisible
+      visible: this.touristAttractionVisible,
+      outFields: ["*"]
     });
 
     this.mrtStationLayer = new FeatureLayer({
       url: MRT_STATION_FEATURE_LAYER_URL,
       title: "MRT Stations",
       visible: this.mrtStationVisible,
+      outFields: ["*"],
       renderer: {
         type: "simple",
         symbol: {
@@ -87,6 +96,7 @@ export default class GISMapEngine {
       url: MRT_LINE_FEATURE_LAYER_URL,
       title: "MRT Lines",
       visible: this.mrtLineVisible,
+      outFields: ["*"],
       renderer: {
         type: "simple",
         symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
@@ -144,6 +154,36 @@ export default class GISMapEngine {
       const layer = layerMap[id];
       if (layer) map.add(layer);
     });
+
+    if (this.clickHandle) this.clickHandle.remove();
+    this.clickHandle = view.on("click", (event) => this.handleFeatureClick(event));
+  }
+
+  handleFeatureClick(event) {
+    if (!this.currentView) return;
+
+    const selectableLayers = [
+      this.touristAttractionLayer,
+      this.mrtStationLayer,
+      this.mrtLineLayer
+    ].filter(Boolean);
+
+    this.currentView
+      .hitTest(event, { include: selectableLayers })
+      .then((response) => {
+        const result = response.results.find((r) => r.graphic?.attributes);
+
+        if (result) {
+          this.onFeatureSelect?.({
+            layerTitle: result.graphic.layer?.title || "Feature",
+            attributes: result.graphic.attributes,
+            x: event.x,
+            y: event.y
+          });
+        } else {
+          this.onFeatureSelect?.(null);
+        }
+      });
   }
 
   drawRoute(routeGeometry) {

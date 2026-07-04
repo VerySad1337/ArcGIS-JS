@@ -178,10 +178,10 @@ input[type="range"] {
 
 .fab-container{
   position:absolute;
-  right:30px;
-  bottom:30px;
-  width:260px;
-  height:220px;
+  right:130px;
+  bottom:60px;
+  width:60px;
+  height:60px;
   z-index:9999;
   overflow:visible;
 }
@@ -189,8 +189,7 @@ input[type="range"] {
 /* Main + button */
 .fab-main{
   position:absolute;
-  right:80px;
-  bottom:0;
+  inset:0;
 
   width:60px;
   height:60px;
@@ -202,18 +201,31 @@ input[type="range"] {
   color:#fff;
 
   font-size:32px;
+  line-height:1;
   cursor:pointer;
 
   box-shadow:0 4px 12px rgba(0,0,0,.35);
+  transition:transform .25s ease, background .2s ease;
 }
 
 .fab-main:hover{
   background:#0064a8;
 }
 
-/* Fan buttons */
+/* Rotate + into an x while the fan is open */
+.fab-container.open .fab-main{
+  transform:rotate(45deg);
+  background:#0064a8;
+}
+
+/* Fan buttons — position is driven by the --dx/--dy custom
+   properties computed per-button in FloatingDrawTools.jsx, so the
+   fan automatically fits however many tools are rendered. */
 .fab-tool{
   position:absolute;
+  top:50%;
+  left:50%;
+  margin:-24px 0 0 -24px;
 
   width:48px;
   height:48px;
@@ -233,8 +245,9 @@ input[type="range"] {
 
   opacity:0;
   pointer-events:none;
+  transform:translate(0, 0) scale(.4);
 
-  transition:all .2s ease;
+  transition:transform .25s cubic-bezier(.34,1.56,.64,1), opacity .2s ease;
 
   box-shadow:0 4px 10px rgba(0,0,0,.3);
 }
@@ -243,72 +256,10 @@ input[type="range"] {
   background:#444;
 }
 
-.fab-container:hover .fab-tool{
+.fab-container.open .fab-tool{
   opacity:1;
   pointer-events:auto;
-}
-
-.save-tool{
-  position:absolute;
-  width:68px;
-  height:68px;
-  border:none;
-  border-radius:50%;
-  background:#444;
-  color:#fff;
-  font-size:11px;
-  font-weight:600;
-  cursor:pointer;
-
-  opacity:0;
-  visibility:hidden;
-  pointer-events:none;
-
-  transition:.2s;
-}
-
-/* ONLY show GeoJSON when hovering Save button area */
-.save-wrapper:hover .save-tool{
-  opacity:1;
-  visibility:visible;
-  pointer-events:auto;
-}
-
-.save-geojson{
-  right:200px;
-  bottom:0px;
-}
-
-/* ===== FAN SHAPE ===== */
-
-/* Save - closer to + */
-.fab-left{
-  right:160px;
-  bottom:35px;
-}
-
-/* Polygon */
-.fab-top-left{
-  right:135px;
-  bottom:105px;
-}
-
-/* Point */
-.fab-top{
-  right:85px;
-  bottom:140px;
-}
-
-/* Polyline */
-.fab-top-right{
-  right:35px;
-  bottom:105px;
-}
-
-/* Upload */
-.fab-upload{
-  right:-15px;
-  bottom:45px;
+  transform:translate(var(--dx), var(--dy)) scale(1);
 }
 
 .fab-upload input{
@@ -320,7 +271,7 @@ input[type="range"] {
 .gis-toast{
   position:absolute;
   top:20px;
-  right:20px;
+  right:100px;
 
   background:rgba(185,28,28,.95);
   border:1px solid rgba(255,255,255,.2);
@@ -344,4 +295,74 @@ input[type="range"] {
 @keyframes fadeIn{
   from{opacity:0; transform:translateY(5px);}
   to{opacity:1; transform:translateY(0);}
+}
+
+/* =========================
+   FEATURE ATTRIBUTES PANEL
+========================= */
+
+.feature-attributes-panel{
+  position:absolute;
+  width:280px;
+  max-height:320px;
+
+  background:rgba(20, 28, 40, 0.92);
+  border:1px solid rgba(56, 189, 248, 0.2);
+  border-radius:12px;
+
+  backdrop-filter:blur(12px);
+  box-shadow:0 6px 18px rgba(0,0,0,.4);
+
+  z-index:9998;
+  overflow:hidden;
+
+  display:flex;
+  flex-direction:column;
+
+  animation:fadeIn .2s ease;
+}
+
+.feature-attributes-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:12px 14px;
+  border-bottom:1px solid rgba(56, 189, 248, 0.15);
+}
+
+.feature-attributes-close{
+  border:none;
+  background:transparent;
+  color:#94a3b8;
+  cursor:pointer;
+  font-size:14px;
+}
+
+.feature-attributes-close:hover{
+  color:#fff;
+}
+
+.feature-attributes-body{
+  padding:10px 14px;
+  overflow-y:auto;
+}
+
+.feature-attribute-row{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  padding:6px 0;
+  border-bottom:1px solid rgba(255,255,255,0.05);
+  font-size:12px;
+}
+
+.feature-attribute-key{
+  color:#94a3b8;
+  flex-shrink:0;
+}
+
+.feature-attribute-value{
+  color:#fff;
+  text-align:right;
+  word-break:break-word;
 }
