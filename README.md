@@ -8,6 +8,10 @@ Instruction:
 
 
 Snapshot of implementation process:
+10) Added in edit attribute function (Not tested due to free license limitation):
+<img width="1907" height="931" alt="image" src="https://github.com/user-attachments/assets/a3533013-9299-4ba3-8a2f-ed9e4bd267e9" />
+
+
 9) Added view attribute of the feature
 <img width="1907" height="935" alt="image" src="https://github.com/user-attachments/assets/6fd7f49d-b9d9-4793-af25-f46e6f272637" />
 
