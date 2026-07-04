@@ -7,6 +7,8 @@ import {
   MRT_LINE_FEATURE_LAYER_URL
 } from "../config/ArcGISConfiguration";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
+import IdentityManager from "@arcgis/core/identity/IdentityManager";
+import esriRequest from "@arcgis/core/request";
 
 export default class GISMapEngine {
   constructor() {
@@ -50,6 +52,14 @@ export default class GISMapEngine {
 
     this.onFeatureSelect = null;
     this.clickHandle = null;
+
+    // Client-side "schema" for the drawings layer: drawLayer is a local
+    // GraphicsLayer with no backing service, so added columns are tracked
+    // here and applied to every graphic instead of via a REST field definition.
+    this.drawingFields = [];
+
+    this.selectedGraphic = null;
+    this.selectedLayerId = null;
   }
 
   setOnFeatureSelect(callback) {
@@ -129,6 +139,12 @@ export default class GISMapEngine {
       layer: this.drawLayer
     });
 
+    this.sketchVM.on("create", (event) => {
+      if (event.state === "complete") {
+        event.graphic.attributes = this.buildDrawingAttributes();
+      }
+    });
+
     if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
     if (this.startGraphic) this.stopLayer.add(this.startGraphic);
     if (this.endGraphic) this.stopLayer.add(this.endGraphic);
@@ -165,7 +181,8 @@ export default class GISMapEngine {
     const selectableLayers = [
       this.touristAttractionLayer,
       this.mrtStationLayer,
-      this.mrtLineLayer
+      this.mrtLineLayer,
+      this.drawLayer
     ].filter(Boolean);
 
     this.currentView
@@ -174,16 +191,50 @@ export default class GISMapEngine {
         const result = response.results.find((r) => r.graphic?.attributes);
 
         if (result) {
+          const layer = result.graphic.layer;
+          const layerId = this.resolveLayerId(layer);
+
+          this.selectedGraphic = result.graphic;
+          this.selectedLayerId = layerId;
+
           this.onFeatureSelect?.({
-            layerTitle: result.graphic.layer?.title || "Feature",
+            layerId,
+            layerTitle: layer?.title || "Feature",
+            objectIdField: layer?.objectIdField || null,
             attributes: result.graphic.attributes,
             x: event.x,
             y: event.y
           });
         } else {
+          this.selectedGraphic = null;
+          this.selectedLayerId = null;
           this.onFeatureSelect?.(null);
         }
       });
+  }
+
+  resolveLayerId(layer) {
+    if (layer === this.touristAttractionLayer) return "touristAttractions";
+    if (layer === this.mrtStationLayer) return "mrtStations";
+    if (layer === this.mrtLineLayer) return "mrtLines";
+    if (layer === this.drawLayer) return "drawings";
+    return null;
+  }
+
+  hostedLayerById(layerId) {
+    return {
+      touristAttractions: this.touristAttractionLayer,
+      mrtStations: this.mrtStationLayer,
+      mrtLines: this.mrtLineLayer
+    }[layerId] || null;
+  }
+
+  buildDrawingAttributes(overrides = {}) {
+    const attributes = {};
+    this.drawingFields.forEach((field) => {
+      attributes[field.name] = field.defaultValue ?? null;
+    });
+    return { ...attributes, ...overrides };
   }
 
   drawRoute(routeGeometry) {
@@ -397,6 +448,7 @@ export default class GISMapEngine {
 
       return new Graphic({
         geometry,
+        attributes: this.buildDrawingAttributes(f.properties || {}),
         symbol: {
           type:
             g.type === "Point"
@@ -433,4 +485,93 @@ export default class GISMapEngine {
     console.error("Upload failed:", err);
   }
 }
+
+  async updateSelectedFeatureAttributes(updates) {
+    if (!this.selectedGraphic || !this.selectedLayerId) {
+      throw new Error("No feature selected.");
+    }
+
+    if (this.selectedLayerId === "drawings") {
+      Object.assign(this.selectedGraphic.attributes, updates);
+      return { success: true, attributes: { ...this.selectedGraphic.attributes } };
+    }
+
+    const layer = this.hostedLayerById(this.selectedLayerId);
+    if (!layer) throw new Error("Layer not found.");
+
+    const objectIdField = layer.objectIdField;
+    const objectId = this.selectedGraphic.attributes[objectIdField];
+
+    const edit = new Graphic({
+      attributes: { [objectIdField]: objectId, ...updates }
+    });
+
+    const result = await layer.applyEdits({ updateFeatures: [edit] });
+    const updateResult = result.updateFeatureResults?.[0];
+
+    if (updateResult?.error) {
+      throw new Error(updateResult.error.message || "Failed to save attribute changes.");
+    }
+
+    Object.assign(this.selectedGraphic.attributes, updates);
+    return { success: true, attributes: { ...this.selectedGraphic.attributes } };
+  }
+
+  async addColumnToLayer(layerId, fieldName, fieldType = "esriFieldTypeString", defaultValue = null) {
+    if (!fieldName) throw new Error("Field name is required.");
+
+    if (layerId === "drawings") {
+      if (this.drawingFields.some((f) => f.name === fieldName)) {
+        throw new Error(`Column "${fieldName}" already exists.`);
+      }
+
+      this.drawingFields.push({ name: fieldName, type: fieldType, defaultValue });
+      this.drawLayer.graphics.forEach((g) => {
+        if (!(fieldName in g.attributes)) g.attributes[fieldName] = defaultValue;
+      });
+
+      return { success: true };
+    }
+
+    const layer = this.hostedLayerById(layerId);
+    if (!layer) throw new Error("Layer not found.");
+
+    // Adding a field to a hosted feature service is an admin schema change:
+    // it requires a token from a user with edit/admin privileges on the item,
+    // not just the app's public API key.
+    const credential = await IdentityManager.getCredential(layer.url);
+    const addToDefinitionUrl = `${layer.url}/${layer.layerId ?? 0}/addToDefinition`;
+
+    const body = new FormData();
+    body.append("f", "json");
+    body.append("token", credential.token);
+    body.append(
+      "addToDefinition",
+      JSON.stringify({
+        fields: [
+          {
+            name: fieldName,
+            type: fieldType,
+            alias: fieldName,
+            nullable: true,
+            editable: true,
+            defaultValue
+          }
+        ]
+      })
+    );
+
+    const response = await esriRequest(addToDefinitionUrl, {
+      method: "post",
+      responseType: "json",
+      body
+    });
+
+    if (response.data?.error) {
+      throw new Error(response.data.error.message || "Failed to add column to layer.");
+    }
+
+    await layer.refresh();
+    return { success: true };
+  }
 }

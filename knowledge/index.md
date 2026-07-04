@@ -55,12 +55,12 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 
 ## Feature Attribute Selection System
 
-**Purpose:** Displays a feature's attributes in an on-map panel when the user clicks a feature on a selectable feature layer.
+**Purpose:** Displays a feature's attributes in an on-map panel when the user clicks a feature on a selectable feature layer, and allows editing attribute values or adding a new attribute column.
 
 **Key Files:**
-- `src/gis/GISMapEngine.js` – `setOnFeatureSelect`, `handleFeatureClick` (view click handling, `hitTest` against Tourist Attractions/MRT Stations/MRT Lines layers).
-- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes.
-- `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel.
+- `src/gis/GISMapEngine.js` – `setOnFeatureSelect`, `handleFeatureClick` (view click handling, `hitTest` against Tourist Attractions/MRT Stations/MRT Lines/Drawings layers), `resolveLayerId`, `hostedLayerById`, `buildDrawingAttributes`, `updateSelectedFeatureAttributes`, `addColumnToLayer`.
+- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes, with an edit mode (value inputs, Save/Cancel) and an "Add Column" form.
+- `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel, `handleSaveAttributes`/`handleAddColumn` wrappers around the engine's edit APIs.
 
 ## 2D / 3D View System
 

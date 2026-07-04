@@ -108,7 +108,30 @@ export default function ApplicationShell() {
   };
 
   const saveGeoJSON = () => {engineRef.current.saveDrawings(showToast);};
-  
+
+  const handleSaveAttributes = async (updates) => {
+    try {
+      const result = await engineRef.current.updateSelectedFeatureAttributes(updates);
+      setSelectedFeature((prev) => (prev ? { ...prev, attributes: result.attributes } : prev));
+      showToast("Attribute changes saved.");
+    } catch (err) {
+      showToast(err.message || "Failed to save attribute changes.");
+    }
+  };
+
+  const handleAddColumn = async (fieldName, defaultValue) => {
+    if (!selectedFeature) return;
+    try {
+      await engineRef.current.addColumnToLayer(selectedFeature.layerId, fieldName, "esriFieldTypeString", defaultValue);
+      setSelectedFeature((prev) =>
+        prev ? { ...prev, attributes: { ...prev.attributes, [fieldName]: defaultValue } } : prev
+      );
+      showToast(`Column "${fieldName}" added.`);
+    } catch (err) {
+      showToast(err.message || "Failed to add column.");
+    }
+  };
+
   return (
     <div className="app">
       <div className="side-panel">
@@ -150,6 +173,8 @@ export default function ApplicationShell() {
         <FeatureAttributesPanel
           feature={selectedFeature}
           onClose={() => setSelectedFeature(null)}
+          onSaveAttributes={handleSaveAttributes}
+          onAddColumn={handleAddColumn}
         />
       </div>
       {toast && ( <div className="gis-toast"> {toast} </div> )}

@@ -56,10 +56,16 @@ metadata:
 - **React** for UI components (`FloatingDrawTools`, `GISMapView`, `ApplicationShell`).
 - **Browser APIs**: `URL.createObjectURL`, `<a>` download, `<input type="file">`.
 
+## Attribute Editing & Columns
+- Drawn/uploaded graphics are given an `attributes` object at creation (`GISMapEngine.buildDrawingAttributes`), seeded from `this.drawingFields` (a client-side "schema" for the drawings layer) and, for uploads, merged with the source GeoJSON feature's `properties`.
+- `drawLayer` is included in `handleFeatureClick`'s selectable layers, so clicking a drawn/uploaded graphic opens `FeatureAttributesPanel` like any other feature.
+- `GISMapEngine.updateSelectedFeatureAttributes(updates)` mutates the selected graphic's `attributes` directly (no backing service to persist to).
+- `GISMapEngine.addColumnToLayer("drawings", name, type, defaultValue)` appends to `this.drawingFields` and back-fills the new key onto every existing graphic in `drawLayer`. This is in-memory only — it is not a schema on any ArcGIS service and does not survive a reload.
+
 ## Limitations
 - **Geometry Types** – Only point, polyline, and polygon are supported via SketchViewModel.
 - **Spatial Reference** – Upload conversion forces Web Mercator (wkid 3857); other spatial references are not handled.
-- **No Attribute Preservation** – Exported GeoJSON contains empty `properties` objects; any feature attributes are lost.
+- **Attribute Persistence Is Session-Only** – `saveDrawings` (GeoJSON export) still writes empty `properties` objects; attribute values entered via the edit panel are not included in the export, and `drawingFields`/graphic attributes are lost on reload.
 - **Single Draw Layer** – All user drawings share one `GraphicsLayer`; there is no per‑session or per‑feature isolation.
 - **No Undo/Redo** – SketchViewModel’s built‑in editing tools are not exposed; users cannot delete individual graphics after creation (except by clearing the layer via the upload guard).
 - **Upload Guard** – New uploads are blocked if any graphics already exist in the draw layer, requiring the user to save first.
