@@ -8,6 +8,11 @@ Instruction:
 
 
 Snapshot of implementation process:
+
+11) Able to edit the styling of the layer:
+    <img width="1912" height="957" alt="image" src="https://github.com/user-attachments/assets/3e64df01-2c60-4509-8b61-e6b96271aeb7" />
+
+
 10) Added in edit attribute function (Not tested due to free license limitation):
 <img width="1907" height="931" alt="image" src="https://github.com/user-attachments/assets/a3533013-9299-4ba3-8a2f-ed9e4bd267e9" />
 
