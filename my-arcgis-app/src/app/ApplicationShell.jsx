@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+const TOAST_DURATION_MS = 10000;
 import GISMapView from "../components/GISMapView";
 import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
@@ -17,6 +18,13 @@ export default function ApplicationShell() {
   const viewRef = useRef(null);
   const engineRef = useRef(new GISMapEngine());
   const [toast, setToast] = useState("");
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = (message) => {
+    setToast(message);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setToast(""), TOAST_DURATION_MS);
+  };
 
   const refreshLayers = () => {
     const updated = engineRef.current.getLayers();
@@ -96,7 +104,7 @@ export default function ApplicationShell() {
   setLayers([...engineRef.current.getLayers()]);
   };
 
-  const saveGeoJSON = () => {engineRef.current.saveDrawingsAsGEOJSON(setToast);};
+  const saveGeoJSON = () => {engineRef.current.saveDrawings(showToast);};
   
   return (
     <div className="app">

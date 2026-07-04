@@ -291,7 +291,7 @@ export default class GISMapEngine {
 
   saveDrawings(msg) {
     const f = this.getDrawnFeatures();
-    if (!f.length) return msg?.("No drawings to export");
+    if (!f.length) return msg?.("Please draw something, before saving");
 
     const geojson = {
       type: "FeatureCollection",
