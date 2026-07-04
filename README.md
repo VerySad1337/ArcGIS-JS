@@ -8,6 +8,9 @@ Instruction:
 
 
 Snapshot of implementation process:
+9) Added view attribute of the feature
+<img width="1907" height="935" alt="image" src="https://github.com/user-attachments/assets/6fd7f49d-b9d9-4793-af25-f46e6f272637" />
+
 
 8) Added upload drawing function to bind to existing drawing layer.
 <img width="1910" height="927" alt="image" src="https://github.com/user-attachments/assets/425fd932-90ff-4ac8-834b-b532ef575801" />
