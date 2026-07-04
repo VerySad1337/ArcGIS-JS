@@ -46,6 +46,7 @@ metadata:
    - Adds all graphics to the draw layer (`addMany`).
    - Stores a reference in `uploadedLayers` and pans the view to the new graphics.
 5. **Layer Management** – `ApplicationShell` can toggle visibility, reorder, and query layer states via `engine.getLayers()`, `engine.toggleLayer(id)`, and `engine.reorderLayers()`.
+6. **Layer Styling** – `LayerControlPanel` exposes a color picker and border-thickness input for the Drawings layer (see `knowledge/index.md`'s Layer Styling System). `engine.setLayerStyle("drawings", { color, borderWidth })` iterates every graphic in `drawLayer` and restyles it according to its own symbol type (`simple-marker` for points, `simple-line` for polylines, `simple-fill` for polygons), since the layer holds mixed geometry types rather than one shared renderer. This only affects existing graphics — it does not change the default symbol `SketchViewModel` applies to newly drawn or uploaded features.
 
 ## Dependencies
 - **ArcGIS Core SDK** (`@arcgis/core`):

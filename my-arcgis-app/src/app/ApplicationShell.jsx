@@ -36,6 +36,7 @@ export default function ApplicationShell() {
   const handleViewReady = (view) => {
     viewRef.current = view;
     engineRef.current.setOnFeatureSelect(setSelectedFeature);
+    engineRef.current.setOnDrawingsChanged(refreshLayers);
     engineRef.current.attachToView(view);
     refreshLayers();
   };
@@ -86,6 +87,11 @@ export default function ApplicationShell() {
   const reorderLayer = (from, to) => {
     engineRef.current.reorderLayers(from, to);
     setLayers([...engineRef.current.getLayers()]);
+  };
+
+  const updateLayerStyle = (id, style) => {
+    engineRef.current.setLayerStyle(id, style);
+    refreshLayers();
   };
 
   const drawPoint = () => {
@@ -151,6 +157,7 @@ export default function ApplicationShell() {
           layers={layers}
           onToggle={toggleLayer}
           onReorder={reorderLayer}
+          onStyleChange={updateLayerStyle}
           heatIntensity={heatIntensity}
           updateIntensity={updateIntensity}
         />

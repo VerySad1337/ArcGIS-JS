@@ -53,6 +53,29 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
   - Custom renderers
   - Visibility controls (`mrtStationVisible`, `mrtLineVisible`)
 
+## Layer Styling System
+
+**Purpose:** Lets the user change a layer's color and border (outline) thickness directly from the layer panel.
+
+**Key Files:**
+- `src/components/LayerControlPanel.jsx` – Layer panel UI (previously undocumented). Renders the layer list, visibility toggle, drag-to-reorder, heat intensity slider, and — for stylable layers — a color `<input type="color">` and a border-thickness `<input type="number">` that call the `onStyleChange(id, { color, borderWidth })` prop.
+- `src/gis/GISMapEngine.js`
+  - `setLayerStyle(id, { color, borderWidth })` – clones the layer's (or graphic's) symbol, applies color/outline-width, and reassigns it, following the same clone-then-reassign pattern as `updateHeatmapIntensity`.
+  - `getLayers()` – additionally returns `color` (hex, via `colorToHex`) and `borderWidth` for stylable layers, read from the current renderer/graphic symbol.
+- `src/app/ApplicationShell.jsx` – `updateLayerStyle` wrapper that calls `engine.setLayerStyle` and refreshes layer state.
+
+**Stylable layers:** `route`, `touristAttractions`, `mrtStations`, `mrtLines`, `drawings` — each has one coherent symbol to restyle. `touristAttractions` was given an explicit `simple-marker` renderer at layer construction (previously relied on the FeatureLayer service default, which had nothing defined to restyle) so it can be styled the same way as `mrtStations`/`mrtLines`.
+
+**Deliberately excluded:**
+- `stops` – start/end markers are intentionally green/red; a shared layer color would erase that distinction.
+- `heat` – already has a dedicated intensity control; its color comes from `colorStops`, not a single swatch.
+
+**Style groups:** `getLayers()` exposes styling as a `styleGroups` array per layer rather than a single flat `color`/`borderWidth`, built by `symbolToStyleGroup(symbol, label)`. `route`, `touristAttractions`, `mrtStations`, and `mrtLines` each yield exactly one group (they own a single renderer/graphic symbol). `drawings` is the exception: since `drawLayer` holds heterogeneous graphic types (see Drawing System) with no restriction on what coexists, `getLayers()` scans `drawLayer.graphics` for every distinct symbol type present (`simple-marker`/`simple-line`/`simple-fill`) and returns one style group per type, so points/lines/polygons drawn together each get independent color/border controls instead of the whole layer being styled off one arbitrarily-chosen graphic. `setLayerStyle(id, { color, borderWidth, outlineColor, symbolType })` mirrors this: for `drawings`, passing `symbolType` scopes the update to only graphics of that geometry type. `outlineColor` (a border color distinct from fill color) only applies to `simple-fill` (polygon) groups.
+
+**UI gating:** `LayerControlPanel.jsx` hides all style controls behind a per-layer chevron toggle (collapsed by default) and renders one control block per `styleGroups` entry; polygon groups (`symbolType === "simple-fill"`) get Fill Color + Border Color + Border Width, point/line groups get Color + Border Width.
+
+**Drawings refresh:** because drawing a new graphic is asynchronous (`SketchViewModel` "create" completes after the user finishes sketching), the engine calls `onDrawingsChanged` (registered via `setOnDrawingsChanged`) when a graphic completes, which `ApplicationShell` wires to `refreshLayers()` — without this, the panel's `layers` state would keep serving the pre-drawing snapshot and never show style controls for a just-drawn graphic.
+
 ## Feature Attribute Selection System
 
 **Purpose:** Displays a feature's attributes in an on-map panel when the user clicks a feature on a selectable feature layer, and allows editing attribute values or adding a new attribute column.

@@ -166,10 +166,61 @@ input[type="range"] {
   color: #94a3b8;
 }
 
+.layer-chevron-btn {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 11px;
+}
+
 .layer-name {
   flex: 1;
   color: white;
   font-size: 13px;
+}
+
+.layer-style-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 10px 10px 10px;
+}
+
+.layer-style-group-label {
+  color: #38bdf8;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  width: 100%;
+}
+
+.layer-style-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.layer-style-field input[type="color"] {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.layer-style-field input[type="number"] {
+  width: 56px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+  font-size: 12px;
 }
 
 /* =========================
