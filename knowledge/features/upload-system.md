@@ -37,7 +37,7 @@
 
     b. Drawing‑layer guard – if any unsaved graphics already exist in drawLayer, the upload is blocked and the optional msg callback is invoked
   with:
-  ▎ “Please save current drawings before uploading new file.”
+  ▎ “Please save your current drawing and refresh the page before uploading”
     c. File parsing – reads the file as text (await file.text()) and parses it as JSON (JSON.parse).
     d. Feature conversion – for each feature in geojson.features:
         - Extracts geometry.type (Point, LineString, Polygon).
@@ -46,6 +46,7 @@
             - Point → simple-marker, red, size 8.
         - LineString → simple-line, blue, width 2.
         - Polygon → simple-fill, semi‑transparent blue [0,120,255,0.3].
+      - Seeds the Graphic's attributes via buildDrawingAttributes(feature.properties || {}), so uploaded features carry the drawings-layer client-side schema (drawingFields) merged with their source GeoJSON properties; this makes them selectable/editable in the Feature Attribute panel (see feature-attributes.md).
 
     e. Layer insertion – this.drawLayer.addMany(graphics) adds all created graphics to the persistent Drawings GraphicsLayer.
     f. Tracking – pushes an entry into this.uploadedLayers containing a generated id, the original filename, and a reference to the drawLayer.
@@ -76,9 +77,9 @@
   │ Engine        │ if (!this.currentMap || !this.currentView)                                │ Returns early (no UI feedback).                │
   │ attached      │                                                                           │                                                │
   ├───────────────┼───────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
-  │ Unsaved       │                                                                           │ Calls msg?.("Please save current drawings      │
-  │ drawings      │ if (this.drawLayer?.graphics?.length > 0)                                 │ before uploading new file."); and aborts       │
-  │               │                                                                           │ upload.                                        │
+  │ Unsaved       │                                                                           │ Calls msg?.("Please save your current drawing  │
+  │ drawings      │ if (this.drawLayer?.graphics?.length > 0)                                 │ and refresh the page before uploading"); and   │
+  │               │                                                                           │ aborts upload.                                 │
   ├───────────────┼───────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
   │               │                                                                           │ If malformed, error is caught and logged       │
   │ JSON parse    │ JSON.parse(await file.text()) (wrapped in try…catch)                      │ (console.error). No user‑visible message is    │

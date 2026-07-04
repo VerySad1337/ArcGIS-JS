@@ -58,10 +58,10 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 **Purpose:** Lets the user change a layer's color and border (outline) thickness directly from the layer panel.
 
 **Key Files:**
-- `src/components/LayerControlPanel.jsx` – Layer panel UI (previously undocumented). Renders the layer list, visibility toggle, drag-to-reorder, heat intensity slider, and — for stylable layers — a color `<input type="color">` and a border-thickness `<input type="number">` that call the `onStyleChange(id, { color, borderWidth })` prop.
+- `src/components/LayerControlPanel.jsx` – Layer panel UI. Renders the layer list, visibility toggle, drag-to-reorder, heat intensity slider, and — for stylable layers — a per-layer chevron toggle (collapsed by default) that reveals one style-control block per `styleGroups` entry: a color `<input type="color">` and a border-width `<input type="number">` always, plus a border-color `<input type="color">` when that group's `symbolType` is `simple-fill`. Each control calls `onStyleChange(id, { ...change, symbolType })`.
 - `src/gis/GISMapEngine.js`
-  - `setLayerStyle(id, { color, borderWidth })` – clones the layer's (or graphic's) symbol, applies color/outline-width, and reassigns it, following the same clone-then-reassign pattern as `updateHeatmapIntensity`.
-  - `getLayers()` – additionally returns `color` (hex, via `colorToHex`) and `borderWidth` for stylable layers, read from the current renderer/graphic symbol.
+  - `setLayerStyle(id, { color, borderWidth, outlineColor, symbolType })` – clones the target symbol(s), applies color/border-width/outline-color, and reassigns, following the same clone-then-reassign pattern as `updateHeatmapIntensity`. For the FeatureLayer-backed layers (`touristAttractions`/`mrtStations`/`mrtLines`) the mutated renderer is also written back onto a persisted engine field (`touristAttractionRenderer`/`mrtStationRenderer`/`mrtLineRenderer`) so styling survives an `attachToView` rebuild (2D/3D switch) instead of resetting to construction defaults.
+  - `getLayers()` – returns a `styleGroups` array (via `symbolToStyleGroup`) per stylable layer instead of flat `color`/`borderWidth` fields.
 - `src/app/ApplicationShell.jsx` – `updateLayerStyle` wrapper that calls `engine.setLayerStyle` and refreshes layer state.
 
 **Stylable layers:** `route`, `touristAttractions`, `mrtStations`, `mrtLines`, `drawings` — each has one coherent symbol to restyle. `touristAttractions` was given an explicit `simple-marker` renderer at layer construction (previously relied on the FeatureLayer service default, which had nothing defined to restyle) so it can be styled the same way as `mrtStations`/`mrtLines`.

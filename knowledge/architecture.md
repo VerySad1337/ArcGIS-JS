@@ -12,6 +12,8 @@ Source files consulted (all referenced by the index and available):
 - `src/services/GeocodingService.js`
 - `src/hooks/useHeatmapAnalysis.js`
 - `src/config/ArcGISConfiguration.js`
+- `src/components/LayerControlPanel.jsx`
+- `src/components/FeatureAttributesPanel.jsx`
 
 No referenced files were missing.
 
@@ -41,7 +43,7 @@ Supporting services (`RoutingService`, `GeocodingService`) are stateless modules
 - **Drawing tool integration** — a single `SketchViewModel` is created per `attachToView` call, bound to the engine's dedicated drawing layer (`drawLayer`).
 - **Upload integration** — GeoJSON upload logic reads into the same `drawLayer` used by interactive sketching, unifying manual drawings and uploaded features under one graphics layer.
 
-The engine is the only part of the system that imports ArcGIS layer and graphic classes directly (`Graphic`, `GraphicsLayer`, `FeatureLayer`, `SketchViewModel`). This makes it the architectural seam between the UI layer and the ArcGIS JS API surface.
+The engine is the only part of the system that imports ArcGIS layer and graphic classes directly (`Graphic`, `GraphicsLayer`, `FeatureLayer`, `SketchViewModel`), as well as the identity/request primitives used for hosted-layer schema edits (`IdentityManager`, `esriRequest`). This makes it the architectural seam between the UI layer and the ArcGIS JS API surface.
 
 ---
 
@@ -83,6 +85,18 @@ Lifecycle stages:
 6. **Elevation/ground alignment** — the drawings layer is explicitly configured with ground-relative elevation info as part of the attach flow, applying to both interactively drawn and uploaded features.
 
 Drawings, once created, are represented as ArcGIS `Graphic` objects tracked only inside the engine; `ApplicationShell` and UI components do not hold direct references to drawn geometry.
+
+---
+
+## Feature Attribute Selection
+
+Attribute selection and editing is another engine-owned concern that surfaces through the shell into a dedicated panel.
+
+- **Engine-owned click handling** — the engine registers a single `view.on("click")` handle (`clickHandle`) per `attachToView`, removing any prior handle first so handlers do not accumulate across 2D/3D reattachments. This keeps view-event ownership inside the engine, consistent with its role as the ArcGIS API seam.
+- **Selection via hitTest, scoped by layer** — `handleFeatureClick` runs `hitTest` restricted to the four selectable layers (`touristAttractions`, `mrtStations`, `mrtLines`, and the shared `drawings` layer); `route` and `stops` graphics are deliberately outside the selectable set. The engine resolves the hit layer back to a string id (`resolveLayerId`) and caches the selected graphic and its layer id on the engine instance.
+- **Callback-based UI notification** — rather than holding React state, the engine invokes an `onFeatureSelect` callback (registered by the shell via `setOnFeatureSelect`) with a plain descriptor (`layerId`, `layerTitle`, `objectIdField`, `attributes`, screen `x`/`y`). This mirrors the `onDrawingsChanged` callback pattern and keeps the engine free of the component tree.
+- **Two-tier edit model** — attribute edits and new columns are applied differently by layer backing: for the local `drawings` layer they mutate in-memory graphic attributes / a client-side field list (`drawingFields`); for the hosted `FeatureLayer`s they go through service operations (`applyEdits` for value edits, an `addToDefinition` REST call authenticated via `IdentityManager` for new columns). The engine centralizes this branching (`updateSelectedFeatureAttributes`, `addColumnToLayer`, `hostedLayerById`); the shell only forwards user intent and shows toasts.
+- **Presentation isolation** — `FeatureAttributesPanel` is a self-contained popup positioned from the click coordinates; it owns only local edit/draft UI state and communicates outward through `onSaveAttributes`/`onAddColumn`/`onClose` props, keeping ArcGIS concerns out of the component.
 
 ---
 
