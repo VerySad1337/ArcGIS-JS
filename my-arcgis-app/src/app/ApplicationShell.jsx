@@ -21,6 +21,7 @@ export default function ApplicationShell() {
   const [toast, setToast] = useState("");
   const toastTimeoutRef = useRef(null);
   const [selectedFeature, setSelectedFeature] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const showToast = (message) => {
     setToast(message);
@@ -140,7 +141,19 @@ export default function ApplicationShell() {
 
   return (
     <div className="app">
-      <div className="side-panel">
+      <button
+        className="sidebar-toggle"
+        aria-label={sidebarOpen ? "Close panel" : "Open panel"}
+        onClick={() => setSidebarOpen((open) => !open)}
+      >
+        {sidebarOpen ? "✕" : "☰"}
+      </button>
+
+      {sidebarOpen && (
+        <div className="side-panel-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      <div className={`side-panel${sidebarOpen ? " open" : ""}`}>
         <RoutingControlPanel
           is3D={is3D}
           setIs3D={setIs3D}

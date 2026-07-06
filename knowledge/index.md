@@ -85,6 +85,16 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 - `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes, with an edit mode (value inputs, Save/Cancel) and an "Add Column" form.
 - `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel, `handleSaveAttributes`/`handleAddColumn` wrappers around the engine's edit APIs.
 
+## Responsive Layout System
+
+**Purpose:** Keeps the app shell usable on narrow (mobile) viewports by turning the desktop sidebar into a collapsible overlay drawer and rescaling floating UI so it doesn't overflow the screen.
+
+**Key Files:**
+- `src/app/ApplicationShell.jsx` – `sidebarOpen` state, `.sidebar-toggle` button, `.side-panel-backdrop`.
+- `src/styles/gis-theme.css` – all rules scoped under `@media (max-width: 768px)` (sidebar drawer, FAB rescale, popup/toast max-width clamps).
+
+See `knowledge/features/responsive-layout.md` for details.
+
 ## 2D / 3D View System
 
 **Purpose:** Switches between 2D map and 3D scene views.
