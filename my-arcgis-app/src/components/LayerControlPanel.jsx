@@ -15,11 +15,19 @@ export default function LayerControlPanel({
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const visibleLayers = layers.filter(Boolean);
+
+  const moveLayer = (index, direction) => {
+    const target = index + direction;
+    if (target < 0 || target >= visibleLayers.length) return;
+    onReorder(index, target);
+  };
+
   return (
     <div className="panel-card">
       <div className="panel-title">LAYERS</div>
 
-      {layers.filter(Boolean).map((layer, index) => {
+      {visibleLayers.map((layer, index) => {
         const styleGroups = layer.styleGroups ?? [];
         const isStylable = styleGroups.length > 0;
         const isExpanded = isStylable && expandedIds[layer.id];
@@ -50,15 +58,36 @@ export default function LayerControlPanel({
 
             <span className="layer-name">{layer.name}</span>
 
-            {isStylable && (
+            <div className="layer-reorder-btns">
               <button
-                className="layer-chevron-btn"
-                onClick={() => toggleExpanded(layer.id)}
-                aria-label="Toggle layer styling options"
+                type="button"
+                className="layer-reorder-btn"
+                aria-label="Move layer up"
+                disabled={index === 0}
+                onClick={() => moveLayer(index, -1)}
               >
-                {isExpanded ? "▲" : "▼"}
+                ▲
               </button>
-            )}
+              <button
+                type="button"
+                className="layer-reorder-btn"
+                aria-label="Move layer down"
+                disabled={index === visibleLayers.length - 1}
+                onClick={() => moveLayer(index, 1)}
+              >
+                ▼
+              </button>
+            </div>
+
+            <button
+              className="layer-chevron-btn"
+              style={{ visibility: isStylable ? "visible" : "hidden" }}
+              disabled={!isStylable}
+              onClick={() => toggleExpanded(layer.id)}
+              aria-label="Toggle layer styling options"
+            >
+              {isExpanded ? "▲" : "▼"}
+            </button>
           </div>
 
           {isExpanded && styleGroups.map((group) => {
