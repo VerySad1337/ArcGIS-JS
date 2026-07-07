@@ -55,6 +55,27 @@ describe("GISMapEngine.attachToView", () => {
     expect(engine.currentView).toBe(view2);
   });
 
+  test("carries the outgoing view's extent over to the incoming view on reattachment", () => {
+    const engine = new GISMapEngine();
+    const view1 = makeView();
+    const sentinelExtent = { xmin: 0, ymin: 0, xmax: 1, ymax: 1 };
+    view1.extent = sentinelExtent;
+    engine.attachToView(view1);
+
+    const view2 = makeView();
+    engine.attachToView(view2);
+
+    expect(view2.goTo).toHaveBeenCalledWith(sentinelExtent);
+  });
+
+  test("skips goTo on the very first attachToView call, since there is no previous view", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    expect(view.goTo).not.toHaveBeenCalled();
+  });
+
   test("restores route/stop graphics and existing drawings across reattachment", () => {
     const engine = new GISMapEngine();
     const view1 = makeView();
