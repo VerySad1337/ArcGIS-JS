@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import RouteInput from "./RouteInput";
 
 export default function RoutingControlPanel({
@@ -29,3 +30,15 @@ export default function RoutingControlPanel({
     </>
   );
 }
+
+RoutingControlPanel.propTypes = {
+  is3D: PropTypes.bool,
+  setIs3D: PropTypes.func,
+  routeOn: PropTypes.bool,
+  toggleRoute: PropTypes.func,
+  heatOn: PropTypes.bool,
+  toggleHeatmap: PropTypes.func,
+  heatIntensity: PropTypes.number,
+  updateIntensity: PropTypes.func,
+  onRoute: PropTypes.func
+};

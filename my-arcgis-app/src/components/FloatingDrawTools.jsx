@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import PropTypes from "prop-types";
 
 // Arc that the fan sweeps across, in degrees (0 = pointing right, 90 = pointing up).
 const FAN_START_ANGLE = 100;
@@ -109,3 +110,11 @@ export default function FloatingDrawTools({
     </div>
   );
 }
+
+FloatingDrawTools.propTypes = {
+  drawPoint: PropTypes.func.isRequired,
+  drawLine: PropTypes.func.isRequired,
+  drawPolygon: PropTypes.func.isRequired,
+  saveGeoJSON: PropTypes.func.isRequired,
+  uploadGeoJSON: PropTypes.func.isRequired
+};

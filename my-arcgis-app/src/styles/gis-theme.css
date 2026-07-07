@@ -80,8 +80,13 @@ body,
     display: block;
     position: fixed;
     inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    padding: 0;
     background: rgba(0, 0, 0, 0.5);
     z-index: 150;
+    cursor: default;
   }
 
   .side-panel {
@@ -144,7 +149,7 @@ arcgis-scene {
   border-radius: 8px;
   color: white;
   cursor: pointer;
-  background: linear-gradient(90deg, #0ea5e9, #2563eb);
+  background: linear-gradient(90deg, #0369a1, #1e40af);
   transition: 0.2s;
 }
 
@@ -208,6 +213,8 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.03);
   margin-bottom: 6px;
   cursor: grab;
+  border: none;
+  min-width: 0;
 }
 
 .layer-row:hover {
@@ -531,7 +538,7 @@ input[type="range"] {
 .feature-attribute-input{
   flex:1;
   min-width:0;
-  background:rgba(255,255,255,0.06);
+  background:#1e293b;
   border:1px solid rgba(56, 189, 248, 0.3);
   border-radius:6px;
   color:#fff;
@@ -566,7 +573,7 @@ input[type="range"] {
 
 .feature-attributes-footer button{
   flex:1;
-  background:rgba(56, 189, 248, 0.15);
+  background:#0369a1;
   border:1px solid rgba(56, 189, 248, 0.3);
   border-radius:6px;
   color:#fff;
@@ -576,7 +583,7 @@ input[type="range"] {
 }
 
 .feature-attributes-footer button:hover{
-  background:rgba(56, 189, 248, 0.25);
+  background:#0284c7;
 }
 
 .feature-attributes-footer button:disabled{

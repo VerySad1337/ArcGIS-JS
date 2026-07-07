@@ -3,5 +3,8 @@
     "@hello-pangea/dnd": "^18.0.1",
     "file-saver": "^2.0.5",
     "shpjs": "^6.2.0"
+  },
+  "devDependencies": {
+    "sonarqube-scanner": "^4.3.8"
   }
 }

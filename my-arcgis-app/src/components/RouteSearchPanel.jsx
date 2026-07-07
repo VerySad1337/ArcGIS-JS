@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import RouteInput from "./RouteInput";
 
 export default function RouteSearchPanel({ onRoute }) {
@@ -8,3 +9,7 @@ export default function RouteSearchPanel({ onRoute }) {
     </div>
   );
 }
+
+RouteSearchPanel.propTypes = {
+  onRoute: PropTypes.func.isRequired
+};

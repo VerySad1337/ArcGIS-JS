@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 export default function SidePanel({ children }) {
   return (
     <div className="side-panel">
@@ -6,3 +8,7 @@ export default function SidePanel({ children }) {
     </div>
   );
 }
+
+SidePanel.propTypes = {
+  children: PropTypes.node
+};

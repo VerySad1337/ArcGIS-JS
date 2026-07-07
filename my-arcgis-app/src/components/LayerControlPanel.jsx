@@ -1,4 +1,5 @@
 import { useState } from "react";
+import PropTypes from "prop-types";
 
 export default function LayerControlPanel({
   layers,
@@ -34,10 +35,9 @@ export default function LayerControlPanel({
 
         return (
         <div key={layer.id} className="layer-row-wrapper">
-          <div
+          <fieldset
             className="layer-row"
-            draggable
-            onDragStart={() => setDragIndex(index)}
+            aria-label={`${layer.name} controls`}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
@@ -45,7 +45,6 @@ export default function LayerControlPanel({
               onReorder(dragIndex, index);
               setDragIndex(null);
             }}
-            onDragEnd={() => setDragIndex(null)}
           >
             <button
               className="layer-eye-btn"
@@ -54,7 +53,25 @@ export default function LayerControlPanel({
               {layer.visible ? "👁" : "🚫"}
             </button>
 
-            <span className="drag-handle">☰</span>
+            <button
+              type="button"
+              className="drag-handle"
+              draggable
+              aria-label={`Drag to reorder ${layer.name}, or use this button and the arrow up/down keys`}
+              onDragStart={() => setDragIndex(index)}
+              onDragEnd={() => setDragIndex(null)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  moveLayer(index, -1);
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  moveLayer(index, 1);
+                }
+              }}
+            >
+              ☰
+            </button>
 
             <span className="layer-name">{layer.name}</span>
 
@@ -88,7 +105,7 @@ export default function LayerControlPanel({
             >
               {isExpanded ? "▲" : "▼"}
             </button>
-          </div>
+          </fieldset>
 
           {isExpanded && styleGroups.map((group) => {
             const isPolygon = group.symbolType === "simple-fill";
@@ -102,7 +119,7 @@ export default function LayerControlPanel({
                 )}
 
                 <label className="layer-style-field">
-                  {isPolygon ? "Fill Color" : "Color"}
+                  <span>{isPolygon ? "Fill Color" : "Color"}</span>
                   <input
                     type="color"
                     value={group.color}
@@ -112,7 +129,7 @@ export default function LayerControlPanel({
 
                 {isPolygon && (
                   <label className="layer-style-field">
-                    Border Color
+                    <span>Border Color</span>
                     <input
                       type="color"
                       value={group.outlineColor ?? "#000000"}
@@ -122,7 +139,7 @@ export default function LayerControlPanel({
                 )}
 
                 <label className="layer-style-field">
-                  Border Width
+                  <span>Border Width</span>
                   <input
                     type="number"
                     min="0"
@@ -156,3 +173,19 @@ export default function LayerControlPanel({
     </div>
   );
 }
+
+LayerControlPanel.propTypes = {
+  layers: PropTypes.arrayOf(
+    PropTypes.shape({
+      id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+      name: PropTypes.string,
+      visible: PropTypes.bool,
+      styleGroups: PropTypes.array
+    })
+  ).isRequired,
+  onToggle: PropTypes.func.isRequired,
+  onReorder: PropTypes.func.isRequired,
+  onStyleChange: PropTypes.func.isRequired,
+  heatIntensity: PropTypes.number,
+  updateIntensity: PropTypes.func
+};

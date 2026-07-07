@@ -150,7 +150,12 @@ export default function ApplicationShell() {
       </button>
 
       {sidebarOpen && (
-        <div className="side-panel-backdrop" onClick={() => setSidebarOpen(false)} />
+        <button
+          type="button"
+          className="side-panel-backdrop"
+          aria-label="Close panel"
+          onClick={() => setSidebarOpen(false)}
+        />
       )}
 
       <div className={`side-panel${sidebarOpen ? " open" : ""}`}>
