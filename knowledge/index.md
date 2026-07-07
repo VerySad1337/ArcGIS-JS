@@ -128,3 +128,5 @@ See `knowledge/deployment.md` for details.
   - `is3D` state management
   - View mode controls (`setIs3D`)
   - Uses `WEBMAP_ID` and `WEBSCENE_ID` from `src/config/ArcGISConfiguration.js`
+
+**Camera/extent continuity:** `GISMapEngine.attachToView` captures the outgoing view's `extent` before rebuilding, and calls `view.goTo(previousExtent)` once the new view's layers are attached, so a 2D/3D switch keeps the user's current pan/zoom position instead of resetting to the portal item's default extent. See `knowledge/architecture.md`'s "2D/3D Synchronization" section for detail.
