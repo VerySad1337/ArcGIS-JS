@@ -110,7 +110,10 @@ See `knowledge/features/responsive-layout.md` for details.
 - `npm run test:watch` – watch mode.
 - `npm run test:coverage` – run with coverage (input to `npm run sonar`).
 
-**Known gap:** the Docker build (see `knowledge/deployment.md`) does not run this suite before producing an image.
+**Known gaps:**
+- The Docker build (see `knowledge/deployment.md`) does not run this suite before producing an image.
+
+**Covered:** `GISMapEngine.test.js` has two dedicated tests for the camera/extent continuity behavior in `attachToView` (see 2D/3D View System below, and `knowledge/architecture.md`'s "2D/3D Synchronization" section): `"carries the outgoing view's extent over to the incoming view on reattachment"` (asserts `view2.goTo` is called with `view1`'s `extent` on reattachment) and `"skips goTo on the very first attachToView call, since there is no previous view"` (asserts no `goTo` call when there is no prior view).
 
 ## Deployment
 
