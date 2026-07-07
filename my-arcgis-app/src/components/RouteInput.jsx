@@ -1,4 +1,5 @@
 import { useState } from "react";
+import PropTypes from "prop-types";
 
 export default function RouteInput({ onRoute }) {
   const [start, setStart] = useState("");
@@ -29,3 +30,7 @@ export default function RouteInput({ onRoute }) {
     </div>
   );
 }
+
+RouteInput.propTypes = {
+  onRoute: PropTypes.func.isRequired
+};

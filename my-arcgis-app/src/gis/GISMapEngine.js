@@ -14,87 +14,95 @@ function colorToHex(color) {
   return typeof color?.toHex === "function" ? color.toHex() : "#000000";
 }
 
+const UPLOAD_SYMBOL_TYPE_BY_GEOMETRY = {
+  Point: "simple-marker",
+  LineString: "simple-line"
+};
+
+const UPLOAD_SYMBOL_COLOR_BY_GEOMETRY = {
+  Point: "red",
+  LineString: "blue"
+};
+
 export default class GISMapEngine {
-  constructor() {
-    this.currentMap = null;
-    this.currentView = null;
+  currentMap = null;
+  currentView = null;
 
-    this.routeLayer = null;
-    this.stopLayer = null;
-    this.heatLayer = null;
+  routeLayer = null;
+  stopLayer = null;
+  heatLayer = null;
 
-    this.routeGraphic = null;
-    this.startGraphic = null;
-    this.endGraphic = null;
+  routeGraphic = null;
+  startGraphic = null;
+  endGraphic = null;
 
-    this.routeVisible = true;
-    this.heatVisible = false;
-    this.heatIntensity = 50;
+  routeVisible = true;
+  heatVisible = false;
+  heatIntensity = 50;
 
-    this.layerOrder = [
-      "route",
-      "stops",
-      "touristAttractions",
-      "heat",
-      "mrtStations",
-      "mrtLines",
-      "drawings"
-    ];
+  layerOrder = [
+    "route",
+    "stops",
+    "touristAttractions",
+    "heat",
+    "mrtStations",
+    "mrtLines",
+    "drawings"
+  ];
 
-    this.touristAttractionLayer = null;
-    this.mrtStationLayer = null;
-    this.mrtLineLayer = null;
+  touristAttractionLayer = null;
+  mrtStationLayer = null;
+  mrtLineLayer = null;
 
-    this.touristAttractionVisible = true;
-    this.mrtStationVisible = true;
-    this.mrtLineVisible = true;
+  touristAttractionVisible = true;
+  mrtStationVisible = true;
+  mrtLineVisible = true;
 
-    // FeatureLayers (touristAttractionLayer/mrtStationLayer/mrtLineLayer) are
-    // rebuilt from scratch on every attachToView call (e.g. 2D/3D switches),
-    // so their renderers can't be relied on to hold runtime style changes
-    // the way the persisted route/drawings graphics do. These fields are the
-    // actual source of truth for their styling: attachToView seeds each new
-    // layer from here, and setLayerStyle updates both the live layer's
-    // renderer and this field, so styling survives reattachment.
-    this.touristAttractionRenderer = {
-      type: "simple",
-      symbol: {
-        type: "simple-marker",
-        color: [255, 165, 0],
-        size: 8,
-        outline: { color: [255, 255, 255], width: 1 }
-      }
-    };
-    this.mrtStationRenderer = {
-      type: "simple",
-      symbol: {
-        type: "simple-fill",
-        color: [0, 120, 255, 0.5],
-        outline: { color: [0, 0, 0], width: 1.5 }
-      }
-    };
-    this.mrtLineRenderer = {
-      type: "simple",
-      symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
-    };
+  // FeatureLayers (touristAttractionLayer/mrtStationLayer/mrtLineLayer) are
+  // rebuilt from scratch on every attachToView call (e.g. 2D/3D switches),
+  // so their renderers can't be relied on to hold runtime style changes
+  // the way the persisted route/drawings graphics do. These fields are the
+  // actual source of truth for their styling: attachToView seeds each new
+  // layer from here, and setLayerStyle updates both the live layer's
+  // renderer and this field, so styling survives reattachment.
+  touristAttractionRenderer = {
+    type: "simple",
+    symbol: {
+      type: "simple-marker",
+      color: [255, 165, 0],
+      size: 8,
+      outline: { color: [255, 255, 255], width: 1 }
+    }
+  };
+  mrtStationRenderer = {
+    type: "simple",
+    symbol: {
+      type: "simple-fill",
+      color: [0, 120, 255, 0.5],
+      outline: { color: [0, 0, 0], width: 1.5 }
+    }
+  };
+  mrtLineRenderer = {
+    type: "simple",
+    symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
+  };
 
-    this.drawLayer = new GraphicsLayer({ title: "Drawings" });
-    this.sketchVM = null;
+  drawLayer = new GraphicsLayer({ title: "Drawings" });
+  sketchVM = null;
 
-    this.uploadedLayers = [];
+  uploadedLayers = [];
 
-    this.onFeatureSelect = null;
-    this.clickHandle = null;
-    this.onDrawingsChanged = null;
+  onFeatureSelect = null;
+  clickHandle = null;
+  onDrawingsChanged = null;
 
-    // Client-side "schema" for the drawings layer: drawLayer is a local
-    // GraphicsLayer with no backing service, so added columns are tracked
-    // here and applied to every graphic instead of via a REST field definition.
-    this.drawingFields = [];
+  // Client-side "schema" for the drawings layer: drawLayer is a local
+  // GraphicsLayer with no backing service, so added columns are tracked
+  // here and applied to every graphic instead of via a REST field definition.
+  drawingFields = [];
 
-    this.selectedGraphic = null;
-    this.selectedLayerId = null;
-  }
+  selectedGraphic = null;
+  selectedLayerId = null;
 
   setOnFeatureSelect(callback) {
     this.onFeatureSelect = callback;
@@ -615,20 +623,8 @@ export default class GISMapEngine {
         geometry,
         attributes: this.buildDrawingAttributes(f.properties || {}),
         symbol: {
-          type:
-            g.type === "Point"
-              ? "simple-marker"
-              : g.type === "LineString"
-              ? "simple-line"
-              : "simple-fill",
-
-          color:
-            g.type === "Point"
-              ? "red"
-              : g.type === "LineString"
-              ? "blue"
-              : [0, 120, 255, 0.3],
-
+          type: UPLOAD_SYMBOL_TYPE_BY_GEOMETRY[g.type] ?? "simple-fill",
+          color: UPLOAD_SYMBOL_COLOR_BY_GEOMETRY[g.type] ?? [0, 120, 255, 0.3],
           size: g.type === "Point" ? 8 : undefined,
           width: g.type === "LineString" ? 2 : undefined
         }

@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 export default function ViewControlPanel({ is3D, setIs3D }) {
   return (
     <div className="panel-card">
@@ -8,3 +10,8 @@ export default function ViewControlPanel({ is3D, setIs3D }) {
     </div>
   );
 }
+
+ViewControlPanel.propTypes = {
+  is3D: PropTypes.bool,
+  setIs3D: PropTypes.func
+};

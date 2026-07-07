@@ -1,4 +1,5 @@
 import { useState } from "react";
+import PropTypes from "prop-types";
 
 const POPUP_WIDTH = 280;
 const POPUP_MAX_HEIGHT = 320;
@@ -132,3 +133,17 @@ export default function FeatureAttributesPanel({ feature, onClose, onSaveAttribu
     </div>
   );
 }
+
+FeatureAttributesPanel.propTypes = {
+  feature: PropTypes.shape({
+    layerId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    layerTitle: PropTypes.string,
+    attributes: PropTypes.object,
+    objectIdField: PropTypes.string,
+    x: PropTypes.number,
+    y: PropTypes.number
+  }),
+  onClose: PropTypes.func,
+  onSaveAttributes: PropTypes.func,
+  onAddColumn: PropTypes.func
+};

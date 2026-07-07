@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 export default function HeatmapControlPanel({
   heatOn,
   toggleHeatmap,
@@ -13,9 +15,10 @@ export default function HeatmapControlPanel({
       </button>
 
       <div className="slider-section">
-        <label>Intensity</label>
+        <label htmlFor="heat-intensity-slider">Intensity</label>
 
         <input
+          id="heat-intensity-slider"
           type="range"
           min="1"
           max="100"
@@ -28,3 +31,10 @@ export default function HeatmapControlPanel({
     </div>
   );
 }
+
+HeatmapControlPanel.propTypes = {
+  heatOn: PropTypes.bool,
+  toggleHeatmap: PropTypes.func,
+  heatIntensity: PropTypes.number,
+  updateIntensity: PropTypes.func
+};
