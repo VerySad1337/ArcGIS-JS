@@ -95,6 +95,29 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 
 See `knowledge/features/responsive-layout.md` for details.
 
+## Testing System
+
+**Purpose:** Unit/component test coverage for the app, run via Jest.
+
+**Key Files:**
+- `my-arcgis-app/jest.config.cjs` – Jest configuration (jsdom environment for component tests).
+- `my-arcgis-app/babel.config.cjs` – Babel transform config so Jest can process JSX/ESM (Vite normally handles this at dev/build time; Jest needs its own transform pipeline).
+- `my-arcgis-app/src/**/*.test.{js,jsx}` – one test file per component/service/hook (`ApplicationShell`, `FeatureAttributesPanel`, `FloatingDrawTools`, `GISMapView`, `HeatmapControlPanel`, `LayerControlPanel`, `RouteInput`, `RouteSearchPanel`, `RoutingControlPanel`, `SidePanel`, `ViewControlPanel`, `GISMapEngine`, `useHeatmapAnalysis`, `useRoutingEngine`, `heatmapLayer`, `GeocodingService`, `RoutingService`).
+- `my-arcgis-app/sonar-project.properties` – SonarQube scanner config; consumes Jest's `test:coverage` output for static analysis/coverage reporting.
+
+**Scripts (`my-arcgis-app/package.json`):**
+- `npm test` – run the suite once.
+- `npm run test:watch` – watch mode.
+- `npm run test:coverage` – run with coverage (input to `npm run sonar`).
+
+**Known gap:** the Docker build (see `knowledge/deployment.md`) does not run this suite before producing an image.
+
+## Deployment
+
+**Purpose:** Docker build/run process for producing a production image.
+
+See `knowledge/deployment.md` for details.
+
 ## 2D / 3D View System
 
 **Purpose:** Switches between 2D map and 3D scene views.
