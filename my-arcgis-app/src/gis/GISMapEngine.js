@@ -121,6 +121,7 @@ export default class GISMapEngine {
 
     const map = view.map;
     const existingDrawings = this.drawLayer.graphics.toArray();
+    const previousExtent = this.currentView?.extent;
 
     this.currentMap = map;
     this.currentView = view;
@@ -215,6 +216,10 @@ export default class GISMapEngine {
 
     if (this.clickHandle) this.clickHandle.remove();
     this.clickHandle = view.on("click", (event) => this.handleFeatureClick(event));
+
+    if (previousExtent) {
+      view.goTo(previousExtent).catch(() => {});
+    }
   }
 
   handleFeatureClick(event) {
