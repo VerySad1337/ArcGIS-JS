@@ -4,6 +4,8 @@ class SketchViewModel {
     this.layer = props.layer;
     this._handlers = {};
     this.create = jest.fn();
+    this.cancel = jest.fn();
+    this.destroy = jest.fn();
   }
   on(eventName, callback) {
     this._handlers[eventName] = callback;

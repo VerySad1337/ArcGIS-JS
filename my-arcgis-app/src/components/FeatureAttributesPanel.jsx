@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
+import Icon from "./Icon";
 
 const POPUP_WIDTH = 280;
 const POPUP_MAX_HEIGHT = 320;
@@ -12,6 +13,7 @@ export default function FeatureAttributesPanel({ feature, onClose, onSaveAttribu
   const [newFieldValue, setNewFieldValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [selectionKey, setSelectionKey] = useState(null);
+  const closeButtonRef = useRef(null);
 
   // Reset edit state only when a *different* feature is selected (identified by
   // click position), not when the same feature's attributes are updated in place
@@ -24,6 +26,17 @@ export default function FeatureAttributesPanel({ feature, onClose, onSaveAttribu
     setNewFieldName("");
     setNewFieldValue("");
   }
+
+  useEffect(() => {
+    if (!currentKey) return;
+    closeButtonRef.current?.focus();
+
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [currentKey, onClose]);
 
   if (!feature) return null;
 
@@ -72,8 +85,13 @@ export default function FeatureAttributesPanel({ feature, onClose, onSaveAttribu
     <div className="feature-attributes-panel" style={style}>
       <div className="feature-attributes-header">
         <span className="panel-title">{layerTitle}</span>
-        <button className="feature-attributes-close" onClick={onClose}>
-          ✕
+        <button
+          ref={closeButtonRef}
+          className="feature-attributes-close"
+          aria-label="Close"
+          onClick={onClose}
+        >
+          <Icon name="close" size={14} />
         </button>
       </div>
 

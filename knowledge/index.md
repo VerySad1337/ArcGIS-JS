@@ -29,6 +29,10 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 - `src/services/RoutingService.js` – Performs route computation.
 - `src/services/GeocodingService.js` – Resolves address strings to coordinates.
 
+**UI:** `RoutingControlPanel.jsx` renders a "VIEW MODE" 2D/3D segmented control (`aria-pressed` on each option, replacing the previous single "Switch to 2D/3D" button), the route search form, and a "Hide/Show Route" button (`toggleRoute`, which also hides/shows the start/end stop markers via `engine.toggleRoute`). `drawStops` gives the start marker a circle style and the end marker a square style (in addition to green/red) so they're distinguishable without relying on color alone.
+
+Heatmap enable/disable and intensity live solely in `LayerControlPanel`'s "Heatmap" row (eye icon + slider, shown only while visible) — there is no separate heatmap control in `RoutingControlPanel`. `ApplicationShell.toggleLayer(id)` special-cases `id === "heat"`: instead of the generic `engine.toggleLayer(id)` (a bare visibility flip used by every other layer), it calls the same `toggleHeatmap()` that used to back a since-removed RoutingControlPanel button, which goes through `engine.enableHeatmap`/`disableHeatmap`. This matters because those methods also clone/apply the intensity renderer and keep the engine's `heatVisible` field in sync — a bare `layer.visible = x` flip (what the generic path does) would leave `heatVisible` stale and reset heatmap visibility incorrectly on the next 2D/3D reattachment (see `knowledge/architecture.md`'s 2D/3D Synchronization section).
+
 ## Heatmap System
 
 **Purpose:** Displays a heatmap layer representing point density.
@@ -64,6 +68,14 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
   - `getLayers()` – returns a `styleGroups` array (via `symbolToStyleGroup`) per stylable layer instead of flat `color`/`borderWidth` fields.
 - `src/app/ApplicationShell.jsx` – `updateLayerStyle` wrapper that calls `engine.setLayerStyle` and refreshes layer state.
 
+**Zoom to layer:** Every row in `LayerControlPanel` has a "Zoom to <layer>" button (magnifier icon) that calls `onZoomToLayer(layer.id)` → `ApplicationShell.zoomToLayer` → `engine.zoomToLayer(id, showToast)`, then `refreshLayers()` once the engine call settles. `GISMapEngine.zoomToLayer` resolves the id to the same layer instance `toggleLayer`/`reorderLayers` use.
+
+Two things a naive `view.goTo(layer)` gets wrong, both fixed here:
+- **A bare `Layer` is not a valid `goTo` target.** The ArcGIS SDK's `GoToTarget2D`/`GoToTarget3D` union (`views/types.d.ts`) only accepts `Geometry | Geometry[] | Graphic | Graphic[] | Viewpoint | number[]` — never a `Layer` instance. Passing one silently rejects. So `zoomToLayer` targets `layer.graphics.toArray()` for the `GraphicsLayer`-backed layers (`route`, `stops`, `drawings` — checked non-empty first, else an error toast "Nothing to zoom to on this layer yet.") and `layer.fullExtent` (after `load()`, since it's only populated once loading completes) for the `FeatureLayer`-backed layers (`touristAttractions`, `heat`, `mrtStations`, `mrtLines`). `uploadGeoJSON`'s pan-to-upload step had the same bug (`goTo(this.drawLayer)`) and was fixed the same way (`goTo(graphics)`).
+- **A hidden layer looks like the button did nothing.** If the target layer is currently toggled hidden, `zoomToLayer` reveals it first (setting both `layer.visible` and the matching engine visibility field, e.g. `mrtStationVisible`, so the reveal survives a 2D/3D reattachment), and `ApplicationShell`'s trailing `refreshLayers()` call updates the panel's eye icon to match.
+
+Both fixes are load-bearing together: a hidden-but-hittable layer still needs a *valid* `goTo` target once revealed, or it still wouldn't zoom. The mocked `FeatureLayer`/`SketchViewModel` test doubles under `test/mocks/arcgis-core/` were extended (`fullExtent`, `load`, `cancel`, `destroy`) to keep exercising the real method calls instead of masking them.
+
 **Stylable layers:** `route`, `touristAttractions`, `mrtStations`, `mrtLines`, `drawings` — each has one coherent symbol to restyle. `touristAttractions` was given an explicit `simple-marker` renderer at layer construction (previously relied on the FeatureLayer service default, which had nothing defined to restyle) so it can be styled the same way as `mrtStations`/`mrtLines`.
 
 **Deliberately excluded:**
@@ -82,7 +94,7 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 
 **Key Files:**
 - `src/gis/GISMapEngine.js` – `setOnFeatureSelect`, `handleFeatureClick` (view click handling, `hitTest` against Tourist Attractions/MRT Stations/MRT Lines/Drawings layers), `resolveLayerId`, `hostedLayerById`, `buildDrawingAttributes`, `updateSelectedFeatureAttributes`, `addColumnToLayer`.
-- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes, with an edit mode (value inputs, Save/Cancel) and an "Add Column" form.
+- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes, with an edit mode (value inputs, Save/Cancel) and an "Add Column" form. On selecting a feature (keyed by `layerId:x:y`, not object identity, so an in-place attribute update after Save doesn't refire this), focus moves to the panel's Close button and an `Escape` keydown listener calls `onClose`.
 - `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel, `handleSaveAttributes`/`handleAddColumn` wrappers around the engine's edit APIs.
 
 ## Responsive Layout System
@@ -90,8 +102,8 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 **Purpose:** Keeps the app shell usable on narrow (mobile) viewports by turning the desktop sidebar into a collapsible overlay drawer and rescaling floating UI so it doesn't overflow the screen.
 
 **Key Files:**
-- `src/app/ApplicationShell.jsx` – `sidebarOpen` state, `.sidebar-toggle` button, `.side-panel-backdrop`.
-- `src/styles/gis-theme.css` – all rules scoped under `@media (max-width: 768px)` (sidebar drawer, FAB rescale, popup/toast max-width clamps).
+- `src/app/ApplicationShell.jsx` – `sidebarOpen` state, `.sidebar-toggle` button, `.side-panel-backdrop`. When `sidebarOpen` becomes true, focus moves into `.side-panel` (`tabIndex={-1}` + ref) and an `Escape` keydown listener closes the drawer and returns focus to `.sidebar-toggle`.
+- `src/styles/gis-theme.css` – all rules scoped under `@media (max-width: 768px)` (sidebar drawer, FAB rescale, popup/toast max-width clamps, plus enlarged `.layer-reorder-btn`/`.layer-eye-btn`/`.layer-chevron-btn`/`.drag-handle` touch targets). A top-level `@media (prefers-reduced-motion: reduce)` block (not scoped to mobile) disables transitions/animations app-wide for users who request it.
 
 See `knowledge/features/responsive-layout.md` for details.
 
@@ -102,7 +114,8 @@ See `knowledge/features/responsive-layout.md` for details.
 **Key Files:**
 - `my-arcgis-app/jest.config.cjs` – Jest configuration (jsdom environment for component tests).
 - `my-arcgis-app/babel.config.cjs` – Babel transform config so Jest can process JSX/ESM (Vite normally handles this at dev/build time; Jest needs its own transform pipeline).
-- `my-arcgis-app/src/**/*.test.{js,jsx}` – one test file per component/service/hook (`ApplicationShell`, `FeatureAttributesPanel`, `FloatingDrawTools`, `GISMapView`, `HeatmapControlPanel`, `LayerControlPanel`, `RouteInput`, `RouteSearchPanel`, `RoutingControlPanel`, `SidePanel`, `ViewControlPanel`, `GISMapEngine`, `useHeatmapAnalysis`, `useRoutingEngine`, `heatmapLayer`, `GeocodingService`, `RoutingService`).
+- `my-arcgis-app/src/**/*.test.{js,jsx}` – one test file per component/service/hook (`ApplicationShell`, `FeatureAttributesPanel`, `FloatingDrawTools`, `GISMapView`, `LayerControlPanel`, `RouteInput`, `RoutingControlPanel`, `GISMapEngine`, `useHeatmapAnalysis`, `useRoutingEngine`, `heatmapLayer`, `GeocodingService`, `RoutingService`). `HeatmapControlPanel`, `ViewControlPanel`, `RouteSearchPanel`, and `SidePanel` were removed as dead code — they duplicated logic already hand-rolled inline in `RoutingControlPanel`/`ApplicationShell` and were never imported by any app code.
+- `my-arcgis-app/test/mocks/arcgis-core/widgets/Sketch/SketchViewModel.js` – jsdom-safe stub of the real `SketchViewModel`; now includes `cancel`/`destroy` jest mocks (in addition to `create`/`on`/`emit`) since `GISMapEngine.attachToView` calls both on the outgoing instance before creating a new one.
 - `my-arcgis-app/sonar-project.properties` – SonarQube scanner config; consumes Jest's `test:coverage` output for static analysis/coverage reporting.
 
 **Scripts (`my-arcgis-app/package.json`):**

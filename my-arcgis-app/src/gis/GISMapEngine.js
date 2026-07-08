@@ -95,6 +95,8 @@ export default class GISMapEngine {
   onFeatureSelect = null;
   clickHandle = null;
   onDrawingsChanged = null;
+  onDrawStateChange = null;
+  activeDrawType = null;
 
   // Client-side "schema" for the drawings layer: drawLayer is a local
   // GraphicsLayer with no backing service, so added columns are tracked
@@ -114,6 +116,13 @@ export default class GISMapEngine {
   // list from before the new graphic existed.
   setOnDrawingsChanged(callback) {
     this.onDrawingsChanged = callback;
+  }
+
+  // Notifies the shell when a sketch starts/stops, so the UI can show a
+  // "drawing in progress" cue instead of leaving the user unsure whether
+  // the map is armed after picking a draw tool.
+  setOnDrawStateChange(callback) {
+    this.onDrawStateChange = callback;
   }
 
   attachToView(view) {
@@ -176,15 +185,33 @@ export default class GISMapEngine {
       }
     });
 
+    // The previous SketchViewModel (if any) is still bound to the outgoing
+    // view, which is about to be torn down by React unmounting the old
+    // <arcgis-map>/<arcgis-scene> element. If it's left alive, a mid-sketch
+    // "create" session on it never reaches "complete" (so its graphic is
+    // never committed to drawLayer) and it can throw once its view is
+    // destroyed. Cancel and destroy it before wiring up the new one.
+    if (this.sketchVM) {
+      this.sketchVM.cancel();
+      this.sketchVM.destroy();
+    }
+
     this.sketchVM = new SketchViewModel({
       view,
       layer: this.drawLayer
     });
 
     this.sketchVM.on("create", (event) => {
-      if (event.state === "complete") {
+      if (event.state === "start") {
+        this.onDrawStateChange?.(this.activeDrawType);
+      } else if (event.state === "complete") {
         event.graphic.attributes = this.buildDrawingAttributes();
         this.onDrawingsChanged?.();
+        this.activeDrawType = null;
+        this.onDrawStateChange?.(null);
+      } else if (event.state === "cancel") {
+        this.activeDrawType = null;
+        this.onDrawStateChange?.(null);
       }
     });
 
@@ -296,14 +323,16 @@ export default class GISMapEngine {
   }
 
   drawStops(start, end) {
+    // Shape (circle vs. square), not just red/green color, distinguishes
+    // start from end so colorblind users aren't relying on hue alone.
     this.startGraphic = new Graphic({
       geometry: start,
-      symbol: { type: "simple-marker", color: "green", size: 10 }
+      symbol: { type: "simple-marker", style: "circle", color: "green", size: 10 }
     });
 
     this.endGraphic = new Graphic({
       geometry: end,
-      symbol: { type: "simple-marker", color: "red", size: 10 }
+      symbol: { type: "simple-marker", style: "square", color: "red", size: 10 }
     });
 
     if (!this.stopLayer) return;
@@ -438,6 +467,75 @@ export default class GISMapEngine {
     if (layer) layer.visible = !layer.visible;
   }
 
+  // Zooms/pans the current view to the extent of one layer's content, so a
+  // user can jump to e.g. just their drawings or just the MRT lines instead
+  // of hunting for them at the current zoom level.
+  async zoomToLayer(id, msg) {
+    if (!this.currentView) return;
+
+    const map = {
+      route: this.routeLayer,
+      stops: this.stopLayer,
+      touristAttractions: this.touristAttractionLayer,
+      heat: this.heatLayer,
+      mrtStations: this.mrtStationLayer,
+      mrtLines: this.mrtLineLayer,
+      drawings: this.drawLayer
+    };
+
+    const layer = map[id];
+    if (!layer) return;
+
+    // A hidden layer would otherwise make "zoom to layer" look like it did
+    // nothing: the camera moves, but there's nothing visible to show for it.
+    // Reveal it, and keep the engine's own visibility field in sync so it
+    // doesn't reset to hidden on the next 2D/3D reattachment.
+    if (layer.visible === false) {
+      layer.visible = true;
+      const visibilityField = {
+        route: "routeVisible",
+        touristAttractions: "touristAttractionVisible",
+        heat: "heatVisible",
+        mrtStations: "mrtStationVisible",
+        mrtLines: "mrtLineVisible"
+      }[id];
+      if (visibilityField) this[visibilityField] = true;
+    }
+
+    // A bare Layer instance is NOT a valid `view.goTo()` target (the ArcGIS
+    // SDK's GoToTarget2D/3D union only accepts Geometry/Graphic/Viewpoint,
+    // not Layer) — passing one silently rejects, which is why this looked
+    // like it did nothing regardless of visibility. GraphicsLayers
+    // (route/stops/drawings) have no SDK-computed extent, so goTo targets
+    // their graphics array directly (Graphic[] is a valid target);
+    // FeatureLayers (touristAttractions/heat/mrt*) use their
+    // service-provided fullExtent, available once loaded.
+    if (layer.graphics) {
+      const graphics = layer.graphics.toArray();
+      if (graphics.length === 0) {
+        msg?.("Nothing to zoom to on this layer yet.", "error");
+        return;
+      }
+      try {
+        await this.currentView.goTo(graphics);
+      } catch {
+        msg?.("Could not zoom to this layer.", "error");
+      }
+      return;
+    }
+
+    try {
+      if (typeof layer.load === "function") await layer.load();
+      if (!layer.fullExtent) {
+        msg?.("Nothing to zoom to on this layer yet.", "error");
+        return;
+      }
+      await this.currentView.goTo(layer.fullExtent);
+    } catch {
+      msg?.("Could not zoom to this layer.", "error");
+    }
+  }
+
   // Applies a fill/line color and border (outline) thickness to a layer's
   // symbology. Only layers backed by a single, well-defined symbol are
   // supported: Tourist Attractions/MRT stations/lines (FeatureLayer simple
@@ -529,9 +627,10 @@ export default class GISMapEngine {
     });
   }
 
-  startPointDraw() { this.sketchVM?.create("point"); }
-  startLineDraw()  { this.sketchVM?.create("polyline"); }
-  startPolygonDraw(){ this.sketchVM?.create("polygon"); }
+  startPointDraw() { this.activeDrawType = "point"; this.sketchVM?.create("point"); }
+  startLineDraw()  { this.activeDrawType = "polyline"; this.sketchVM?.create("polyline"); }
+  startPolygonDraw(){ this.activeDrawType = "polygon"; this.sketchVM?.create("polygon"); }
+  cancelDraw() { this.sketchVM?.cancel(); }
 
   getDrawnFeatures() {
     const f = [];
@@ -560,7 +659,7 @@ export default class GISMapEngine {
 
   saveDrawings(msg) {
     const f = this.getDrawnFeatures();
-    if (!f.length) return msg?.("Please draw something, before saving");
+    if (!f.length) return msg?.("Please draw something, before saving", "error");
 
     const geojson = {
       type: "FeatureCollection",
@@ -579,7 +678,7 @@ export default class GISMapEngine {
     a.click();
 
     URL.revokeObjectURL(url);
-    msg?.("GeoJSON downloaded");
+    msg?.("GeoJSON downloaded", "success");
   }
 
   async uploadGeoJSON(file, msg) {
@@ -588,7 +687,7 @@ export default class GISMapEngine {
   try {
     // 🚨 BLOCK UPLOAD IF UNSAVED DRAWINGS EXIST
     if (this.drawLayer?.graphics?.length > 0) {
-      msg?.("Please save your current drawing and refresh the page before uploading");
+      msg?.("Please save your current drawing and refresh the page before uploading", "error");
       return;
     }
 
@@ -645,10 +744,15 @@ export default class GISMapEngine {
       layer: this.drawLayer
     });
 
-    await this.currentView.goTo(this.drawLayer);
+    // A bare GraphicsLayer isn't a valid goTo target (see zoomToLayer); the
+    // uploaded graphics array is.
+    await this.currentView.goTo(graphics);
+
+    msg?.(`Uploaded ${graphics.length} feature(s) from "${file.name}".`, "success");
 
   } catch (err) {
     console.error("Upload failed:", err);
+    msg?.("Upload failed: the file could not be read as valid GeoJSON.", "error");
   }
 }
 

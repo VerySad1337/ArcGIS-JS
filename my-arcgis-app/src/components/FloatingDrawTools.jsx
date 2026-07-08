@@ -1,20 +1,30 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
+import Icon from "./Icon";
 
 // Arc that the fan sweeps across, in degrees (0 = pointing right, 90 = pointing up).
 const FAN_START_ANGLE = 100;
 const FAN_END_ANGLE = 190;
 const FAN_RADIUS = 110;
 
+const DRAW_STATUS_LABEL = {
+  point: "Drawing point…",
+  polyline: "Drawing line…",
+  polygon: "Drawing polygon…"
+};
+
 export default function FloatingDrawTools({
   drawPoint,
   drawLine,
   drawPolygon,
   saveGeoJSON,
-  uploadGeoJSON
+  uploadGeoJSON,
+  activeDrawType,
+  onCancelDraw
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
+  const uploadInputRef = useRef(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -41,11 +51,11 @@ export default function FloatingDrawTools({
   };
 
   const tools = [
-    { key: "point", icon: "📍", label: "Point", onClick: runAndClose(drawPoint) },
-    { key: "polygon", icon: "⬠", label: "Polygon", onClick: runAndClose(drawPolygon) },
-    { key: "line", icon: "📏", label: "Line", onClick: runAndClose(drawLine) },
-    { key: "save", icon: "💾", label: "Save GeoJSON", onClick: runAndClose(saveGeoJSON) },
-    { key: "upload", icon: "📂", label: "Upload GeoJSON", isUpload: true }
+    { key: "point", icon: "point", label: "Point", onClick: runAndClose(drawPoint) },
+    { key: "polygon", icon: "polygon", label: "Polygon", onClick: runAndClose(drawPolygon) },
+    { key: "line", icon: "line", label: "Line", onClick: runAndClose(drawLine) },
+    { key: "save", icon: "save", label: "Save GeoJSON", onClick: runAndClose(saveGeoJSON) },
+    { key: "upload", icon: "upload", label: "Upload GeoJSON", isUpload: true }
   ];
 
   const step =
@@ -69,20 +79,27 @@ export default function FloatingDrawTools({
 
         if (tool.isUpload) {
           return (
-            <label
-              key={tool.key}
-              className="fab-tool fab-upload"
-              style={style}
-              title={tool.label}
-            >
-              {tool.icon}
+            <Fragment key={tool.key}>
+              <button
+                type="button"
+                className="fab-tool fab-upload"
+                style={style}
+                title={tool.label}
+                aria-label={tool.label}
+                tabIndex={isOpen ? 0 : -1}
+                onClick={() => uploadInputRef.current?.click()}
+              >
+                <Icon name={tool.icon} />
+              </button>
               <input
+                ref={uploadInputRef}
                 hidden
                 type="file"
                 accept=".geojson,.json"
+                tabIndex={-1}
                 onChange={handleFileUpload}
               />
-            </label>
+            </Fragment>
           );
         }
 
@@ -92,12 +109,28 @@ export default function FloatingDrawTools({
             className="fab-tool"
             style={style}
             title={tool.label}
+            aria-label={tool.label}
+            tabIndex={isOpen ? 0 : -1}
             onClick={tool.onClick}
           >
-            {tool.icon}
+            <Icon name={tool.icon} />
           </button>
         );
       })}
+
+      {activeDrawType && (
+        <output className="draw-status-chip">
+          <span>{DRAW_STATUS_LABEL[activeDrawType] ?? "Drawing…"}</span>
+          <button
+            type="button"
+            aria-label="Cancel drawing"
+            title="Cancel drawing"
+            onClick={onCancelDraw}
+          >
+            <Icon name="close" size={13} />
+          </button>
+        </output>
+      )}
 
       <button
         className="fab-main"
@@ -116,5 +149,7 @@ FloatingDrawTools.propTypes = {
   drawLine: PropTypes.func.isRequired,
   drawPolygon: PropTypes.func.isRequired,
   saveGeoJSON: PropTypes.func.isRequired,
-  uploadGeoJSON: PropTypes.func.isRequired
+  uploadGeoJSON: PropTypes.func.isRequired,
+  activeDrawType: PropTypes.oneOf(["point", "polyline", "polygon"]),
+  onCancelDraw: PropTypes.func
 };

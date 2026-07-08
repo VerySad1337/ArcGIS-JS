@@ -27,4 +27,20 @@ describe("RouteInput", () => {
     await user.click(screen.getByRole("button", { name: "Calculate Route" }));
     expect(onRoute).not.toHaveBeenCalled();
   });
+
+  test("shows an inline error after an invalid submit, and clears it once both fields are valid", async () => {
+    const user = userEvent.setup();
+    render(<RouteInput onRoute={jest.fn()} />);
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Calculate Route" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Enter both a start and an end location to calculate a route."
+    );
+
+    await user.type(screen.getByPlaceholderText("Start location"), "A");
+    await user.type(screen.getByPlaceholderText("End location"), "B");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

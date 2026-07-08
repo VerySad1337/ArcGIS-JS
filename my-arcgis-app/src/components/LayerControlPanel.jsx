@@ -1,11 +1,13 @@
 import { useState } from "react";
 import PropTypes from "prop-types";
+import Icon from "./Icon";
 
 export default function LayerControlPanel({
   layers,
   onToggle,
   onReorder,
   onStyleChange,
+  onZoomToLayer,
   heatIntensity,
   updateIntensity
 }) {
@@ -28,6 +30,10 @@ export default function LayerControlPanel({
     <div className="panel-card">
       <div className="panel-title">LAYERS</div>
 
+      {visibleLayers.length === 0 && (
+        <p className="layer-empty-state">Layers will appear here once the map finishes loading.</p>
+      )}
+
       {visibleLayers.map((layer, index) => {
         const styleGroups = layer.styleGroups ?? [];
         const isStylable = styleGroups.length > 0;
@@ -48,9 +54,10 @@ export default function LayerControlPanel({
           >
             <button
               className="layer-eye-btn"
+              aria-label={layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`}
               onClick={() => onToggle(layer.id)}
             >
-              {layer.visible ? "👁" : "🚫"}
+              <Icon name={layer.visible ? "eye" : "eyeOff"} />
             </button>
 
             <button
@@ -70,10 +77,19 @@ export default function LayerControlPanel({
                 }
               }}
             >
-              ☰
+              <Icon name="drag" />
             </button>
 
             <span className="layer-name">{layer.name}</span>
+
+            <button
+              type="button"
+              className="layer-zoom-btn"
+              aria-label={`Zoom to ${layer.name}`}
+              onClick={() => onZoomToLayer(layer.id)}
+            >
+              <Icon name="zoomTo" />
+            </button>
 
             <div className="layer-reorder-btns">
               <button
@@ -83,7 +99,7 @@ export default function LayerControlPanel({
                 disabled={index === 0}
                 onClick={() => moveLayer(index, -1)}
               >
-                ▲
+                <Icon name="arrowUp" />
               </button>
               <button
                 type="button"
@@ -92,7 +108,7 @@ export default function LayerControlPanel({
                 disabled={index === visibleLayers.length - 1}
                 onClick={() => moveLayer(index, 1)}
               >
-                ▼
+                <Icon name="arrowDown" />
               </button>
             </div>
 
@@ -103,7 +119,7 @@ export default function LayerControlPanel({
               onClick={() => toggleExpanded(layer.id)}
               aria-label="Toggle layer styling options"
             >
-              {isExpanded ? "▲" : "▼"}
+              <Icon name={isExpanded ? "chevronUp" : "chevronDown"} />
             </button>
           </fieldset>
 
@@ -186,6 +202,7 @@ LayerControlPanel.propTypes = {
   onToggle: PropTypes.func.isRequired,
   onReorder: PropTypes.func.isRequired,
   onStyleChange: PropTypes.func.isRequired,
+  onZoomToLayer: PropTypes.func.isRequired,
   heatIntensity: PropTypes.number,
   updateIntensity: PropTypes.func
 };

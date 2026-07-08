@@ -20,8 +20,6 @@ jest.mock("../components/RoutingControlPanel", () => (props) => (
   <div data-testid="routing-panel">
     <button onClick={() => props.setIs3D(!props.is3D)}>toggle-3d</button>
     <button onClick={props.toggleRoute}>toggle-route</button>
-    <button onClick={props.toggleHeatmap}>toggle-heatmap</button>
-    <button onClick={() => props.updateIntensity(88)}>set-intensity</button>
     <button onClick={() => props.onRoute("Start", "End")}>submit-route</button>
   </div>
 ));
@@ -32,8 +30,11 @@ jest.mock("../components/LayerControlPanel", () => (props) => (
       <span key={l.id}>{l.name}</span>
     ))}
     <button onClick={() => props.onToggle("route")}>toggle-layer</button>
+    <button onClick={() => props.onToggle("heat")}>toggle-heat-layer</button>
+    <button onClick={() => props.updateIntensity(88)}>set-intensity</button>
     <button onClick={() => props.onReorder(0, 1)}>reorder-layer</button>
     <button onClick={() => props.onStyleChange("route", { color: "#fff" })}>style-layer</button>
+    <button onClick={() => props.onZoomToLayer("route")}>zoom-layer</button>
   </div>
 ));
 
@@ -154,16 +155,26 @@ describe("ApplicationShell", () => {
     expect(engine.toggleRoute).toHaveBeenCalledWith(false);
   });
 
-  test("toggling heatmap on calls enableHeatmap, off calls disableHeatmap", async () => {
+  test("toggling the heat layer in the layer panel calls enableHeatmap, then disableHeatmap", async () => {
     const user = userEvent.setup();
     render(<ApplicationShell />);
     const engine = getEngineInstance();
 
-    await user.click(screen.getByText("toggle-heatmap"));
+    await user.click(screen.getByText("toggle-heat-layer"));
     expect(engine.enableHeatmap).toHaveBeenCalledWith(null, 50);
 
-    await user.click(screen.getByText("toggle-heatmap"));
+    await user.click(screen.getByText("toggle-heat-layer"));
     expect(engine.disableHeatmap).toHaveBeenCalled();
+  });
+
+  test("toggling a non-heat layer forwards to engine.toggleLayer instead", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("toggle-layer"));
+    expect(engine.toggleLayer).toHaveBeenCalledWith("route");
+    expect(engine.enableHeatmap).not.toHaveBeenCalled();
   });
 
   test("updating intensity calls engine.updateHeatmapIntensity", async () => {
@@ -188,6 +199,15 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("style-layer"));
     expect(engine.setLayerStyle).toHaveBeenCalledWith("route", { color: "#fff" });
+  });
+
+  test("zooming to a layer forwards to engine.zoomToLayer with a toast callback", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("zoom-layer"));
+    expect(engine.zoomToLayer).toHaveBeenCalledWith("route", expect.any(Function));
   });
 
   test("draw tool buttons call the corresponding engine draw starters", async () => {
