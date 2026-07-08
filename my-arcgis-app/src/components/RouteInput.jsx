@@ -1,7 +1,7 @@
 import { useState } from "react";
 import PropTypes from "prop-types";
 
-export default function RouteInput({ onRoute }) {
+export default function RouteInput({ onRoute, isRouting }) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [touched, setTouched] = useState(false);
@@ -22,6 +22,7 @@ export default function RouteInput({ onRoute }) {
         value={start}
         className={startMissing ? "invalid" : undefined}
         aria-invalid={startMissing}
+        disabled={isRouting}
         onChange={(e) => setStart(e.target.value)}
       />
 
@@ -30,6 +31,7 @@ export default function RouteInput({ onRoute }) {
         value={end}
         className={endMissing ? "invalid" : undefined}
         aria-invalid={endMissing}
+        disabled={isRouting}
         onChange={(e) => setEnd(e.target.value)}
       />
 
@@ -39,13 +41,14 @@ export default function RouteInput({ onRoute }) {
         </p>
       )}
 
-      <button className="gis-button" onClick={handleSubmit}>
-        Calculate Route
+      <button className="gis-button" disabled={isRouting} onClick={handleSubmit}>
+        {isRouting ? "Calculating…" : "Calculate Route"}
       </button>
     </div>
   );
 }
 
 RouteInput.propTypes = {
-  onRoute: PropTypes.func.isRequired
+  onRoute: PropTypes.func.isRequired,
+  isRouting: PropTypes.bool
 };

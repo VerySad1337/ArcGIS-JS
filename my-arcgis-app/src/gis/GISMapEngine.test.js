@@ -20,6 +20,31 @@ function makeView(hitTestResponse) {
   };
 }
 
+describe("GISMapEngine.detachFromView", () => {
+  test("does nothing when there is no current map yet", () => {
+    const engine = new GISMapEngine();
+    expect(() => engine.detachFromView()).not.toThrow();
+  });
+
+  test("removes all layers from the outgoing map without touching engine state", () => {
+    // Regression test for drawings vanishing permanently on a 2D/3D switch:
+    // the outgoing <arcgis-map>/<arcgis-scene> destroys its own Map on
+    // unmount, which cascades to destroy() every layer still attached to
+    // it (including the persistent drawLayer). detachFromView must be
+    // called before that unmount to pull layers off the doomed map first.
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.drawLayer.add({ symbol: { type: "simple-marker" }, geometry: { type: "point", x: 0, y: 0 } });
+
+    engine.detachFromView();
+
+    expect(view.map.removeAll).toHaveBeenCalledTimes(2); // once in attachToView, once here
+    expect(engine.drawLayer.graphics).toHaveLength(1); // detaching from the map must not clear the layer itself
+    expect(engine.currentMap).toBe(view.map);
+  });
+});
+
 describe("GISMapEngine.attachToView", () => {
   test("does nothing when view is falsy", () => {
     const engine = new GISMapEngine();
@@ -98,6 +123,19 @@ describe("GISMapEngine.attachToView", () => {
       engine.endGraphic
     ]);
     expect(engine.drawLayer.graphics).toHaveLength(1);
+  });
+
+  test("drops null-geometry graphics on reattachment instead of re-adding them", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+
+    engine.drawLayer.add({ symbol: { type: "simple-marker" }, geometry: { type: "point", x: 0, y: 0 } });
+    engine.drawLayer.add({ symbol: { type: "simple-fill" }, geometry: null });
+
+    engine.attachToView(makeView());
+
+    expect(engine.drawLayer.graphics).toHaveLength(1);
+    expect(engine.drawLayer.graphics.toArray()[0].geometry).not.toBeNull();
   });
 
   test("sketchVM 'create' callback seeds attributes and fires onDrawingsChanged only when complete", () => {
@@ -771,16 +809,25 @@ describe("GISMapEngine.uploadGeoJSON", () => {
     expect(view.goTo).toHaveBeenCalledWith([pointGraphic, lineGraphic, polygonGraphic]);
   });
 
-  test("creates a graphic with null geometry for unsupported geometry types", async () => {
+  test("skips features with unsupported geometry types instead of creating a null-geometry graphic", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
+    const msg = jest.fn();
     const file = makeFile({
-      features: [{ type: "Feature", geometry: { type: "MultiPoint" }, properties: {} }]
+      features: [
+        { type: "Feature", geometry: { type: "MultiPoint" }, properties: {} },
+        { type: "Feature", geometry: { type: "Point", coordinates: [1, 2] }, properties: {} }
+      ]
     });
 
-    await engine.uploadGeoJSON(file);
+    await engine.uploadGeoJSON(file, msg);
 
-    expect(engine.drawLayer.graphics.toArray()[0].geometry).toBeNull();
+    expect(engine.drawLayer.graphics).toHaveLength(1);
+    expect(engine.drawLayer.graphics.toArray()[0].geometry).not.toBeNull();
+    expect(msg).toHaveBeenCalledWith(
+      expect.stringContaining("1 unsupported feature(s) skipped"),
+      "success"
+    );
   });
 
   test("logs and swallows errors, e.g. malformed JSON", async () => {

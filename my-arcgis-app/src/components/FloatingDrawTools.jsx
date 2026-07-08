@@ -2,11 +2,6 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
-// Arc that the fan sweeps across, in degrees (0 = pointing right, 90 = pointing up).
-const FAN_START_ANGLE = 100;
-const FAN_END_ANGLE = 190;
-const FAN_RADIUS = 110;
-
 const DRAW_STATUS_LABEL = {
   point: "Drawing point…",
   polyline: "Drawing line…",
@@ -58,65 +53,58 @@ export default function FloatingDrawTools({
     { key: "upload", icon: "upload", label: "Upload GeoJSON", isUpload: true }
   ];
 
-  const step =
-    tools.length > 1 ? (FAN_END_ANGLE - FAN_START_ANGLE) / (tools.length - 1) : 0;
-
   return (
     <div
       className={`fab-container${isOpen ? " open" : ""}`}
       ref={containerRef}
     >
-      {tools.map((tool, i) => {
-        const angleDeg = FAN_START_ANGLE + step * i;
-        const angleRad = (angleDeg * Math.PI) / 180;
-        const dx = FAN_RADIUS * Math.cos(angleRad);
-        const dy = -FAN_RADIUS * Math.sin(angleRad);
-        const style = {
-          "--dx": `${dx}px`,
-          "--dy": `${dy}px`,
-          transitionDelay: isOpen ? `${i * 30}ms` : "0ms"
-        };
+      <div className="fab-tool-stack">
+        {tools.map((tool, i) => {
+          const style = {
+            transitionDelay: isOpen ? `${(tools.length - 1 - i) * 30}ms` : "0ms"
+          };
 
-        if (tool.isUpload) {
+          if (tool.isUpload) {
+            return (
+              <Fragment key={tool.key}>
+                <button
+                  type="button"
+                  className="fab-tool fab-upload"
+                  style={style}
+                  title={tool.label}
+                  tabIndex={isOpen ? 0 : -1}
+                  onClick={() => uploadInputRef.current?.click()}
+                >
+                  <Icon name={tool.icon} />
+                  <span className="fab-tool-label">{tool.label}</span>
+                </button>
+                <input
+                  ref={uploadInputRef}
+                  hidden
+                  type="file"
+                  accept=".geojson,.json"
+                  tabIndex={-1}
+                  onChange={handleFileUpload}
+                />
+              </Fragment>
+            );
+          }
+
           return (
-            <Fragment key={tool.key}>
-              <button
-                type="button"
-                className="fab-tool fab-upload"
-                style={style}
-                title={tool.label}
-                aria-label={tool.label}
-                tabIndex={isOpen ? 0 : -1}
-                onClick={() => uploadInputRef.current?.click()}
-              >
-                <Icon name={tool.icon} />
-              </button>
-              <input
-                ref={uploadInputRef}
-                hidden
-                type="file"
-                accept=".geojson,.json"
-                tabIndex={-1}
-                onChange={handleFileUpload}
-              />
-            </Fragment>
+            <button
+              key={tool.key}
+              className="fab-tool"
+              style={style}
+              title={tool.label}
+              tabIndex={isOpen ? 0 : -1}
+              onClick={tool.onClick}
+            >
+              <Icon name={tool.icon} />
+              <span className="fab-tool-label">{tool.label}</span>
+            </button>
           );
-        }
-
-        return (
-          <button
-            key={tool.key}
-            className="fab-tool"
-            style={style}
-            title={tool.label}
-            aria-label={tool.label}
-            tabIndex={isOpen ? 0 : -1}
-            onClick={tool.onClick}
-          >
-            <Icon name={tool.icon} />
-          </button>
-        );
-      })}
+        })}
+      </div>
 
       {activeDrawType && (
         <output className="draw-status-chip">

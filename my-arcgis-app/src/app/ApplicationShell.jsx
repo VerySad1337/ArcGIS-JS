@@ -25,6 +25,8 @@ export default function ApplicationShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeDrawType, setActiveDrawType] = useState(null);
   const [hasInteracted, setHasInteracted] = useState(false);
+  const [isRouting, setIsRouting] = useState(false);
+  const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const sidebarToggleRef = useRef(null);
   const sidePanelRef = useRef(null);
 
@@ -45,7 +47,17 @@ export default function ApplicationShell() {
   const showToast = (message, type = "error") => {
     setToast({ message, type });
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
-    toastTimeoutRef.current = setTimeout(() => setToast(null), TOAST_DURATION_MS);
+    // Errors stay on screen until the user dismisses them; only transient
+    // success/info messages auto-dismiss, since a 4s auto-hide risks a user
+    // missing the reason a failed action failed.
+    if (type !== "error") {
+      toastTimeoutRef.current = setTimeout(() => setToast(null), TOAST_DURATION_MS);
+    }
+  };
+
+  const dismissToast = () => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast(null);
   };
 
   const refreshLayers = () => {
@@ -59,6 +71,13 @@ export default function ApplicationShell() {
       engineRef.current.cancelDraw();
       showToast("Switching views cancelled your in-progress drawing.", "error");
     }
+    // Detach the engine's persistent layers from the outgoing map before
+    // React unmounts the current <arcgis-map>/<arcgis-scene> element. That
+    // element destroys its own Map on unmount, which cascades to destroy
+    // any layer still attached to it (drawings, route, stops, ...) -
+    // permanently wiping their graphics before the next attachToView call
+    // ever gets a chance to save them. See GISMapEngine.detachFromView.
+    engineRef.current.detachFromView();
     setIs3D(next);
   };
 
@@ -73,18 +92,25 @@ export default function ApplicationShell() {
 
   const handleRoute = async (start, end) => {
     setHasInteracted(true);
-    const s = await geocodeAddress(start);
-    const e = await geocodeAddress(end);
-    const route = await solveRoute(
-      { type: "point", longitude: s.longitude, latitude: s.latitude },
-      { type: "point", longitude: e.longitude, latitude: e.latitude }
-    );
-    engineRef.current.drawRoute(route);
-    engineRef.current.drawStops(
-      { type: "point", longitude: s.longitude, latitude: s.latitude },
-      { type: "point", longitude: e.longitude, latitude: e.latitude }
-    );
-    refreshLayers();
+    setIsRouting(true);
+    try {
+      const s = await geocodeAddress(start);
+      const e = await geocodeAddress(end);
+      const route = await solveRoute(
+        { type: "point", longitude: s.longitude, latitude: s.latitude },
+        { type: "point", longitude: e.longitude, latitude: e.latitude }
+      );
+      engineRef.current.drawRoute(route);
+      engineRef.current.drawStops(
+        { type: "point", longitude: s.longitude, latitude: s.latitude },
+        { type: "point", longitude: e.longitude, latitude: e.latitude }
+      );
+      refreshLayers();
+    } catch (err) {
+      showToast(err.message || "Couldn't calculate a route between those locations.", "error");
+    } finally {
+      setIsRouting(false);
+    }
   };
 
   const toggleRoute = () => {
@@ -129,7 +155,12 @@ export default function ApplicationShell() {
 
   const reorderLayer = (from, to) => {
     engineRef.current.reorderLayers(from, to);
-    setLayers([...engineRef.current.getLayers()]);
+    const updated = engineRef.current.getLayers();
+    setLayers([...updated]);
+    const moved = updated.filter(Boolean)[to];
+    if (moved) {
+      setReorderAnnouncement(`${moved.name} moved to position ${to + 1} of ${updated.filter(Boolean).length}.`);
+    }
   };
 
   const updateLayerStyle = (id, style) => {
@@ -220,6 +251,7 @@ export default function ApplicationShell() {
           routeOn={routeOn}
           toggleRoute={toggleRoute}
           onRoute={handleRoute}
+          isRouting={isRouting}
         />
 
         <LayerControlPanel
@@ -232,6 +264,10 @@ export default function ApplicationShell() {
           updateIntensity={updateIntensity}
         />
       </div>
+
+      <span className="sr-only" role="status" aria-live="polite">
+        {reorderAnnouncement}
+      </span>
 
       <div className="map-container">
         <GISMapView
@@ -266,7 +302,15 @@ export default function ApplicationShell() {
           className={`gis-toast gis-toast-${toast.type}`}
           role={toast.type === "error" ? "alert" : undefined}
         >
-          {toast.message}
+          <span className="gis-toast-message">{toast.message}</span>
+          <button
+            type="button"
+            className="gis-toast-close"
+            aria-label="Dismiss"
+            onClick={dismissToast}
+          >
+            <Icon name="close" size={12} />
+          </button>
         </output>
       )}
     </div>

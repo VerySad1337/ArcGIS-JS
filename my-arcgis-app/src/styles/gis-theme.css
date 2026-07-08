@@ -1,7 +1,8 @@
 :root {
-  /* Spacing tokens for floating UI (FAB, toast, mobile toggle) so
-     new floating elements can be placed without re-guessing offsets
-     or colliding with each other or the map's built-in Esri UI. */
+  /* Spacing scale — used across floating UI (FAB, toast, mobile toggle) and
+     panel layout, so every gap/padding resolves to one of these steps
+     instead of components hard-coding their own pixel values. */
+  --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 20px;
@@ -10,6 +11,20 @@
   --floating-right-clear: 100px; /* keeps floating UI clear of the map's right-edge Esri widgets */
   --fab-bottom-gap: 60px;
   --text-muted: #a8b8ce; /* lightened from #94a3b8 for better contrast on dark panels */
+
+  /* Corner-radius scale — small controls, cards, and pill/circular shapes
+     each resolve to one of these instead of ad hoc 4/6/8/12px values. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 99px;
+
+  /* Type scale — gives panel titles real weight over body text instead of
+     everything sitting within 1-2px of each other. */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
 
   /* Single accent scale — every blue in the app resolves to one of these
      instead of each component hard-coding its own hex value. */
@@ -20,6 +35,12 @@
   --accent-fab: #0079c1;
   --accent-fab-hover: #0064a8;
   --focus-ring: #7dd3fc;
+
+  /* Neutral dark-navy scale for controls that need to read as "on" the panel
+     background (draw-tool speed-dial) without introducing an off-palette
+     grey, as the flat #2d2d2d/#444 draw tools previously did. */
+  --surface-1: #16202f;
+  --surface-2: #1e2b3f;
 }
 
 html,
@@ -31,6 +52,18 @@ body,
   overflow: hidden;
   background: linear-gradient(180deg, #0b1220, #050814);
   font-family: "Segoe UI", sans-serif;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* =========================
@@ -71,8 +104,32 @@ body,
   box-sizing: border-box;
   background: rgba(12, 18, 28, 0.95);
   border-right: 1px solid rgba(56, 189, 248, 0.2);
+  /* Browsers that don't render an auto-hiding overlay scrollbar (Firefox,
+     Chrome on Windows/Android/emulated devices) fall back to a thick,
+     unstyled grey scrollbar here, which reads as broken against the dark
+     glass theme and eats into the narrow mobile drawer's width. Theme it
+     instead of hiding it, so it stays discoverable but matches the UI. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.35) transparent;
   backdrop-filter: blur(20px);
   z-index: 100;
+}
+
+.side-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.side-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.side-panel::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.35);
+  border-radius: var(--radius-pill);
+}
+
+.side-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.55);
 }
 
 /* =========================
@@ -92,10 +149,10 @@ body,
   max-width: calc(100vw - 40px);
   background: rgba(12, 18, 28, 0.85);
   border: 1px solid rgba(56, 189, 248, 0.25);
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   padding: 9px 18px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
   white-space: nowrap;
   backdrop-filter: blur(8px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
@@ -138,7 +195,11 @@ body,
     color: #fff;
     font-size: 18px;
     cursor: pointer;
-    z-index: 200;
+    /* Must outrank .side-panel's z-index (200): the drawer is a full-height
+       fixed box that sits at the same bottom-left corner as this button, so
+       at an equal z-index the drawer (later in the DOM) swallows every tap
+       meant for the close button once the drawer is open. */
+    z-index: 250;
   }
 
   .side-panel-backdrop {
@@ -190,17 +251,17 @@ arcgis-scene {
 .panel-card {
   background: rgba(20, 28, 40, 0.85);
   border: 1px solid rgba(56, 189, 248, 0.15);
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 14px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
 .panel-title {
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--text-lg);
   font-weight: 700;
-  letter-spacing: 1px;
-  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+  margin-bottom: var(--space-3);
 }
 
 /* =========================
@@ -210,13 +271,20 @@ arcgis-scene {
 .gis-button {
   width: 100%;
   border: none;
-  padding: 10px;
-  border-radius: 8px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
   color: white;
   cursor: pointer;
   background: linear-gradient(90deg, var(--accent-strong), var(--accent-stronger));
   transition: 0.2s;
-  font-size: 14px;
+  font-size: var(--text-md);
+}
+
+.gis-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .gis-button:hover {
@@ -236,10 +304,30 @@ arcgis-scene {
 
 /* =========================
    VIEW MODE SEGMENTED CONTROL
+   A slim bar rather than a full panel-card: 2D/3D is the least-frequently
+   used control in the sidebar and doesn't need top-of-sidebar prime space.
 ========================= */
+
+.view-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-1);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.12);
+}
+
+.view-mode-bar-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 
 .view-mode-toggle {
   display: flex;
+  flex: 1;
   gap: 6px;
   border: none;
   margin: 0;
@@ -249,11 +337,11 @@ arcgis-scene {
 .view-mode-btn {
   flex: 1;
   border: 1px solid rgba(56, 189, 248, 0.25);
-  border-radius: 8px;
-  padding: 10px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
   background: transparent;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-sm);
   cursor: pointer;
   transition: 0.2s;
 }
@@ -279,8 +367,8 @@ arcgis-scene {
 }
 
 .route-panel input {
-  padding: 10px;
-  border-radius: 8px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: #0f172a;
   color: white;
@@ -294,9 +382,14 @@ arcgis-scene {
   border-color: rgba(239, 113, 103, 0.6);
 }
 
+.route-panel input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .route-panel-error {
   color: #f4a6a0;
-  font-size: 12.5px;
+  font-size: var(--text-xs);
   margin: -4px 0 0;
 }
 
@@ -329,7 +422,7 @@ input[type="range"] {
   align-items: center;
   gap: 10px;
   padding: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
   margin-bottom: 6px;
   cursor: grab;
@@ -339,6 +432,45 @@ input[type="range"] {
 
 .layer-row:hover {
   background: rgba(56, 189, 248, 0.08);
+}
+
+/* Reorder/zoom/chevron controls stay in the tab order (so keyboard users
+   always reach them) but are visually recessed until the row is hovered or
+   something inside it has focus, so a resting layer list doesn't show six
+   controls per row at once. The eye toggle and drag handle remain always
+   visible since they're the primary, most-used actions. */
+.layer-zoom-btn,
+.layer-reorder-btns,
+.layer-chevron-btn {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.layer-row:hover .layer-zoom-btn,
+.layer-row:hover .layer-reorder-btns,
+.layer-row:hover .layer-chevron-btn,
+.layer-row:focus-within .layer-zoom-btn,
+.layer-row:focus-within .layer-reorder-btns,
+.layer-row:focus-within .layer-chevron-btn {
+  opacity: 1;
+}
+
+@media (max-width: 768px) {
+  /* No hover on touch devices — keep controls visible so they aren't
+     effectively unreachable. */
+  .layer-zoom-btn,
+  .layer-reorder-btns,
+  .layer-chevron-btn {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layer-zoom-btn,
+  .layer-reorder-btns,
+  .layer-chevron-btn {
+    transition: none;
+  }
 }
 
 .layer-row button svg,
@@ -408,15 +540,26 @@ input[type="range"] {
   padding: 4px;
 }
 
+/* Transparent to layout on desktop, where there's enough width for all six
+   row controls on one line; the mobile override below turns this into a
+   real right-aligned second line instead. */
+.layer-row-secondary {
+  display: contents;
+}
+
 .layer-name {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: white;
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .layer-empty-state {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
   padding: 10px 2px 4px;
   line-height: 1.5;
 }
@@ -430,7 +573,7 @@ input[type="range"] {
 
 .layer-style-group-label {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   width: 100%;
@@ -441,27 +584,51 @@ input[type="range"] {
   align-items: center;
   gap: 6px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
+/* Native color inputs render as raw OS chrome (a bordered rect with no
+   consistent radius/inset across browsers), which breaks the panel's dark
+   theme. Wrapping the swatch in our own border/radius/shadow and clipping
+   the input's own default appearance to fill it keeps the color-picker
+   behavior while making the swatch look like a themed control. */
 .layer-style-field input[type="color"] {
   width: 28px;
   height: 24px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.2) inset;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.layer-style-field input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: calc(var(--radius-sm) - 1px);
+  overflow: hidden;
+}
+
+.layer-style-field input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: calc(var(--radius-sm) - 1px);
+}
+
+.layer-style-field input[type="color"]::-moz-color-swatch {
+  border: none;
+  border-radius: calc(var(--radius-sm) - 1px);
 }
 
 .layer-style-field input[type="number"] {
   width: 56px;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: #0f172a;
   color: white;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 /* =========================
@@ -510,57 +677,75 @@ input[type="range"] {
   background:var(--accent-fab-hover);
 }
 
-/* Fan buttons — position is driven by the --dx/--dy custom
-   properties computed per-button in FloatingDrawTools.jsx, so the
-   fan automatically fits however many tools are rendered. */
-.fab-tool{
+/* Vertical labeled speed-dial: each tool is an icon + text pill stacked
+   above the main FAB, rather than an icon-only radial fan. Icon-only fan
+   buttons required a hover/title to learn what each tool did; visible
+   labels make Point/Line/Polygon/Save/Upload identifiable at a glance. */
+.fab-tool-stack{
   position:absolute;
-  top:50%;
-  left:50%;
-  margin:-24px 0 0 -24px;
+  right:0;
+  bottom:calc(100% + var(--space-2));
+  display:flex;
+  flex-direction:column-reverse;
+  align-items:flex-end;
+  gap:var(--space-2);
+}
 
-  width:48px;
-  height:48px;
-
-  border:none;
-  border-radius:50%;
-
-  background:#2d2d2d;
-  color:#fff;
-
+.fab-tool{
   display:flex;
   align-items:center;
-  justify-content:center;
+  gap:var(--space-2);
 
-  font-size:18px;
+  border:1px solid rgba(56, 189, 248, 0.2);
+  border-radius:var(--radius-pill);
+  padding:8px 16px 8px 12px;
+
+  background:var(--surface-1);
+  color:#fff;
+
+  font-size:var(--text-sm);
+  white-space:nowrap;
   cursor:pointer;
 
   opacity:0;
   pointer-events:none;
-  transform:translate(0, 0) scale(.4);
+  transform:translateY(8px) scale(.95);
 
-  transition:transform .25s cubic-bezier(.34,1.56,.64,1), opacity .2s ease;
+  transition:transform .2s cubic-bezier(.34,1.56,.64,1), opacity .15s ease, background .2s ease;
 
   box-shadow:0 4px 10px rgba(0,0,0,.3);
 }
 
 .fab-tool:hover{
-  background:#444;
+  background:var(--surface-2);
+  border-color:rgba(56, 189, 248, 0.4);
 }
 
 .fab-container.open .fab-tool{
   opacity:1;
   pointer-events:auto;
-  transform:translate(var(--dx), var(--dy)) scale(1);
+  transform:translateY(0) scale(1);
 }
 
 .fab-tool svg{
-  width:20px;
-  height:20px;
+  width:18px;
+  height:18px;
+  flex-shrink:0;
+}
+
+.fab-tool-label{
+  color:var(--text-muted);
 }
 
 .fab-upload input{
   display:none;
+}
+
+@media (max-width: 768px) {
+  .fab-tool{
+    font-size:13px;
+    padding:8px 14px 8px 10px;
+  }
 }
 
 /* Chip shown above the FAB while a sketch is in progress, so the user
@@ -619,13 +804,6 @@ input[type="range"] {
     font-size:28px;
   }
 
-  .fab-tool{
-    width:44px;
-    height:44px;
-    margin:-22px 0 0 -22px;
-    font-size:16px;
-  }
-
   .draw-status-chip{
     right:0;
     max-width:calc(100vw - 40px);
@@ -641,6 +819,35 @@ input[type="range"] {
   .drag-handle {
     padding: 10px;
   }
+
+  /* At 44px touch targets, eye + drag + zoom + reorder + chevron alone eat
+     most of a narrow drawer's width, leaving almost nothing for the layer
+     name — it wrapped to two lines and pushed the chevron half off the row.
+     Wrap the row and drop zoom/reorder/chevron onto their own right-aligned
+     line instead, so the name gets a full line to itself (truncating with
+     an ellipsis if it's still too long) and the second line has room to
+     breathe. */
+  .layer-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .layer-row-secondary {
+    display: flex;
+    align-items: center;
+    flex: 1 0 100%;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  /* Stacked up/down buttons made sense as a compact column alongside other
+     icons on one line; on their own wrapped line they instead stretch that
+     whole line tall (2 stacked 44px buttons) while zoom/chevron stay small,
+     leaving dead space around them. Lay them out side by side instead so
+     the wrapped line has one consistent ~44px height throughout. */
+  .layer-reorder-btns {
+    flex-direction: row;
+  }
 }
 /* =========================
    TOAST NOTIFICATION
@@ -652,14 +859,18 @@ input[type="range"] {
   max-width:calc(100vw - 40px);
   box-sizing:border-box;
 
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+
   border:1px solid rgba(255,255,255,.2);
 
   color:#fff;
 
-  padding:10px 14px;
-  border-radius:6px;
+  padding:10px 10px 10px 14px;
+  border-radius:var(--radius-sm);
 
-  font-size:13px;
+  font-size:var(--text-sm);
 
   z-index:10000;
 
@@ -668,6 +879,29 @@ input[type="range"] {
   box-shadow:0 6px 18px rgba(0,0,0,.4);
 
   animation:fadeIn .2s ease;
+}
+
+.gis-toast-message{
+  flex:1;
+  padding-top:1px;
+}
+
+.gis-toast-close{
+  flex-shrink:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:20px;
+  height:20px;
+  border:none;
+  border-radius:50%;
+  background:rgba(15,23,42,.65);
+  color:#fff;
+  cursor:pointer;
+}
+
+.gis-toast-close:hover{
+  background:rgba(15,23,42,.85);
 }
 
 .gis-toast-error{
@@ -695,7 +929,7 @@ input[type="range"] {
 
   background:rgba(20, 28, 40, 0.92);
   border:1px solid rgba(56, 189, 248, 0.2);
-  border-radius:12px;
+  border-radius:var(--radius-lg);
 
   backdrop-filter:blur(12px);
   box-shadow:0 6px 18px rgba(0,0,0,.4);
@@ -748,7 +982,7 @@ input[type="range"] {
   gap:10px;
   padding:6px 0;
   border-bottom:1px solid rgba(255,255,255,0.05);
-  font-size:13px;
+  font-size:var(--text-sm);
 }
 
 .feature-attribute-key{
@@ -767,9 +1001,9 @@ input[type="range"] {
   min-width:0;
   background:#1e293b;
   border:1px solid rgba(56, 189, 248, 0.3);
-  border-radius:6px;
+  border-radius:var(--radius-sm);
   color:#fff;
-  font-size:13px;
+  font-size:var(--text-sm);
   padding:4px 6px;
   text-align:right;
 }
@@ -802,10 +1036,10 @@ input[type="range"] {
   flex:1;
   background:var(--accent-strong);
   border:1px solid rgba(56, 189, 248, 0.3);
-  border-radius:6px;
+  border-radius:var(--radius-sm);
   color:#fff;
   padding:6px 0;
-  font-size:13px;
+  font-size:var(--text-sm);
   cursor:pointer;
 }
 

@@ -82,45 +82,53 @@ export default function LayerControlPanel({
 
             <span className="layer-name">{layer.name}</span>
 
-            <button
-              type="button"
-              className="layer-zoom-btn"
-              aria-label={`Zoom to ${layer.name}`}
-              onClick={() => onZoomToLayer(layer.id)}
-            >
-              <Icon name="zoomTo" />
-            </button>
-
-            <div className="layer-reorder-btns">
+            {/* Grouped so mobile CSS can drop these three onto their own
+                right-aligned line — on a narrow drawer, keeping all six
+                row controls on one line left ~50px for the name (forcing
+                it to wrap to two lines) and squeezed the chevron off the
+                edge. display:contents on desktop keeps this invisible to
+                the flex layout there. */}
+            <div className="layer-row-secondary">
               <button
                 type="button"
-                className="layer-reorder-btn"
-                aria-label="Move layer up"
-                disabled={index === 0}
-                onClick={() => moveLayer(index, -1)}
+                className="layer-zoom-btn"
+                aria-label={`Zoom to ${layer.name}`}
+                onClick={() => onZoomToLayer(layer.id)}
               >
-                <Icon name="arrowUp" />
+                <Icon name="zoomTo" />
               </button>
+
+              <div className="layer-reorder-btns">
+                <button
+                  type="button"
+                  className="layer-reorder-btn"
+                  aria-label="Move layer up"
+                  disabled={index === 0}
+                  onClick={() => moveLayer(index, -1)}
+                >
+                  <Icon name="arrowUp" />
+                </button>
+                <button
+                  type="button"
+                  className="layer-reorder-btn"
+                  aria-label="Move layer down"
+                  disabled={index === visibleLayers.length - 1}
+                  onClick={() => moveLayer(index, 1)}
+                >
+                  <Icon name="arrowDown" />
+                </button>
+              </div>
+
               <button
-                type="button"
-                className="layer-reorder-btn"
-                aria-label="Move layer down"
-                disabled={index === visibleLayers.length - 1}
-                onClick={() => moveLayer(index, 1)}
+                className="layer-chevron-btn"
+                style={{ visibility: isStylable ? "visible" : "hidden" }}
+                disabled={!isStylable}
+                onClick={() => toggleExpanded(layer.id)}
+                aria-label="Toggle layer styling options"
               >
-                <Icon name="arrowDown" />
+                <Icon name={isExpanded ? "chevronUp" : "chevronDown"} />
               </button>
             </div>
-
-            <button
-              className="layer-chevron-btn"
-              style={{ visibility: isStylable ? "visible" : "hidden" }}
-              disabled={!isStylable}
-              onClick={() => toggleExpanded(layer.id)}
-              aria-label="Toggle layer styling options"
-            >
-              <Icon name={isExpanded ? "chevronUp" : "chevronDown"} />
-            </button>
           </fieldset>
 
           {isExpanded && styleGroups.map((group) => {

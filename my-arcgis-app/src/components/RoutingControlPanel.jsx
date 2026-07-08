@@ -6,12 +6,13 @@ export default function RoutingControlPanel({
   setIs3D,
   routeOn,
   toggleRoute,
-  onRoute
+  onRoute,
+  isRouting
 }) {
   return (
     <>
-      <div className="panel-card">
-        <div className="panel-title">VIEW MODE</div>
+      <div className="view-mode-bar">
+        <span className="view-mode-bar-label">View</span>
         <fieldset className="view-mode-toggle" aria-label="Map view mode">
           <button
             type="button"
@@ -34,7 +35,7 @@ export default function RoutingControlPanel({
 
       <div className="panel-card">
         <div className="panel-title">ROUTE SEARCH</div>
-        <RouteInput onRoute={onRoute} />
+        <RouteInput onRoute={onRoute} isRouting={isRouting} />
         <button type="button" className="gis-button gis-button-secondary" onClick={toggleRoute}>
           {routeOn ? "Hide Route" : "Show Route"}
         </button>
@@ -49,5 +50,6 @@ RoutingControlPanel.propTypes = {
   setIs3D: PropTypes.func,
   routeOn: PropTypes.bool,
   toggleRoute: PropTypes.func,
-  onRoute: PropTypes.func
+  onRoute: PropTypes.func,
+  isRouting: PropTypes.bool
 };

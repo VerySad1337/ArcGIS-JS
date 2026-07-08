@@ -85,16 +85,25 @@
   │ JSON parse    │ JSON.parse(await file.text()) (wrapped in try…catch)                      │ (console.error). No user‑visible message is    │
   │               │                                                                           │ provided (could be enhanced).                  │
   ├───────────────┼───────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
-  │ Geometry type │ Handles only "Point", "LineString", "Polygon"; any other type results in  │ No explicit warning; invalid features silently │
-  │  support      │ geometry = null → Graphic is still created but with null geometry (ArcGIS │  become empty graphics.                        │
-  │               │  will ignore it).                                                         │                                                │
+  │ Geometry type │ Handles only "Point", "LineString", "Polygon"; any other type is skipped  │ Feature is dropped; msg callback reports how   │
+  │  support      │ (feature.geometry stays unconvertible, so the graphic is never created).  │  many feature(s) were skipped, upload proceeds │
+  │               │                                                                            │  with the supported features.                  │
   ├───────────────┼───────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
   │ Spatial       │ Always forces wkid: 3857. No validation that the source GeoJSON is        │ Potential mis‑placement if source data uses a  │
   │ reference     │ already in Web Mercator; coordinates are taken as‑is.                     │ different CRS.                                 │
   └───────────────┴───────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────┘
 
   ▎ Note: The validation is intentionally lightweight to keep the upload flow simple, but it leaves a few edge cases unaddressed (malformed GeoJSON,
-  ▎ unsupported geometry types, CRS mismatches).
+  ▎ CRS mismatches).
+
+  ▎ Bug fix (2026-07-08): Unsupported geometry types used to produce a Graphic with geometry: null, added to drawLayer alongside the valid
+  ▎ features. That graphic didn't fail silently as assumed above - the ArcGIS LayerView throws while building the Drawings layer's render batch
+  ▎ whenever it encounters a null-geometry graphic, which kills rendering for every graphic on drawLayer, not just the bad one. Because drawLayer
+  ▎ is rebuilt into the map on every attachToView call (see drawing-system.md's 2D/3D section), this made ALL drawings vanish on every subsequent
+  ▎ 2D/3D switch once a single unsupported-type feature had been uploaded - a permanent, session-wide break, not a one-time glitch.
+  ▎ uploadGeoJSON now filters unsupported-type features out before creating graphics (skips them, reports the skipped count via msg), and
+  ▎ attachToView defensively drops any already-corrupted (geometry: null) graphic still sitting in drawLayer from before this fix, so an existing
+  ▎ user's session self-heals on the next reattachment instead of staying permanently broken.
 
   ---
   5. Limitations & Risks
@@ -103,7 +112,8 @@
   will place features in the wrong location.
   2. Partial validation – Only a small subset of errors is surfaced to the user (unsaved drawings). JSON parse errors are logged to console but not
   reported in‑UI, making debugging difficult for non‑technical users.
-  3. Geometry type restriction – Multi‑part geometries (e.g., MultiPolygon, MultiLineString) are not recognized and will produce empty graphics.
+  3. Geometry type restriction – Multi‑part geometries (e.g., MultiPolygon, MultiLineString) are not recognized and are skipped (reported via the
+  msg callback), not converted.
   4. Overwrite guard – The upload is blocked if any graphics exist in the draw layer, even if they are unrelated to the incoming file. Users must
   explicitly save or clear existing drawings first, which could be inconvenient.
   5. No deduplication – Uploaded graphics are appended directly; duplicate features from repeated uploads are not filtered.
