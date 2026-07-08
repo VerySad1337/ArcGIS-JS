@@ -126,6 +126,23 @@ describe("ApplicationShell", () => {
     expect(screen.getByText("Route Layer")).toBeInTheDocument();
   });
 
+  test("toggling view mode detaches the engine's layers before the view swap unmounts the outgoing view", async () => {
+    // Regression test: the outgoing <arcgis-map>/<arcgis-scene> destroys its
+    // own Map on unmount, which cascades to destroy() every layer still
+    // attached to it (including the persistent drawLayer), permanently
+    // wiping drawings. detachFromView must run synchronously before the
+    // is3D flip that triggers React to swap the view components, not
+    // reactively inside the next attachToView (which may run late, or -
+    // if the incoming view never becomes ready - not at all).
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("toggle-3d"));
+
+    expect(engine.detachFromView).toHaveBeenCalled();
+  });
+
   test("submitting a route geocodes both ends, solves the route, and draws it", async () => {
     const user = userEvent.setup();
     render(<ApplicationShell />);

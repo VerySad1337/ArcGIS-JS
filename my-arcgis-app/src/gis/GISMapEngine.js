@@ -87,7 +87,7 @@ export default class GISMapEngine {
     symbol: { type: "simple-line", color: [0, 0, 0], width: 1 }
   };
 
-  drawLayer = new GraphicsLayer({ title: "Drawings" });
+  drawLayer = new GraphicsLayer({ title: "Drawings", elevationInfo: { mode: "on-the-ground" } });
   sketchVM = null;
 
   uploadedLayers = [];
@@ -123,6 +123,23 @@ export default class GISMapEngine {
   // the map is armed after picking a draw tool.
   setOnDrawStateChange(callback) {
     this.onDrawStateChange = callback;
+  }
+
+  // Must be called BEFORE the outgoing <arcgis-map>/<arcgis-scene> custom
+  // element unmounts (i.e. before the is3D state flip that swaps one for
+  // the other), not just at the top of the next attachToView. The web
+  // component destroys its own ArcGIS Map on disconnect, and Map#destroy()
+  // cascades to destroy() every Layer still attached to it - including our
+  // persistent, engine-owned layers (drawLayer, routeLayer, etc.), which
+  // permanently wipes their graphics. map.removeAll() only detaches layers
+  // (it does not destroy them), so calling it here, synchronously, before
+  // React ever tears down the old view, gets our layers out of the blast
+  // radius in time. This matters even more when the incoming view is slow
+  // or fails to become ready (e.g. a WebGL hiccup): attachToView for the
+  // new view may never run at all, so anything relying on it to rescue the
+  // old map's layers loses them for the rest of the session.
+  detachFromView() {
+    this.currentMap?.removeAll();
   }
 
   attachToView(view) {
@@ -220,11 +237,16 @@ export default class GISMapEngine {
     if (this.endGraphic) this.stopLayer.add(this.endGraphic);
 
     if (existingDrawings.length) {
+      // Defensively drop any graphic with no geometry (e.g. left over from
+      // an unsupported-type GeoJSON upload prior to the fix in
+      // uploadGeoJSON). A null-geometry graphic in drawLayer makes the
+      // ArcGIS LayerView throw while building the Drawings layer's render
+      // batch on every reattach, which hides every drawing - not just the
+      // bad one - each time the view is rebuilt (e.g. every 2D/3D switch).
+      const validDrawings = existingDrawings.filter((g) => g.geometry !== null);
       this.drawLayer.removeAll();
-      this.drawLayer.addMany(existingDrawings);
+      this.drawLayer.addMany(validDrawings);
     }
-
-    this.drawLayer.elevationInfo = { mode: "on-the-ground" };
 
     const layerMap = {
       route: this.routeLayer,
@@ -693,49 +715,62 @@ export default class GISMapEngine {
 
     const geojson = JSON.parse(await file.text());
 
-    const graphics = geojson.features.map(f => {
-      const g = f.geometry;
+    const graphics = geojson.features
+      .map(f => {
+        const g = f.geometry;
 
-      let geometry = null;
+        let geometry = null;
 
-      if (g.type === "Point") {
-        geometry = {
-          type: "point",
-          x: g.coordinates[0],
-          y: g.coordinates[1],
-          spatialReference: { wkid: 3857 }
-        };
-      }
-
-      if (g.type === "LineString") {
-        geometry = {
-          type: "polyline",
-          paths: [g.coordinates],
-          spatialReference: { wkid: 3857 }
-        };
-      }
-
-      if (g.type === "Polygon") {
-        geometry = {
-          type: "polygon",
-          rings: g.coordinates,
-          spatialReference: { wkid: 3857 }
-        };
-      }
-
-      return new Graphic({
-        geometry,
-        attributes: this.buildDrawingAttributes(f.properties || {}),
-        symbol: {
-          type: UPLOAD_SYMBOL_TYPE_BY_GEOMETRY[g.type] ?? "simple-fill",
-          color: UPLOAD_SYMBOL_COLOR_BY_GEOMETRY[g.type] ?? [0, 120, 255, 0.3],
-          size: g.type === "Point" ? 8 : undefined,
-          width: g.type === "LineString" ? 2 : undefined
+        if (g.type === "Point") {
+          geometry = {
+            type: "point",
+            x: g.coordinates[0],
+            y: g.coordinates[1],
+            spatialReference: { wkid: 3857 }
+          };
         }
-      });
-    });
 
-    // 🔥 IMPORTANT FIX: bind to YOUR draw layer
+        if (g.type === "LineString") {
+          geometry = {
+            type: "polyline",
+            paths: [g.coordinates],
+            spatialReference: { wkid: 3857 }
+          };
+        }
+
+        if (g.type === "Polygon") {
+          geometry = {
+            type: "polygon",
+            rings: g.coordinates,
+            spatialReference: { wkid: 3857 }
+          };
+        }
+
+        // Unsupported geometry types (e.g. MultiPoint/MultiLineString/
+        // MultiPolygon) have no conversion above and would otherwise produce
+        // a Graphic with geometry: null. Adding that to drawLayer doesn't
+        // fail quietly - the ArcGIS LayerView throws while building the
+        // Drawings layerview's render batch, which kills rendering for every
+        // graphic on the layer (not just this one), and the failure recurs
+        // on every future attachToView (2D/3D switch) since the bad graphic
+        // stays in drawLayer. Skip it instead of creating it.
+        if (!geometry) return null;
+
+        return new Graphic({
+          geometry,
+          attributes: this.buildDrawingAttributes(f.properties || {}),
+          symbol: {
+            type: UPLOAD_SYMBOL_TYPE_BY_GEOMETRY[g.type] ?? "simple-fill",
+            color: UPLOAD_SYMBOL_COLOR_BY_GEOMETRY[g.type] ?? [0, 120, 255, 0.3],
+            size: g.type === "Point" ? 8 : undefined,
+            width: g.type === "LineString" ? 2 : undefined
+          }
+        });
+      })
+      .filter(Boolean);
+
+    const skippedCount = geojson.features.length - graphics.length;
+
     this.drawLayer.addMany(graphics);
 
     this.uploadedLayers.push({
@@ -748,7 +783,10 @@ export default class GISMapEngine {
     // uploaded graphics array is.
     await this.currentView.goTo(graphics);
 
-    msg?.(`Uploaded ${graphics.length} feature(s) from "${file.name}".`, "success");
+    const skippedNote = skippedCount > 0
+      ? ` (${skippedCount} unsupported feature(s) skipped)`
+      : "";
+    msg?.(`Uploaded ${graphics.length} feature(s) from "${file.name}".${skippedNote}`, "success");
 
   } catch (err) {
     console.error("Upload failed:", err);
