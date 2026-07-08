@@ -82,4 +82,29 @@ describe("FloatingDrawTools", () => {
     await user.click(document.body);
     expect(container.querySelector(".fab-container")).not.toHaveClass("open");
   });
+
+  test("shows a status chip naming the active draw type, with no chip when idle", () => {
+    const { rerender } = setup({ activeDrawType: null });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    rerender(<FloatingDrawTools {...{
+      drawPoint: jest.fn(),
+      drawLine: jest.fn(),
+      drawPolygon: jest.fn(),
+      saveGeoJSON: jest.fn(),
+      uploadGeoJSON: jest.fn(),
+      activeDrawType: "polygon"
+    }} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Drawing polygon…");
+  });
+
+  test("clicking Cancel while drawing calls onCancelDraw", async () => {
+    const user = userEvent.setup();
+    const onCancelDraw = jest.fn();
+    setup({ activeDrawType: "point", onCancelDraw });
+
+    await user.click(screen.getByRole("button", { name: "Cancel drawing" }));
+    expect(onCancelDraw).toHaveBeenCalled();
+  });
 });

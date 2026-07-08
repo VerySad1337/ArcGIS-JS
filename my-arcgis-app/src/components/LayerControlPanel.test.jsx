@@ -19,6 +19,7 @@ function setup(overrides = {}) {
     onToggle: jest.fn(),
     onReorder: jest.fn(),
     onStyleChange: jest.fn(),
+    onZoomToLayer: jest.fn(),
     heatIntensity: 40,
     updateIntensity: jest.fn(),
     ...overrides
@@ -45,7 +46,7 @@ describe("LayerControlPanel", () => {
 
   test("shows an open eye icon when visible and a blocked icon when hidden", () => {
     setup({ layers: [{ ...baseLayers[0], visible: false }] });
-    expect(screen.getByText("🚫")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Show ${baseLayers[0].name}` })).toBeInTheDocument();
   });
 
   test("up/down reorder buttons call onReorder and are disabled at the boundaries", async () => {
@@ -222,5 +223,13 @@ describe("LayerControlPanel", () => {
     const slider = document.querySelector(".heat-slider-container input[type='range']");
     fireEvent.change(slider, { target: { value: "77" } });
     expect(props.updateIntensity).toHaveBeenCalledWith(77);
+  });
+
+  test("clicking a layer's zoom button calls onZoomToLayer with that layer's id", async () => {
+    const user = userEvent.setup();
+    const { props } = setup();
+
+    await user.click(screen.getByRole("button", { name: "Zoom to Tourist Attractions" }));
+    expect(props.onZoomToLayer).toHaveBeenCalledWith("touristAttractions");
   });
 });

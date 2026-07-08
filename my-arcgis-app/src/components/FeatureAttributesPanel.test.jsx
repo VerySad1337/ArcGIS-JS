@@ -30,7 +30,7 @@ describe("FeatureAttributesPanel", () => {
     const onClose = jest.fn();
     render(<FeatureAttributesPanel feature={baseFeature} onClose={onClose} />);
 
-    await user.click(screen.getByText("✕"));
+    await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
   });
 

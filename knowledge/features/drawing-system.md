@@ -64,6 +64,9 @@ metadata:
 - `GISMapEngine.updateSelectedFeatureAttributes(updates)` mutates the selected graphic's `attributes` directly (no backing service to persist to).
 - `GISMapEngine.addColumnToLayer("drawings", name, type, defaultValue)` appends to `this.drawingFields` and back-fills the new key onto every existing graphic in `drawLayer`. This is in-memory only — it is not a schema on any ArcGIS service and does not survive a reload.
 
+## SketchViewModel Lifecycle Across 2D/3D Switches
+`attachToView` destroys the previous `SketchViewModel` (`cancel()` then `destroy()`) before constructing the new one bound to the incoming view. Previously the old instance was simply overwritten, leaving it alive and bound to a view that React was about to unmount; a sketch left mid-creation (line/polygon, before the final vertex) was never committed to `drawLayer`, since SketchViewModel only adds its graphic on the "complete" state. `ApplicationShell.toggleViewMode` also calls `engine.cancelDraw()` (surfacing a toast) before switching `is3D` if `activeDrawType` is set, so an in-progress sketch is deliberately cancelled instead of being silently lost mid-switch. Completed drawings (already added to `drawLayer`) are unaffected by this and continue to persist via the existing capture/re-add logic in `attachToView`.
+
 ## Limitations
 - **Geometry Types** – Only point, polyline, and polygon are supported via SketchViewModel.
 - **Spatial Reference** – Upload conversion forces Web Mercator (wkid 3857); other spatial references are not handled.

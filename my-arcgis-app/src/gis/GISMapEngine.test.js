@@ -413,6 +413,92 @@ describe("GISMapEngine.toggleLayer", () => {
   });
 });
 
+describe("GISMapEngine.zoomToLayer", () => {
+  test("is a no-op when there is no current view", async () => {
+    const engine = new GISMapEngine();
+    await expect(engine.zoomToLayer("route", jest.fn())).resolves.toBeUndefined();
+  });
+
+  test("is a no-op for an unknown layer id", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    await engine.zoomToLayer("unknown", jest.fn());
+    expect(view.goTo).not.toHaveBeenCalled();
+  });
+
+  test("reports nothing-to-zoom-to for an empty GraphicsLayer instead of calling goTo", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    const msg = jest.fn();
+
+    await engine.zoomToLayer("drawings", msg);
+
+    expect(view.goTo).not.toHaveBeenCalled();
+    expect(msg).toHaveBeenCalledWith("Nothing to zoom to on this layer yet.", "error");
+  });
+
+  test("calls view.goTo with the graphics array (not the bare layer) once it has graphics", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    const graphic = { symbol: { type: "simple-marker" } };
+    engine.drawLayer.add(graphic);
+
+    await engine.zoomToLayer("drawings", jest.fn());
+    expect(view.goTo).toHaveBeenCalledWith([graphic]);
+  });
+
+  test("reveals a hidden layer (and updates its visibility field) instead of zooming to nothing visible", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.toggleLayer("mrtStations");
+    expect(engine.mrtStationLayer.visible).toBe(false);
+
+    await engine.zoomToLayer("mrtStations", jest.fn());
+
+    expect(engine.mrtStationLayer.visible).toBe(true);
+    expect(engine.mrtStationVisible).toBe(true);
+    expect(view.goTo).toHaveBeenCalledWith(engine.mrtStationLayer.fullExtent);
+  });
+
+  test("loads the FeatureLayer and goes to its fullExtent (not the bare layer)", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    await engine.zoomToLayer("touristAttractions", jest.fn());
+    expect(engine.touristAttractionLayer.load).toHaveBeenCalled();
+    expect(view.goTo).toHaveBeenCalledWith(engine.touristAttractionLayer.fullExtent);
+  });
+
+  test("reports nothing-to-zoom-to when a loaded FeatureLayer has no fullExtent", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.touristAttractionLayer.fullExtent = null;
+    const msg = jest.fn();
+
+    await engine.zoomToLayer("touristAttractions", msg);
+    expect(view.goTo).not.toHaveBeenCalled();
+    expect(msg).toHaveBeenCalledWith("Nothing to zoom to on this layer yet.", "error");
+  });
+
+  test("reports a failure toast when goTo rejects", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    view.goTo = jest.fn().mockRejectedValue(new Error("no extent"));
+    engine.attachToView(view);
+    const msg = jest.fn();
+
+    await engine.zoomToLayer("touristAttractions", msg);
+    expect(msg).toHaveBeenCalledWith("Could not zoom to this layer.", "error");
+  });
+});
+
 describe("GISMapEngine.setLayerStyle", () => {
   let engine;
   beforeEach(() => {
@@ -601,7 +687,7 @@ describe("GISMapEngine.saveDrawings", () => {
     const engine = new GISMapEngine();
     const msg = jest.fn();
     engine.saveDrawings(msg);
-    expect(msg).toHaveBeenCalledWith("Please draw something, before saving");
+    expect(msg).toHaveBeenCalledWith("Please draw something, before saving", "error");
     expect(globalThis.URL.createObjectURL).not.toHaveBeenCalled();
   });
 
@@ -621,7 +707,7 @@ describe("GISMapEngine.saveDrawings", () => {
     expect(anchor.download).toBe("drawings.geojson");
     expect(clickSpy).toHaveBeenCalled();
     expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
-    expect(msg).toHaveBeenCalledWith("GeoJSON downloaded");
+    expect(msg).toHaveBeenCalledWith("GeoJSON downloaded", "success");
 
     createElementSpy.mockRestore();
   });
@@ -652,7 +738,8 @@ describe("GISMapEngine.uploadGeoJSON", () => {
     await engine.uploadGeoJSON(makeFile({ features: [] }), msg);
 
     expect(msg).toHaveBeenCalledWith(
-      "Please save your current drawing and refresh the page before uploading"
+      "Please save your current drawing and refresh the page before uploading",
+      "error"
     );
     expect(engine.drawLayer.graphics).toHaveLength(1);
   });
@@ -681,7 +768,7 @@ describe("GISMapEngine.uploadGeoJSON", () => {
     expect(polygonGraphic.symbol.type).toBe("simple-fill");
     expect(engine.uploadedLayers).toHaveLength(1);
     expect(engine.uploadedLayers[0].name).toBe("test.geojson");
-    expect(view.goTo).toHaveBeenCalledWith(engine.drawLayer);
+    expect(view.goTo).toHaveBeenCalledWith([pointGraphic, lineGraphic, polygonGraphic]);
   });
 
   test("creates a graphic with null geometry for unsupported geometry types", async () => {

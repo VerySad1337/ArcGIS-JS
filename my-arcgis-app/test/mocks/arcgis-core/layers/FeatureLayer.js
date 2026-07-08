@@ -12,6 +12,8 @@ class FeatureLayer {
     this.renderer = makeRenderer(props.renderer);
     this.applyEdits = jest.fn().mockResolvedValue({ updateFeatureResults: [{}] });
     this.refresh = jest.fn().mockResolvedValue(undefined);
+    this.fullExtent = props.fullExtent ?? { xmin: 0, ymin: 0, xmax: 1, ymax: 1 };
+    this.load = jest.fn().mockResolvedValue(undefined);
   }
 }
 

@@ -6,27 +6,40 @@ export default function RoutingControlPanel({
   setIs3D,
   routeOn,
   toggleRoute,
-  heatOn,
-  toggleHeatmap,
-  heatIntensity,
-  updateIntensity,
   onRoute
 }) {
   return (
     <>
       <div className="panel-card">
         <div className="panel-title">VIEW MODE</div>
-        <button
-          className="gis-button"
-          onClick={() => setIs3D(!is3D)}
-        >
-          {is3D ? "Switch to 2D" : "Switch to 3D"}
-        </button>
+        <fieldset className="view-mode-toggle" aria-label="Map view mode">
+          <button
+            type="button"
+            className="view-mode-btn"
+            aria-pressed={!is3D}
+            onClick={() => setIs3D(false)}
+          >
+            2D
+          </button>
+          <button
+            type="button"
+            className="view-mode-btn"
+            aria-pressed={is3D}
+            onClick={() => setIs3D(true)}
+          >
+            3D
+          </button>
+        </fieldset>
       </div>
+
       <div className="panel-card">
         <div className="panel-title">ROUTE SEARCH</div>
         <RouteInput onRoute={onRoute} />
+        <button type="button" className="gis-button gis-button-secondary" onClick={toggleRoute}>
+          {routeOn ? "Hide Route" : "Show Route"}
+        </button>
       </div>
+
     </>
   );
 }
@@ -36,9 +49,5 @@ RoutingControlPanel.propTypes = {
   setIs3D: PropTypes.func,
   routeOn: PropTypes.bool,
   toggleRoute: PropTypes.func,
-  heatOn: PropTypes.bool,
-  toggleHeatmap: PropTypes.func,
-  heatIntensity: PropTypes.number,
-  updateIntensity: PropTypes.func,
   onRoute: PropTypes.func
 };

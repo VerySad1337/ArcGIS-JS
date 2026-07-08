@@ -1,3 +1,27 @@
+:root {
+  /* Spacing tokens for floating UI (FAB, toast, mobile toggle) so
+     new floating elements can be placed without re-guessing offsets
+     or colliding with each other or the map's built-in Esri UI. */
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 20px;
+  --space-5: 24px;
+  --floating-edge-gap: var(--space-4);
+  --floating-right-clear: 100px; /* keeps floating UI clear of the map's right-edge Esri widgets */
+  --fab-bottom-gap: 60px;
+  --text-muted: #a8b8ce; /* lightened from #94a3b8 for better contrast on dark panels */
+
+  /* Single accent scale — every blue in the app resolves to one of these
+     instead of each component hard-coding its own hex value. */
+  --accent: #38bdf8;
+  --accent-strong: #0369a1;
+  --accent-stronger: #1e40af;
+  --accent-hover: #0284c7;
+  --accent-fab: #0079c1;
+  --accent-fab-hover: #0064a8;
+  --focus-ring: #7dd3fc;
+}
+
 html,
 body,
 #root {
@@ -7,6 +31,21 @@ body,
   overflow: hidden;
   background: linear-gradient(180deg, #0b1220, #050814);
   font-family: "Segoe UI", sans-serif;
+}
+
+/* =========================
+   FOCUS VISIBILITY
+========================= */
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.fab-main:focus-visible,
+.fab-tool:focus-visible {
+  outline-offset: 4px;
 }
 
 /* =========================
@@ -45,6 +84,32 @@ body,
   position: relative;
 }
 
+.map-first-run-hint {
+  position: absolute;
+  left: 50%;
+  top: var(--space-5);
+  transform: translateX(-50%);
+  max-width: calc(100vw - 40px);
+  background: rgba(12, 18, 28, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 99px;
+  padding: 9px 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  z-index: 50;
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .map-first-run-hint {
+    white-space: normal;
+    text-align: center;
+  }
+}
+
 /* =========================
    SIDEBAR TOGGLE (mobile)
 ========================= */
@@ -63,10 +128,10 @@ body,
     align-items: center;
     justify-content: center;
     position: fixed;
-    bottom: 24px;
-    left: 20px;
-    width: 40px;
-    height: 40px;
+    bottom: var(--space-5);
+    left: var(--space-4);
+    width: 44px;
+    height: 44px;
     border: 1px solid rgba(56, 189, 248, 0.3);
     border-radius: 8px;
     background: rgba(12, 18, 28, 0.9);
@@ -131,8 +196,8 @@ arcgis-scene {
 }
 
 .panel-title {
-  color: #38bdf8;
-  font-size: 12px;
+  color: var(--accent);
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 1px;
   margin-bottom: 12px;
@@ -149,13 +214,58 @@ arcgis-scene {
   border-radius: 8px;
   color: white;
   cursor: pointer;
-  background: linear-gradient(90deg, #0369a1, #1e40af);
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent-stronger));
   transition: 0.2s;
+  font-size: 14px;
 }
 
 .gis-button:hover {
   transform: translateY(-1px);
   box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+}
+
+.gis-button-secondary {
+  margin-top: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.gis-button-secondary:hover {
+  background: rgba(56, 189, 248, 0.12);
+}
+
+/* =========================
+   VIEW MODE SEGMENTED CONTROL
+========================= */
+
+.view-mode-toggle {
+  display: flex;
+  gap: 6px;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.view-mode-btn {
+  flex: 1;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 8px;
+  padding: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.view-mode-btn:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.view-mode-btn[aria-pressed="true"] {
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent-stronger));
+  border-color: transparent;
+  color: white;
 }
 
 /* =========================
@@ -177,7 +287,17 @@ arcgis-scene {
 }
 
 .route-panel input::placeholder {
-  color: #94a3b8;
+  color: var(--text-muted);
+}
+
+.route-panel input.invalid {
+  border-color: rgba(239, 113, 103, 0.6);
+}
+
+.route-panel-error {
+  color: #f4a6a0;
+  font-size: 12.5px;
+  margin: -4px 0 0;
 }
 
 /* =========================
@@ -197,7 +317,7 @@ arcgis-scene {
 
 input[type="range"] {
   width: 100%;
-  accent-color: #38bdf8;
+  accent-color: var(--accent);
 }
 
 /* =========================
@@ -221,16 +341,33 @@ input[type="range"] {
   background: rgba(56, 189, 248, 0.08);
 }
 
-.layer-eye-btn {
+.layer-row button svg,
+.layer-chevron-btn svg,
+.drag-handle svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.layer-eye-btn,
+.layer-zoom-btn {
   border: none;
   background: transparent;
   color: white;
   cursor: pointer;
-  font-size: 14px;
+  padding: 4px;
+}
+
+.layer-zoom-btn:hover {
+  color: var(--accent);
 }
 
 .drag-handle {
-  color: #94a3b8;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 4px;
+  cursor: grab;
 }
 
 .layer-reorder-btns {
@@ -242,15 +379,20 @@ input[type="range"] {
 .layer-reorder-btn {
   border: none;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 10px;
   line-height: 1;
-  padding: 2px 4px;
+  padding: 3px 4px;
+}
+
+.layer-reorder-btn svg {
+  width: 11px;
+  height: 11px;
+  display: block;
 }
 
 .layer-reorder-btn:hover:not(:disabled) {
-  color: #38bdf8;
+  color: var(--accent);
 }
 
 .layer-reorder-btn:disabled {
@@ -261,15 +403,22 @@ input[type="range"] {
 .layer-chevron-btn {
   border: none;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 11px;
+  padding: 4px;
 }
 
 .layer-name {
   flex: 1;
   color: white;
+  font-size: 14px;
+}
+
+.layer-empty-state {
+  color: var(--text-muted);
   font-size: 13px;
+  padding: 10px 2px 4px;
+  line-height: 1.5;
 }
 
 .layer-style-controls {
@@ -280,7 +429,7 @@ input[type="range"] {
 }
 
 .layer-style-group-label {
-  color: #38bdf8;
+  color: var(--accent);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -291,8 +440,8 @@ input[type="range"] {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #94a3b8;
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .layer-style-field input[type="color"] {
@@ -312,7 +461,7 @@ input[type="range"] {
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: #0f172a;
   color: white;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* =========================
@@ -321,8 +470,8 @@ input[type="range"] {
 
 .fab-container{
   position:absolute;
-  right:100px;
-  bottom:60px;
+  right:var(--floating-right-clear);
+  bottom:var(--fab-bottom-gap);
   width:60px;
   height:60px;
   z-index:9999;
@@ -340,7 +489,7 @@ input[type="range"] {
   border:none;
   border-radius:50%;
 
-  background:#0079c1;
+  background:var(--accent-fab);
   color:#fff;
 
   font-size:32px;
@@ -352,13 +501,13 @@ input[type="range"] {
 }
 
 .fab-main:hover{
-  background:#0064a8;
+  background:var(--accent-fab-hover);
 }
 
 /* Rotate + into an x while the fan is open */
 .fab-container.open .fab-main{
   transform:rotate(45deg);
-  background:#0064a8;
+  background:var(--accent-fab-hover);
 }
 
 /* Fan buttons — position is driven by the --dx/--dy custom
@@ -405,14 +554,61 @@ input[type="range"] {
   transform:translate(var(--dx), var(--dy)) scale(1);
 }
 
+.fab-tool svg{
+  width:20px;
+  height:20px;
+}
+
 .fab-upload input{
   display:none;
 }
 
+/* Chip shown above the FAB while a sketch is in progress, so the user
+   isn't left guessing whether the map is in draw mode. */
+.draw-status-chip{
+  position:absolute;
+  right:0;
+  bottom:calc(100% + 14px);
+  display:flex;
+  align-items:center;
+  gap:8px;
+  white-space:nowrap;
+  background:rgba(12, 18, 28, 0.95);
+  border:1px solid rgba(56, 189, 248, 0.3);
+  border-radius:99px;
+  padding:8px 8px 8px 14px;
+  color:#fff;
+  font-size:13px;
+  box-shadow:0 6px 18px rgba(0,0,0,.4);
+  animation:fadeIn .2s ease;
+}
+
+.draw-status-chip button{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:24px;
+  height:24px;
+  border:none;
+  border-radius:50%;
+  background:#3f4a5a;
+  color:#fff;
+  cursor:pointer;
+}
+
+.draw-status-chip button:hover{
+  background:#57647a;
+}
+
+.draw-status-chip svg{
+  width:13px;
+  height:13px;
+}
+
 @media (max-width: 768px) {
   .fab-container{
-    right:20px;
-    bottom:24px;
+    right:var(--space-4);
+    bottom:var(--space-5);
     width:52px;
     height:52px;
   }
@@ -429,18 +625,33 @@ input[type="range"] {
     margin:-22px 0 0 -22px;
     font-size:16px;
   }
+
+  .draw-status-chip{
+    right:0;
+    max-width:calc(100vw - 40px);
+  }
+
+  /* Reorder/eye/chevron controls are ~18px hit areas on desktop; bump them
+     to the 44px touch-target guideline on mobile instead of leaving them
+     thumb-hostile. */
+  .layer-reorder-btn,
+  .layer-eye-btn,
+  .layer-zoom-btn,
+  .layer-chevron-btn,
+  .drag-handle {
+    padding: 10px;
+  }
 }
 /* =========================
    TOAST NOTIFICATION
 ========================= */
 .gis-toast{
   position:absolute;
-  top:20px;
-  right:100px;
+  top:var(--floating-edge-gap);
+  right:var(--floating-right-clear);
   max-width:calc(100vw - 40px);
   box-sizing:border-box;
 
-  background:rgba(185,28,28,.95);
   border:1px solid rgba(255,255,255,.2);
 
   color:#fff;
@@ -456,7 +667,15 @@ input[type="range"] {
 
   box-shadow:0 6px 18px rgba(0,0,0,.4);
 
-  animation:toastIn .2s ease;
+  animation:fadeIn .2s ease;
+}
+
+.gis-toast-error{
+  background:rgba(185,28,28,.95);
+}
+
+.gis-toast-success{
+  background:rgba(21,128,61,.95);
 }
 
 @keyframes fadeIn{
@@ -499,11 +718,19 @@ input[type="range"] {
 }
 
 .feature-attributes-close{
+  display:flex;
+  align-items:center;
+  justify-content:center;
   border:none;
   background:transparent;
-  color:#94a3b8;
+  color:var(--text-muted);
   cursor:pointer;
-  font-size:14px;
+  padding:2px;
+}
+
+.feature-attributes-close svg{
+  width:14px;
+  height:14px;
 }
 
 .feature-attributes-close:hover{
@@ -521,11 +748,11 @@ input[type="range"] {
   gap:10px;
   padding:6px 0;
   border-bottom:1px solid rgba(255,255,255,0.05);
-  font-size:12px;
+  font-size:13px;
 }
 
 .feature-attribute-key{
-  color:#94a3b8;
+  color:var(--text-muted);
   flex-shrink:0;
 }
 
@@ -542,7 +769,7 @@ input[type="range"] {
   border:1px solid rgba(56, 189, 248, 0.3);
   border-radius:6px;
   color:#fff;
-  font-size:12px;
+  font-size:13px;
   padding:4px 6px;
   text-align:right;
 }
@@ -561,7 +788,7 @@ input[type="range"] {
 
 .feature-attributes-add-column button{
   flex-shrink:0;
-  font-size:11px;
+  font-size:12px;
 }
 
 .feature-attributes-footer{
@@ -573,20 +800,40 @@ input[type="range"] {
 
 .feature-attributes-footer button{
   flex:1;
-  background:#0369a1;
+  background:var(--accent-strong);
   border:1px solid rgba(56, 189, 248, 0.3);
   border-radius:6px;
   color:#fff;
   padding:6px 0;
-  font-size:12px;
+  font-size:13px;
   cursor:pointer;
 }
 
 .feature-attributes-footer button:hover{
-  background:#0284c7;
+  background:var(--accent-hover);
 }
 
 .feature-attributes-footer button:disabled{
   opacity:0.6;
   cursor:default;
+}
+
+/* =========================
+   REDUCED MOTION
+========================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .gis-button:hover,
+  .layer-row:hover {
+    transform: none;
+  }
 }
