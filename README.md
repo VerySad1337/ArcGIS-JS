@@ -9,6 +9,10 @@ Instruction:
 
 Snapshot of implementation process:
 
+12) Implemented zoom to layer and new UI reskin:
+    <img width="1897" height="902" alt="image" src="https://github.com/user-attachments/assets/8f2cb152-970d-481a-afc2-137ac427d11f" />
+
+
 11) Able to edit the styling of the layer:
     <img width="1912" height="957" alt="image" src="https://github.com/user-attachments/assets/3e64df01-2c60-4509-8b61-e6b96271aeb7" />
 
