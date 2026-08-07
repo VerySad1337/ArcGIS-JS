@@ -1,6 +1,15 @@
+import fs from "fs";
+import path from "path";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import LayerControlPanel from "./LayerControlPanel";
+
+// Real CSS is mocked out for every other test in this file (see
+// jest.config.cjs's moduleNameMapper), which is normally the right call -
+// but it means a class-name collision with an unrelated rule (like the one
+// below) can slip past every test that only checks for an element's
+// presence. Load the actual stylesheet just for this one regression check.
+const REAL_CSS = fs.readFileSync(path.resolve(__dirname, "../styles/gis-theme.css"), "utf8");
 
 const baseLayers = [
   { id: "route", name: "Route Layer", visible: true, styleGroups: [] },
@@ -364,6 +373,286 @@ describe("LayerControlPanel", () => {
       expect(screen.getByRole("checkbox", { name: "Sum" })).toBeDisabled();
       await user.type(screen.getByPlaceholderText("e.g. RATING"), "RATING");
       expect(screen.getByRole("checkbox", { name: "Sum" })).toBeEnabled();
+    });
+  });
+
+  describe("layer grouping", () => {
+    async function addGroup(user, name) {
+      await user.type(screen.getByLabelText("New group name"), name);
+      await user.click(screen.getByRole("button", { name: "+ Add Group" }));
+    }
+
+    test("no group selector is shown until a group exists", () => {
+      setup();
+      expect(screen.queryByLabelText(/^Group /)).not.toBeInTheDocument();
+    });
+
+    test("creating a group renders it as a collapsible header, open by default, with a member count", async () => {
+      const user = userEvent.setup();
+      setup();
+
+      await addGroup(user, "My Group");
+
+      expect(screen.getByLabelText("New group name")).toHaveValue("");
+      const header = screen.getByRole("button", { name: "My Group (0)" });
+      expect(header).toHaveAttribute("aria-expanded", "true");
+    });
+
+    test("assigning the first layer to a new group does not reorder it (it anchors the group)", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+
+      expect(props.onReorder).not.toHaveBeenCalled();
+      const header = screen.getByRole("button", { name: "My Group (1)" });
+      const body = header.closest(".layer-group").querySelector(".layer-group-body");
+      expect(within(body).getByText("Heatmap")).toBeInTheDocument();
+    });
+
+    test("assigning a second layer to a group moves it to sit contiguously after the existing member", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      // Heatmap (index 2) joins first - no existing members, no reorder.
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+      // Route Layer (index 0) joins second - should move to sit right after Heatmap.
+      await user.selectOptions(screen.getByLabelText("Group Route Layer"), "group-1");
+
+      expect(props.onReorder).toHaveBeenCalledWith(0, 2);
+    });
+
+    test("deleting a group ungroups its members without reordering, and removes the header", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+      props.onReorder.mockClear();
+
+      await user.click(screen.getByRole("button", { name: "Delete group My Group" }));
+
+      expect(screen.queryByRole("button", { name: /My Group/ })).not.toBeInTheDocument();
+      expect(props.onReorder).not.toHaveBeenCalled();
+      expect(screen.getByText("Heatmap")).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^Group /)).not.toBeInTheDocument();
+    });
+
+    test("moving a layer's selector back to Ungrouped removes it from the group without reordering", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+      props.onReorder.mockClear();
+
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "");
+
+      expect(props.onReorder).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "My Group (0)" })).toBeInTheDocument();
+    });
+
+    test("a group's up/down buttons are disabled at the boundaries of the block list", async () => {
+      const user = userEvent.setup();
+      setup();
+
+      await addGroup(user, "My Group");
+      // Tourist Attractions (index 1) and Heatmap (index 2) join, already
+      // adjacent to each other, so the group ends up as the last block
+      // (Route Layer, standalone, stays first).
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+
+      expect(screen.getByRole("button", { name: "Move group My Group up" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Move group My Group down" })).toBeDisabled();
+    });
+
+    test("moving a group up swaps its whole block with the preceding layer", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+      props.onReorder.mockClear();
+
+      await user.click(screen.getByRole("button", { name: "Move group My Group up" }));
+
+      // Route Layer (index 0) moves past the two-member group to sit after it.
+      expect(props.onReorder).toHaveBeenCalledWith(0, 2);
+    });
+
+    test("the group eye button hides only the members that are currently visible", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({
+        layers: [
+          { ...baseLayers[1], visible: true },
+          { ...baseLayers[2], visible: false }
+        ]
+      });
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+
+      await user.click(screen.getByRole("button", { name: "Hide all layers in My Group" }));
+
+      expect(props.onToggle).toHaveBeenCalledTimes(1);
+      expect(props.onToggle).toHaveBeenCalledWith("touristAttractions");
+    });
+
+    test("the group eye button shows all members when none are visible", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({
+        layers: [
+          { ...baseLayers[1], visible: false },
+          { ...baseLayers[2], visible: false }
+        ]
+      });
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+
+      await user.click(screen.getByRole("button", { name: "Show all layers in My Group" }));
+
+      expect(props.onToggle).toHaveBeenCalledTimes(2);
+      expect(props.onToggle).toHaveBeenCalledWith("touristAttractions");
+      expect(props.onToggle).toHaveBeenCalledWith("heat");
+    });
+
+    test("the group eye button is disabled for an empty group", async () => {
+      const user = userEvent.setup();
+      setup();
+
+      await addGroup(user, "My Group");
+
+      expect(screen.getByRole("button", { name: "Show all layers in My Group" })).toBeDisabled();
+    });
+
+    test("dragging a group and dropping it on a top-level layer row moves the whole group there", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      // Tourist Attractions (1) and Heatmap (2) join - already adjacent, so
+      // the group is the second (last) block; Route Layer is the first.
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+      props.onReorder.mockClear();
+
+      const groupDragHandle = screen.getByRole("button", {
+        name: "Drag to reorder group My Group, or use the move up/down buttons"
+      });
+      const routeRow = document.querySelectorAll(".layer-row")[0];
+
+      fireEvent.dragStart(groupDragHandle);
+      fireEvent.drop(routeRow);
+
+      expect(props.onReorder).toHaveBeenCalledTimes(2);
+      expect(props.onReorder).toHaveBeenNthCalledWith(1, 2, 0);
+      expect(props.onReorder).toHaveBeenNthCalledWith(2, 2, 0);
+    });
+
+    test("dragging a group and dropping it onto another group's header moves the whole block there", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "Group One");
+      // Route (0) and Tourist Attractions (1) join Group One - already
+      // adjacent, no reorder needed for this setup step.
+      await user.selectOptions(screen.getByLabelText("Group Route Layer"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+
+      await addGroup(user, "Group Two");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-2");
+      props.onReorder.mockClear();
+
+      const groupTwoDragHandle = screen.getByRole("button", {
+        name: "Drag to reorder group Group Two, or use the move up/down buttons"
+      });
+      const groupOneHeader = screen.getByRole("button", { name: /Group One \(2\)/ }).closest(".layer-group");
+
+      fireEvent.dragStart(groupTwoDragHandle);
+      fireEvent.drop(groupOneHeader);
+
+      expect(props.onReorder).toHaveBeenCalledWith(2, 0);
+    });
+
+    test("dropping a dragged group onto a member row inside another open group's body still moves it onto that group (the drop bubbles to the group's own container)", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "Group One");
+      await user.selectOptions(screen.getByLabelText("Group Route Layer"), "group-1");
+
+      await addGroup(user, "Group Two");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-2");
+      props.onReorder.mockClear();
+
+      const groupTwoDragHandle = screen.getByRole("button", {
+        name: "Drag to reorder group Group Two, or use the move up/down buttons"
+      });
+      // Group One's body is open by default (see "open by default" test
+      // above) and contains its one member, Route Layer, as a nested row.
+      // That row's own onDrop deliberately no-ops for a group drag and lets
+      // the native "drop" event bubble to the enclosing .layer-group's own
+      // handler, so dropping anywhere in Group One's card - not just its
+      // header - moves the dragged group there.
+      const nestedRouteRow = within(
+        screen.getByRole("button", { name: /Group One \(1\)/ }).closest(".layer-group")
+      ).getByRole("group", { name: "Route Layer controls" });
+
+      fireEvent.dragStart(groupTwoDragHandle);
+      fireEvent.drop(nestedRouteRow);
+
+      expect(props.onReorder).toHaveBeenCalledWith(2, 0);
+    });
+
+    test("ending a group drag without a drop clears the pending drag without reordering", async () => {
+      const user = userEvent.setup();
+      const { props } = setup();
+
+      await addGroup(user, "My Group");
+      await user.selectOptions(screen.getByLabelText("Group Tourist Attractions"), "group-1");
+      await user.selectOptions(screen.getByLabelText("Group Heatmap"), "group-1");
+      props.onReorder.mockClear();
+
+      const groupDragHandle = screen.getByRole("button", {
+        name: "Drag to reorder group My Group, or use the move up/down buttons"
+      });
+      fireEvent.dragStart(groupDragHandle);
+      fireEvent.dragEnd(groupDragHandle);
+      fireEvent.drop(document.querySelectorAll(".layer-row")[0]);
+
+      expect(props.onReorder).not.toHaveBeenCalled();
+    });
+
+    // Regression test: .layer-reorder-btns is opacity:0 by default and only
+    // revealed by ".layer-row:hover"/":focus-within" (a deliberate
+    // hover-recessed pattern for individual layer rows). The group header
+    // reuses the same class for its own Move up/down buttons but isn't a
+    // .layer-row, so without an explicit override those buttons render
+    // permanently invisible - present in the DOM and technically clickable,
+    // but unusable because nobody can see them. Every other test in this
+    // file mocks CSS out entirely (see jest.config.cjs), so only a test
+    // that loads the real stylesheet can catch this class of bug.
+    test("a group's Move up/down buttons are not left invisible by the layer row's hover-reveal CSS", async () => {
+      const style = document.createElement("style");
+      style.textContent = REAL_CSS;
+      document.head.appendChild(style);
+
+      const user = userEvent.setup();
+      setup();
+      await addGroup(user, "My Group");
+
+      const upButton = screen.getByRole("button", { name: "Move group My Group up" });
+      expect(getComputedStyle(upButton.parentElement).opacity).not.toBe("0");
+      expect(getComputedStyle(upButton).opacity).not.toBe("0");
+
+      document.head.removeChild(style);
     });
   });
 });

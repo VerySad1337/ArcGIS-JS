@@ -680,30 +680,56 @@ input[type="range"] {
    always reach them) but are visually recessed until the row is hovered or
    something inside it has focus, so a resting layer list doesn't show six
    controls per row at once. The eye toggle and drag handle remain always
-   visible since they're the primary, most-used actions. */
+   visible since they're the primary, most-used actions.
+
+   opacity: 0 alone still reserves these controls' full box width even
+   while invisible - dead space that (with the row already carrying up to
+   seven items - eye, drag, name, zoom, reorder, chevron, and a portal
+   layer's always-visible remove button) left .layer-name, the only item
+   with room to give, crushed to a few characters (see
+   knowledge/features/responsive-layout.md's flex min-width note - same
+   underlying "this row has no slack" problem, different trigger). Explicit
+   width: 0 + overflow: hidden at rest reclaims that space for the name
+   while a control is hidden; :hover/:focus-within restore both opacity and
+   width together so nothing appears until there's room for it. */
 .layer-zoom-btn,
 .layer-reorder-btns,
 .layer-chevron-btn {
   opacity: 0;
-  transition: opacity 0.15s ease;
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+  transition: opacity 0.15s ease, width 0.15s ease, padding 0.15s ease;
 }
 
 .layer-row:hover .layer-zoom-btn,
-.layer-row:hover .layer-reorder-btns,
 .layer-row:hover .layer-chevron-btn,
 .layer-row:focus-within .layer-zoom-btn,
-.layer-row:focus-within .layer-reorder-btns,
 .layer-row:focus-within .layer-chevron-btn {
   opacity: 1;
+  width: auto;
+  padding: 4px;
+}
+
+.layer-row:hover .layer-reorder-btns,
+.layer-row:focus-within .layer-reorder-btns {
+  opacity: 1;
+  width: auto;
 }
 
 @media (max-width: 768px) {
-  /* No hover on touch devices — keep controls visible so they aren't
-     effectively unreachable. */
+  /* No hover on touch devices — keep controls visible (and at their normal
+     width) so they aren't effectively unreachable. */
   .layer-zoom-btn,
   .layer-reorder-btns,
   .layer-chevron-btn {
     opacity: 1;
+    width: auto;
+    padding: 4px;
+  }
+
+  .layer-reorder-btns {
+    padding: 0;
   }
 }
 
@@ -743,7 +769,8 @@ input[type="range"] {
 
 .layer-row button svg,
 .layer-chevron-btn svg,
-.drag-handle svg {
+.drag-handle svg,
+.layer-group-header button svg {
   width: 15px;
   height: 15px;
   display: block;
@@ -849,6 +876,156 @@ input[type="range"] {
   font-size: var(--text-sm);
   padding: 0 2px 8px;
   line-height: 1.4;
+}
+
+.layer-group-form {
+  display: flex;
+  gap: 6px;
+  margin: 0 2px 10px;
+}
+
+.layer-group-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+  font-size: var(--text-sm);
+}
+
+.layer-group-form button {
+  width: auto;
+  margin-top: 0;
+  padding: 6px var(--space-2);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.layer-group-picker {
+  display: flex;
+  align-items: center;
+  padding: 0 10px 8px;
+  margin-top: -2px;
+}
+
+.layer-group-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.layer-group-select {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+  font-size: var(--text-sm);
+  padding: 5px 28px 5px 8px;
+  text-transform: none;
+}
+
+.layer-group {
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.layer-group-header {
+  display: flex;
+  align-items: center;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.layer-group-header .drag-handle {
+  padding: 8px 4px 8px 10px;
+}
+
+.layer-group-eye-btn {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  padding: 8px 4px;
+}
+
+.layer-group-eye-btn:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.layer-group-eye-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* .layer-reorder-btns is opacity:0 by default and only revealed by
+   .layer-row:hover/:focus-within (see the "Reorder/zoom/chevron controls"
+   rule above) - the group header isn't a .layer-row, so without this
+   override its Move up/down buttons would be permanently invisible
+   (though still technically present/clickable), not just hover-recessed. */
+.layer-group-header .layer-reorder-btns {
+  flex-direction: row;
+  gap: 2px;
+  padding: 0 4px;
+  opacity: 1;
+}
+
+.layer-group-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.layer-group-toggle span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-group-count {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.layer-group-delete {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px 10px;
+}
+
+.layer-group-delete:hover {
+  color: #f87171;
+}
+
+.layer-group-body {
+  padding: 6px;
+  border-top: 1px solid rgba(56, 189, 248, 0.1);
+}
+
+.layer-group-body .layer-row-wrapper:last-child .layer-row {
+  margin-bottom: 0;
 }
 
 .layer-style-controls {
@@ -1121,10 +1298,15 @@ input[type="range"] {
 
   .layer-row-secondary {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     flex: 1 0 100%;
     justify-content: flex-end;
     gap: 4px;
+  }
+
+  .layer-group-select {
+    max-width: 120px;
   }
 
   /* Stacked up/down buttons made sense as a compact column alongside other
