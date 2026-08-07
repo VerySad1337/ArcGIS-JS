@@ -742,6 +742,7 @@ describe("GISMapEngine portal layers", () => {
       name: "Parks",
       visible: true,
       removable: true,
+      styleGroups: [],
       filterable: true,
       filterDescription: null
     });
@@ -752,6 +753,48 @@ describe("GISMapEngine portal layers", () => {
     expect(engine.portalLayers.has(id)).toBe(true);
     expect(engine.portalLayerMeta.has(id)).toBe(true);
     expect(view2.map.add).toHaveBeenCalledWith(engine.portalLayers.get(id));
+  });
+
+  test("a portal layer with a simple renderer exposes a style group and setLayerStyle restyles + persists it across reattachment", async () => {
+    const engine = new GISMapEngine();
+    const view1 = makeView();
+    engine.attachToView(view1);
+    const id = await engine.addPortalLayer(portalItem);
+
+    // Simulates the service metadata that would normally arrive via
+    // layer.load() resolving with a simple renderer/symbol.
+    const makeSymbol = (color) => ({
+      type: "simple-marker",
+      color,
+      outline: { width: 1 },
+      clone() {
+        return makeSymbol(this.color);
+      }
+    });
+    const layer = engine.portalLayers.get(id);
+    layer.renderer = {
+      type: "simple",
+      symbol: makeSymbol([0, 0, 0]),
+      clone() {
+        return { type: this.type, symbol: this.symbol.clone() };
+      }
+    };
+
+    const before = engine.getLayers().find((l) => l.id === id);
+    expect(before.styleGroups).toHaveLength(1);
+    expect(before.styleGroups[0].symbolType).toBe("simple-marker");
+
+    engine.setLayerStyle(id, { color: "#ff0000", borderWidth: 3 });
+
+    expect(engine.portalLayers.get(id).renderer.symbol.color).toBe("#ff0000");
+    expect(engine.portalLayerMeta.get(id).renderer.symbol.color).toBe("#ff0000");
+
+    const view2 = makeView();
+    engine.attachToView(view2);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(engine.portalLayers.get(id).renderer).toBe(engine.portalLayerMeta.get(id).renderer);
   });
 
   test("toggleLayer flips a portal layer's visibility and keeps portalLayerMeta in sync across reattachment", async () => {

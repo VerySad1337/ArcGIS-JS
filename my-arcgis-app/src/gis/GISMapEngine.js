@@ -318,15 +318,22 @@ export default class GISMapEngine {
     // is never relied on to survive a 2D/3D switch.
     this.portalLayers = new Map();
     this.portalLayerMeta.forEach((meta, id) => {
-      this.portalLayers.set(
-        id,
-        new FeatureLayer({
-          url: meta.url,
-          title: meta.title,
-          visible: meta.visible,
-          outFields: ["*"]
-        })
-      );
+      const rebuilt = new FeatureLayer({
+        url: meta.url,
+        title: meta.title,
+        visible: meta.visible,
+        outFields: ["*"]
+      });
+      // A persisted style (see setLayerStyle's portal-layer branch) is not
+      // carried by a fresh FeatureLayer instance, so it must be reapplied
+      // once the layer loads and its own renderer is available to clone the
+      // geometry-appropriate shape from.
+      if (meta.renderer) {
+        rebuilt.load().then(() => {
+          rebuilt.renderer = meta.renderer;
+        }).catch(() => {});
+      }
+      this.portalLayers.set(id, rebuilt);
     });
 
     const layerMap = this.buildLayerMap();
@@ -837,11 +844,18 @@ export default class GISMapEngine {
     // reason as the fixed hosted layers above.
     this.portalLayers.forEach((layer, id) => {
       const meta = this.portalLayerMeta.get(id);
+      // A portal-supplied renderer can be anything (unique-value, class-
+      // breaks, dictionary, ...), most of which have no single symbol to
+      // expose a color/border control for. A "simple" renderer is the one
+      // shape that, like touristAttractions/mrtStations/mrtLines, owns
+      // exactly one symbol - so only that shape is offered a style group.
+      const portalSymbol = layer.renderer?.type === "simple" ? layer.renderer.symbol : null;
       lookup[id] = {
         id,
         name: meta?.title || "Portal Layer",
         visible: layer.visible,
         removable: true,
+        styleGroups: portalSymbol ? [this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer")] : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription(id)
       };
@@ -910,7 +924,11 @@ export default class GISMapEngine {
       );
     }
 
-    const meta = { title: item.title || "Portal Layer", url: item.url, visible: true };
+    // `renderer` starts unset (service default). Once a user restyles this
+    // layer via setLayerStyle, the resulting renderer is written back here so
+    // it survives a 2D/3D reattachment, the same way touristAttractionRenderer/
+    // mrtStationRenderer/mrtLineRenderer persist style for the fixed layers.
+    const meta = { title: item.title || "Portal Layer", url: item.url, visible: true, renderer: null };
     this.portalLayerMeta.set(layerId, meta);
     this.layerOrder = [...this.layerOrder, layerId];
 
@@ -923,6 +941,15 @@ export default class GISMapEngine {
     this.portalLayers.set(layerId, layer);
 
     if (this.currentMap) this.currentMap.add(layer);
+
+    // `layer.renderer` is only populated once the service's metadata has
+    // loaded — it is not available synchronously off a freshly constructed
+    // FeatureLayer. addPortalLayer is already awaited by the shell before it
+    // calls refreshLayers()/getLayers(), so awaiting the load here (rather
+    // than leaving it to happen in the background) is what makes a portal
+    // layer's Symbology controls appear on the very first render of its row
+    // instead of only after some unrelated action later triggers a refresh.
+    await layer.load().catch(() => {});
 
     return layerId;
   }
@@ -1068,8 +1095,21 @@ export default class GISMapEngine {
         });
         break;
       }
-      default:
+      default: {
+        // Portal-added layers (see getLayers()'s portal-layer branch above)
+        // are only stylable when their service-supplied renderer is a
+        // "simple" renderer with a single symbol - the one shape that maps
+        // cleanly onto a single color/border control, same as the fixed
+        // hosted layers above.
+        const portalLayer = this.portalLayers.get(id);
+        if (portalLayer?.renderer?.type !== "simple") return;
+        const renderer = portalLayer.renderer.clone();
+        renderer.symbol = applySymbolStyle(renderer.symbol);
+        portalLayer.renderer = renderer;
+        const meta = this.portalLayerMeta.get(id);
+        if (meta) meta.renderer = renderer;
         break;
+      }
     }
   }
 
