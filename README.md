@@ -8,6 +8,17 @@ Instruction:
 
 
 Snapshot of implementation process:
+15) Implemented filter and aggregate function on feature layer.
+<img width="1342" height="881" alt="image" src="https://github.com/user-attachments/assets/d5e7d3a6-ac9d-4e00-8917-ad389a28ad72" />
+
+14) Implemented search from ArcGIS portal and display the layer to map.
+    <img width="1872" height="836" alt="image" src="https://github.com/user-attachments/assets/cf83811e-63f5-4b87-8422-a7113b8cb045" />
+    <img width="801" height="482" alt="image" src="https://github.com/user-attachments/assets/51b3ac45-1bc5-41e7-ab55-a1f977aaaa84" />
+
+13) Implemented search for location via postal code, building name and address with geocoding function.
+    <img width="1615" height="755" alt="image" src="https://github.com/user-attachments/assets/bd25c2ba-13a4-46ab-bc13-1f2296a1428f" />
+    <img width="1696" height="892" alt="image" src="https://github.com/user-attachments/assets/3c0a4572-d8b4-40f5-8036-ab0ad9a114ac" />
+    <img width="1685" height="712" alt="image" src="https://github.com/user-attachments/assets/013357de-5120-4d82-bf10-5bed6253084e" />
 
 12) Implemented zoom to layer and new UI reskin:
     <img width="1895" height="862" alt="image" src="https://github.com/user-attachments/assets/f505ea34-5fe3-47b8-8cb3-84410f805b06" />
