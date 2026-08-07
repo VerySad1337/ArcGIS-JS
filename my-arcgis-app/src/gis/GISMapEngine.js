@@ -10,6 +10,12 @@ import {
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import IdentityManager from "@arcgis/core/identity/IdentityManager";
 import esriRequest from "@arcgis/core/request";
+import {
+  normalizeFieldType,
+  buildWhereClause,
+  matchesAttributes,
+  describeFilter
+} from "./LayerFilterExpression";
 
 function colorToHex(color) {
   return typeof color?.toHex === "function" ? color.toHex() : "#000000";
@@ -117,6 +123,26 @@ export default class GISMapEngine {
   // GraphicsLayer with no backing service, so added columns are tracked
   // here and applied to every graphic instead of via a REST field definition.
   drawingFields = [];
+
+  // Active per-layer filters (see src/gis/LayerFilterExpression.js), keyed by
+  // layerOrder/portal id. This is the actual source of truth for "is this
+  // layer filtered right now" - a hosted FeatureLayer's own
+  // definitionExpression and the drawings layer's per-graphic `visible`
+  // flags are just the two different mechanisms used to *apply* whatever is
+  // stored here, and both are re-derived from this map, never the other way
+  // around. This also survives an attachToView reattachment (2D/3D switch)
+  // the same way touristAttractionRenderer/etc. do for styling: the fixed
+  // FeatureLayer-backed layers are fully reconstructed on every attach, so
+  // their definitionExpression would otherwise silently reset.
+  layerFilters = new Map();
+
+  // Layers with a real attribute schema worth filtering/aggregating over.
+  // route/stops/heat/searchResult are excluded for the same reasons they're
+  // excluded from the Layer Styling System (knowledge/index.md): route is one
+  // unattributed line, stops are two fixed markers, heat has no queryable
+  // schema of its own (it renders touristAttractions' geometry), and
+  // searchResult is a transient single marker replaced on every search.
+  static ANALYSIS_EXCLUDED_LAYER_IDS = new Set(["route", "stops", "heat", "searchResult"]);
 
   selectedGraphic = null;
   selectedLayerId = null;
@@ -258,6 +284,7 @@ export default class GISMapEngine {
         this.onDrawStateChange?.(this.activeDrawType);
       } else if (event.state === "complete") {
         event.graphic.attributes = this.buildDrawingAttributes();
+        this.applyDrawingsFilterToGraphic(event.graphic);
         this.onDrawingsChanged?.();
         this.activeDrawType = null;
         this.onDrawStateChange?.(null);
@@ -312,6 +339,13 @@ export default class GISMapEngine {
     if (this.clickHandle) this.clickHandle.remove();
     this.clickHandle = view.on("click", (event) => this.handleFeatureClick(event));
 
+    // The FeatureLayer-backed layers above are fresh instances, so any
+    // definitionExpression a user had applied via setLayerFilter needs to be
+    // recomputed and reassigned - see the layerFilters field comment.
+    // Fire-and-forget: it depends on each layer's fields loading, which
+    // attachToView itself does not (and should not) block on.
+    this.reapplyPersistedFilters();
+
     if (previousExtent) {
       view.goTo(previousExtent).catch(() => {});
     }
@@ -324,7 +358,8 @@ export default class GISMapEngine {
       this.touristAttractionLayer,
       this.mrtStationLayer,
       this.mrtLineLayer,
-      this.drawLayer
+      this.drawLayer,
+      ...this.portalLayers.values()
     ].filter(Boolean);
 
     this.currentView
@@ -360,6 +395,9 @@ export default class GISMapEngine {
     if (layer === this.mrtStationLayer) return "mrtStations";
     if (layer === this.mrtLineLayer) return "mrtLines";
     if (layer === this.drawLayer) return "drawings";
+    for (const [id, portalLayer] of this.portalLayers) {
+      if (layer === portalLayer) return id;
+    }
     return null;
   }
 
@@ -368,7 +406,7 @@ export default class GISMapEngine {
       touristAttractions: this.touristAttractionLayer,
       mrtStations: this.mrtStationLayer,
       mrtLines: this.mrtLineLayer
-    }[layerId] || null;
+    }[layerId] || this.portalLayers.get(layerId) || null;
   }
 
   buildDrawingAttributes(overrides = {}) {
@@ -377,6 +415,272 @@ export default class GISMapEngine {
       attributes[field.name] = field.defaultValue ?? null;
     });
     return { ...attributes, ...overrides };
+  }
+
+  // ---------------------------------------------------------------------
+  // Filter & Aggregate System
+  //
+  // Lets a user narrow (filter) and summarize (aggregate) any layer with a
+  // real attribute schema - the hosted FeatureLayers (touristAttractions,
+  // mrtStations, mrtLines, portal layers) and the local drawings layer -
+  // through one shared vocabulary (src/gis/LayerFilterExpression.js) even
+  // though the two layer kinds enforce a filter completely differently:
+  // a FeatureLayer's `definitionExpression` (server-side) vs. the drawings
+  // layer's per-graphic `visible` flag (client-side, since drawLayer has no
+  // backing service to query). See the `layerFilters` field comment above
+  // for why that map, not either applied mechanism, is the source of truth.
+  // ---------------------------------------------------------------------
+
+  // Every id this system will offer in the filter/aggregate UI: the three
+  // fixed hosted layers, drawings, and any portal-added layers (whose ids
+  // are only known at runtime, same pattern as getLayers()/searchFeatures()).
+  filterableLayerIds() {
+    const fixed = this.layerOrder.filter(
+      (id) => !GISMapEngine.ANALYSIS_EXCLUDED_LAYER_IDS.has(id)
+    );
+    return fixed;
+  }
+
+  getFilterableLayers() {
+    const byId = new Map(this.getLayers().filter(Boolean).map((l) => [l.id, l.name]));
+    return this.filterableLayerIds()
+      .filter((id) => byId.has(id))
+      .map((id) => ({ id, name: byId.get(id) }));
+  }
+
+  // Client-side schema for the drawings layer: drawingFields is the explicit
+  // "columns" a user added (see addColumnToLayer), but uploaded GeoJSON can
+  // also carry properties that were never formally added as a column, so
+  // those are picked up too by sampling the graphics actually present.
+  drawingsFieldSchema() {
+    const known = new Map(
+      this.drawingFields.map((f) => [f.name, normalizeFieldType(f.type)])
+    );
+    this.drawLayer.graphics.forEach((g) => {
+      Object.entries(g.attributes || {}).forEach(([name, value]) => {
+        if (known.has(name)) return;
+        const kind =
+          typeof value === "number" ? "number" : value instanceof Date ? "date" : "string";
+        known.set(name, kind);
+      });
+    });
+    return { fields: Array.from(known, ([name, kind]) => ({ name, kind })) };
+  }
+
+  // Returns { fields: [{ name, kind }] } for the given layer id, `kind`
+  // being LayerFilterExpression's normalized string/number/date/other
+  // vocabulary rather than the raw esriFieldType* name.
+  async getLayerFieldSchema(id) {
+    if (id === "drawings") return this.drawingsFieldSchema();
+
+    const layer = this.buildLayerMap()[id];
+    if (!layer || typeof layer.load !== "function") return { fields: [] };
+
+    await layer.load();
+    const fields = (layer.fields || [])
+      .filter((f) => f.type !== "esriFieldTypeOID" && f.type !== "esriFieldTypeGeometry")
+      .map((f) => ({ name: f.name, kind: normalizeFieldType(f.type) }));
+    return { fields };
+  }
+
+  // Sets graphic.visible to reflect the currently active drawings filter (if
+  // any). Called both when applying/clearing a filter over the whole layer
+  // and per-graphic, for a graphic that's created *after* a filter is
+  // already active (a new sketch, or an upload) - without this, a freshly
+  // drawn/uploaded feature would always render regardless of the active
+  // filter until the next unrelated refresh touched it.
+  applyDrawingsFilterToGraphic(graphic, fields) {
+    const filter = this.layerFilters.get("drawings");
+    if (!filter) {
+      graphic.visible = true;
+      return;
+    }
+    const resolvedFields = fields ?? this.drawingsFieldSchema().fields;
+    graphic.visible = matchesAttributes(graphic.attributes, resolvedFields, filter);
+  }
+
+  // Applies `where` (already validated/built by setLayerFilter or
+  // reapplyPersistedFilters) to a hosted FeatureLayer's definitionExpression,
+  // or, for drawings, re-derives every graphic's visible flag from `fields`.
+  applyFilterToLayer(id, fields, where) {
+    const layer = this.buildLayerMap()[id];
+    if (!layer) return;
+
+    if (id === "drawings") {
+      layer.graphics.forEach((g) => this.applyDrawingsFilterToGraphic(g, fields));
+      return;
+    }
+
+    if ("definitionExpression" in layer) {
+      layer.definitionExpression = where || null;
+    }
+  }
+
+  // Validates and stores a filter for one layer, then applies it. Throws
+  // (rather than silently no-opping) on an invalid field/operator/value so
+  // the shell can surface exactly what was wrong as a toast, consistent with
+  // updateSelectedFeatureAttributes/addColumnToLayer/addPortalLayer's
+  // throw-and-let-the-shell-toast convention.
+  //
+  // A filter with no usable conditions (see LayerFilterExpression's
+  // usableConditions - e.g. every row still half-empty) is treated as
+  // "clear this layer's filter" rather than an error, so removing the last
+  // condition in the UI naturally clears filtering instead of requiring a
+  // separate action.
+  async setLayerFilter(id, filter) {
+    const { fields } = await this.getLayerFieldSchema(id);
+    const where = buildWhereClause(fields, filter);
+
+    if (where === null) {
+      this.layerFilters.delete(id);
+    } else {
+      this.layerFilters.set(id, filter);
+    }
+
+    this.applyFilterToLayer(id, fields, where);
+    return { active: where !== null, description: describeFilter(filter) };
+  }
+
+  clearLayerFilter(id) {
+    this.layerFilters.delete(id);
+    this.applyFilterToLayer(id, null, null);
+  }
+
+  // Re-derives definitionExpression for every hosted layer with an active
+  // filter after attachToView rebuilds them as fresh FeatureLayer instances
+  // (a 2D/3D switch, in particular). Fire-and-forget: each layer's fields
+  // need to load first, and attachToView itself must stay synchronous (see
+  // its own call site comment). A filter that no longer validates against a
+  // reloaded layer's schema (e.g. a portal service that changed shape) is
+  // dropped rather than left throwing on every future reattachment.
+  reapplyPersistedFilters() {
+    this.layerFilters.forEach((filter, id) => {
+      if (id === "drawings") return; // graphic.visible persists on the graphic objects themselves
+      this.getLayerFieldSchema(id)
+        .then(({ fields }) => {
+          const where = buildWhereClause(fields, filter);
+          this.applyFilterToLayer(id, fields, where);
+        })
+        .catch(() => {
+          this.layerFilters.delete(id);
+        });
+    });
+  }
+
+  // Returns a short human-readable description of the currently active
+  // filter for a layer, or null when none is active - used by the layer
+  // panel/analysis panel to show what's currently narrowing a layer.
+  getLayerFilterDescription(id) {
+    const filter = this.layerFilters.get(id);
+    return filter ? describeFilter(filter) || null : null;
+  }
+
+  // Aggregates one layer: a feature count plus, when `field`/`statistics`
+  // are supplied, numeric statistics - all computed over whatever the
+  // layer's currently active filter (if any) leaves visible, so "aggregate"
+  // and "filter" compose instead of being two independent views of the data.
+  // `statistics` is any subset of "sum"/"avg"/"min"/"max" ("count" is always
+  // included).
+  async getLayerAggregate(id, { field, statistics = [] } = {}) {
+    const name = this.getFilterableLayers().find((l) => l.id === id)?.name || id;
+    const layer = this.buildLayerMap()[id];
+    if (!layer) return { id, name, count: 0, stats: {} };
+
+    if (id === "drawings") {
+      const filter = this.layerFilters.get(id);
+      const { fields } = this.drawingsFieldSchema();
+      const matched = layer.graphics
+        .toArray()
+        .filter((g) => !filter || matchesAttributes(g.attributes, fields, filter));
+
+      const stats = {};
+      if (field && statistics.length) {
+        const values = matched
+          .map((g) => Number(g.attributes?.[field]))
+          .filter((v) => Number.isFinite(v));
+        if (statistics.includes("sum")) stats.sum = values.reduce((a, b) => a + b, 0);
+        if (statistics.includes("avg")) {
+          stats.avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+        }
+        if (statistics.includes("min")) stats.min = values.length ? Math.min(...values) : null;
+        if (statistics.includes("max")) stats.max = values.length ? Math.max(...values) : null;
+      }
+
+      return { id, name, count: matched.length, stats };
+    }
+
+    if (typeof layer.load === "function") await layer.load();
+    const { fields } = await this.getLayerFieldSchema(id);
+
+    let where = null;
+    try {
+      where = buildWhereClause(fields, this.layerFilters.get(id));
+    } catch {
+      where = null; // stale filter; aggregate the unfiltered layer rather than failing the whole request
+    }
+
+    const count = await layer.queryFeatureCount({ where: where || "1=1" });
+    const stats = {};
+
+    if (field && statistics.length) {
+      const outStatistics = statistics.map((type) => ({
+        statisticType: type,
+        onStatisticField: field,
+        outStatisticFieldName: type
+      }));
+      const result = await layer.queryFeatures({
+        where: where || "1=1",
+        outStatistics,
+        returnGeometry: false
+      });
+      const attrs = result.features?.[0]?.attributes || {};
+      statistics.forEach((type) => {
+        stats[type] = attrs[type] ?? null;
+      });
+    }
+
+    return { id, name, count, stats };
+  }
+
+  // Runs getLayerAggregate over several layers at once and combines them
+  // into a grand total. Layers can have entirely different schemas, so the
+  // caller is expected to only pass a `field` that's meaningful across all
+  // selected layers (the Analysis panel only offers fields the user picked
+  // per-layer); the total's sum/min/max simply combine whatever numeric
+  // stats each layer actually returned, and avg is re-derived from the
+  // combined sum/count rather than averaging the per-layer averages (which
+  // would misweight layers with different feature counts).
+  async runAnalysis(ids, options) {
+    const perLayer = await Promise.all(ids.map((id) => this.getLayerAggregate(id, options)));
+
+    const total = perLayer.reduce(
+      (acc, l) => {
+        acc.count += l.count || 0;
+        if (typeof l.stats.sum === "number") {
+          acc.sum += l.stats.sum;
+          acc.hasSum = true;
+        }
+        if (typeof l.stats.min === "number") {
+          acc.min = acc.min === null ? l.stats.min : Math.min(acc.min, l.stats.min);
+        }
+        if (typeof l.stats.max === "number") {
+          acc.max = acc.max === null ? l.stats.max : Math.max(acc.max, l.stats.max);
+        }
+        return acc;
+      },
+      { count: 0, sum: 0, hasSum: false, min: null, max: null }
+    );
+
+    return {
+      perLayer,
+      total: {
+        count: total.count,
+        sum: total.hasSum ? total.sum : null,
+        avg: total.hasSum && total.count ? total.sum / total.count : null,
+        min: total.min,
+        max: total.max
+      }
+    };
   }
 
   drawRoute(routeGeometry) {
@@ -494,26 +798,34 @@ export default class GISMapEngine {
         id: "touristAttractions",
         name: "Tourist Attractions",
         visible: this.touristAttractionLayer?.visible,
-        styleGroups: touristAttractionSymbol ? [this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions")] : []
+        styleGroups: touristAttractionSymbol ? [this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions")] : [],
+        filterable: true,
+        filterDescription: this.getLayerFilterDescription("touristAttractions")
       },
       heat: { id: "heat", name: "Heatmap", visible: this.heatLayer?.visible },
       mrtStations: {
         id: "mrtStations",
         name: "MRT Stations",
         visible: this.mrtStationLayer?.visible,
-        styleGroups: mrtStationSymbol ? [this.symbolToStyleGroup(mrtStationSymbol, "Stations")] : []
+        styleGroups: mrtStationSymbol ? [this.symbolToStyleGroup(mrtStationSymbol, "Stations")] : [],
+        filterable: true,
+        filterDescription: this.getLayerFilterDescription("mrtStations")
       },
       mrtLines: {
         id: "mrtLines",
         name: "MRT Lines",
         visible: this.mrtLineLayer?.visible,
-        styleGroups: mrtLineSymbol ? [this.symbolToStyleGroup(mrtLineSymbol, "Lines")] : []
+        styleGroups: mrtLineSymbol ? [this.symbolToStyleGroup(mrtLineSymbol, "Lines")] : [],
+        filterable: true,
+        filterDescription: this.getLayerFilterDescription("mrtLines")
       },
       drawings: {
         id: "drawings",
         name: "Drawings",
         visible: this.drawLayer?.visible,
-        styleGroups: drawingsGroups
+        styleGroups: drawingsGroups,
+        filterable: true,
+        filterDescription: this.getLayerFilterDescription("drawings")
       },
       searchResult: { id: "searchResult", name: "Search Result", visible: this.searchLayer?.visible }
     };
@@ -521,14 +833,17 @@ export default class GISMapEngine {
     // Portal-added layers have no fixed slot in `lookup` above since their
     // number and ids are dynamic (one per added portal item). They carry
     // `removable: true` so LayerControlPanel can offer a remove control that
-    // the built-in layers don't get.
+    // the built-in layers don't get, and `filterable: true` for the same
+    // reason as the fixed hosted layers above.
     this.portalLayers.forEach((layer, id) => {
       const meta = this.portalLayerMeta.get(id);
       lookup[id] = {
         id,
         name: meta?.title || "Portal Layer",
         visible: layer.visible,
-        removable: true
+        removable: true,
+        filterable: true,
+        filterDescription: this.getLayerFilterDescription(id)
       };
     });
 
@@ -896,6 +1211,11 @@ export default class GISMapEngine {
 
     const skippedCount = geojson.features.length - graphics.length;
 
+    // Respect any active drawings filter (see setLayerFilter) for newly
+    // uploaded graphics too, so uploading into an already-filtered view
+    // doesn't silently show features the user just asked to hide.
+    graphics.forEach((g) => this.applyDrawingsFilterToGraphic(g));
+
     this.drawLayer.addMany(graphics);
 
     this.uploadedLayers.push({
@@ -999,10 +1319,10 @@ export default class GISMapEngine {
   }
 
   // Returns up to 10 matches per layer across Tourist Attractions, MRT
-  // Stations, MRT Lines, and Drawings. Address geocoding is handled by
-  // ApplicationShell (via GeocodingService) rather than here, consistent
-  // with the existing rule that stateless services are called from the
-  // shell, not from the engine.
+  // Stations, MRT Lines, Drawings, and any portal-added layers. Address
+  // geocoding is handled by ApplicationShell (via GeocodingService) rather
+  // than here, consistent with the existing rule that stateless services
+  // are called from the shell, not from the engine.
   async searchFeatures(query) {
     const text = query?.trim();
     if (!text) return [];
@@ -1010,7 +1330,12 @@ export default class GISMapEngine {
     const hostedTargets = [
       { id: "touristAttractions", layer: this.touristAttractionLayer, title: "Tourist Attractions" },
       { id: "mrtStations", layer: this.mrtStationLayer, title: "MRT Stations" },
-      { id: "mrtLines", layer: this.mrtLineLayer, title: "MRT Lines" }
+      { id: "mrtLines", layer: this.mrtLineLayer, title: "MRT Lines" },
+      ...Array.from(this.portalLayers, ([id, layer]) => ({
+        id,
+        layer,
+        title: this.portalLayerMeta.get(id)?.title || layer.title || "Portal Layer"
+      }))
     ];
 
     const hostedResults = await Promise.all(

@@ -1,20 +1,31 @@
 # Run with:
 #
+#   docker compose up --build
+#
+# Compose interpolates the build args below from a .env sitting next to this
+# compose file (repo root). That root .env is an UNTRACKED COPY of
+# my-arcgis-app/.env (the file Vite actually reads) - it exists only because
+# Compose has no way, from inside this YAML, to be pointed at another file for
+# interpolation. If you change VITE_ARCGIS_API_KEY, update
+# my-arcgis-app/.env first, then re-copy it here:
+#
+#   cp my-arcgis-app/.env .env
+#
+# A stale root .env fails silently (old key, no error) rather than loudly, so
+# don't skip that step. To avoid the sync step entirely, read the real file
+# directly instead:
+#
 #   docker compose --env-file my-arcgis-app/.env up --build
 #
-# Compose interpolates the build args below from its *own* env file, which by
-# default is a .env sitting next to this compose file. There deliberately isn't
-# one: the repo-root .env used to be that source, but it duplicated the API key
-# that already lives in my-arcgis-app/.env (the only file Vite reads) and it had
-# been committed to git with a real key. Pointing --env-file at the app's own
-# .env keeps exactly one copy of the secret, untracked.
+# The repo-root .env must never be git-tracked - it used to be, with a real
+# key committed, before history was rewritten to purge it. See
+# knowledge/deployment.md for the full postmortem.
 #
 # The ":?" on each variable makes a missing value abort the build. Without it,
 # Compose substitutes an empty string and emits only a warning, so the image
 # builds "successfully" with no API key baked in - and the failure surfaces much
 # later, at runtime, as subscription content returning 499 and the ArcGIS SDK
-# popping a sign-in dialog. That silent mode is what made a deleted .env look
-# like the app had started demanding a login.
+# popping a sign-in dialog.
 services:
   arcgis-app:
     build:

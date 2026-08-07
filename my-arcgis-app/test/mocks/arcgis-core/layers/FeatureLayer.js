@@ -14,6 +14,10 @@ class FeatureLayer {
     this.refresh = jest.fn().mockResolvedValue(undefined);
     this.fullExtent = props.fullExtent ?? { xmin: 0, ymin: 0, xmax: 1, ymax: 1 };
     this.load = jest.fn().mockResolvedValue(undefined);
+    this.fields = props.fields ?? [];
+    this.definitionExpression = props.definitionExpression ?? null;
+    this.queryFeatures = jest.fn().mockResolvedValue({ features: [] });
+    this.queryFeatureCount = jest.fn().mockResolvedValue(0);
   }
 }
 

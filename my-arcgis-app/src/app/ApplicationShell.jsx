@@ -5,6 +5,7 @@ import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
+import AnalysisPanel from "../components/AnalysisPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
@@ -180,6 +181,43 @@ export default function ApplicationShell() {
   const updateLayerStyle = (id, style) => {
     engineRef.current.setLayerStyle(id, style);
     refreshLayers();
+  };
+
+  // Filter & Aggregate: schema lookups are read-only (no toast needed on
+  // failure - AnalysisPanel just gets an empty field list); apply/clear
+  // mutate engine state that getLayers() surfaces (filterDescription), so
+  // both refresh the layer list the same way every other layer mutation
+  // does. setLayerFilter throws on an invalid condition (bad field/operator/
+  // value), consistent with updateSelectedFeatureAttributes/addColumnToLayer/
+  // addPortalLayer's throw-and-let-the-shell-toast convention.
+  const getLayerFields = (id) => engineRef.current.getLayerFieldSchema(id);
+
+  const applyLayerFilter = async (id, filter) => {
+    try {
+      const result = await engineRef.current.setLayerFilter(id, filter);
+      refreshLayers();
+      const layerName = engineRef.current.getLayers().find((l) => l?.id === id)?.name || id;
+      showToast(
+        result.active ? `Filter applied to "${layerName}".` : `Filter cleared for "${layerName}".`,
+        "success"
+      );
+    } catch (err) {
+      showToast(err.message || "Invalid filter.", "error");
+    }
+  };
+
+  const clearLayerFilter = (id) => {
+    engineRef.current.clearLayerFilter(id);
+    refreshLayers();
+  };
+
+  const runAnalysis = async (ids, options) => {
+    try {
+      return await engineRef.current.runAnalysis(ids, options);
+    } catch (err) {
+      showToast(err.message || "Analysis failed.", "error");
+      return null;
+    }
   };
 
   // Portal layer search itself is a stateless service call (consistent with
@@ -383,6 +421,14 @@ export default function ApplicationShell() {
           onRemove={removePortalLayer}
           heatIntensity={heatIntensity}
           updateIntensity={updateIntensity}
+        />
+
+        <AnalysisPanel
+          layers={layers}
+          onGetLayerFields={getLayerFields}
+          onApplyFilter={applyLayerFilter}
+          onClearFilter={clearLayerFilter}
+          onRunAnalysis={runAnalysis}
         />
       </div>
 

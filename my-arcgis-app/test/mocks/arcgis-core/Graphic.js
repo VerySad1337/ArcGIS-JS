@@ -6,6 +6,7 @@ class Graphic {
     this.attributes = props.attributes ?? {};
     this.symbol = makeSymbol(props.symbol);
     this.layer = null;
+    this.visible = props.visible ?? true;
   }
 }
 

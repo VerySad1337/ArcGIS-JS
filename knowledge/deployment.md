@@ -12,20 +12,22 @@
 - `VITE_ARCGIS_API_KEY` is passed as a Docker build `ARG` and baked into the static bundle at build time (Vite inlines `VITE_*` env vars at build, not runtime). It must be supplied via `--build-arg` (or a build-time `.env` consumed by Vite) — it is **not** read from the container at runtime.
 - Do not commit real API keys in a tracked `.env` file. See Repository Access Rules below.
 
-**There is exactly one `.env`, and it belongs to Vite, not to the repo root.**
+**There are two `.env` files, both untracked, and they must be kept in sync by hand.**
 
 | File | Read by | Purpose |
 | --- | --- | --- |
-| `my-arcgis-app/.env` | **Vite** (`npm run dev`, `npm run build`) | The app's only config file: `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, `VITE_ARCGIS_PORTAL_URL`. Vite loads `.env` from **its own project root only** — it does not read a parent directory's `.env`. Untracked, and must stay that way. |
-| `.env` (repo root) | — | **Removed.** It duplicated only `VITE_ARCGIS_API_KEY`, was invisible to Vite, and was git-tracked with a real key. See *Known issue* below. |
+| `my-arcgis-app/.env` | **Vite** (`npm run dev`, `npm run build`) | The app's real config file: `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, `VITE_ARCGIS_PORTAL_URL`. Vite loads `.env` from **its own project root only** — it does not read a parent directory's `.env`. This is the source of truth; edit the key here first. |
+| `.env` (repo root) | **Docker Compose** (`docker compose up --build`, with no `--env-file` flag) | A copy of `my-arcgis-app/.env`, kept only so plain `docker compose up --build` works without extra flags — Compose auto-loads a `.env` sitting next to `docker-compose.yml` for build-arg interpolation and has no way to be pointed elsewhere from inside the YAML itself. |
 
-Consequences of that removal:
-- `npm run dev`, `npm test`, `npm run build`, and `docker build --build-arg VITE_ARCGIS_API_KEY=<key> .` are all unaffected — none of them ever read the root `.env`.
-- **`docker compose` must now be pointed at the app's `.env` explicitly:**
-  ```
-  docker compose --env-file my-arcgis-app/.env up --build
-  ```
-  Compose interpolates build args from *its own* env file, which defaults to a `.env` beside `docker-compose.yml`. `--env-file` redirects that to the one file Vite already reads, so the secret exists in exactly one untracked place.
+A root `.env` was previously removed entirely (see *Postmortem* below) because it had been git-tracked with a real key. It has since been reintroduced, but **only as an untracked copy** — `.gitignore` line 1 covers it, and it must never be `git add`ed. A symlink (`ln -s my-arcgis-app/.env .env`) was tried first, to make this a true single source of truth with no sync step, but failed silently on this checkout's filesystem/Windows privileges and fell back to a plain file copy — verify with `ls -la .env` (a symlink shows `l...` and a small size; a copy shows a regular file the same size as `my-arcgis-app/.env`) if this is retried elsewhere.
+
+**Consequence: after changing `VITE_ARCGIS_API_KEY` (or any other var) in `my-arcgis-app/.env`, re-copy it to the root before the next `docker compose up --build`:**
+```
+cp my-arcgis-app/.env .env
+```
+Forgetting this step does **not** fail loudly — Compose will happily build with the *old* key from the stale root copy, which is exactly the kind of misleading failure mode described in the Postmortem below (a key mismatch surfaces later as portal/subscription 499s, not as a build error).
+
+If you'd rather not maintain two files by hand, `docker compose --env-file my-arcgis-app/.env up --build` still works and reads directly from the single real file — see *Build & run* below.
 
 ### Postmortem: deleting the root `.env` silently broke the deployed app
 
@@ -56,9 +58,12 @@ Two lessons encoded in the current setup:
 docker build --build-arg VITE_ARCGIS_API_KEY=<key> -t arcgis-app .
 docker run -p 8080:80 arcgis-app
 
-# Compose — reads VITE_ARCGIS_API_KEY from the ambient environment
-export VITE_ARCGIS_API_KEY=<key>
+# Compose — reads the root .env automatically (must be kept in sync
+# with my-arcgis-app/.env by hand; see table above)
 docker compose up --build
+
+# Compose — or skip the root .env/sync step and read the real file directly
+docker compose --env-file my-arcgis-app/.env up --build
 ```
 
 **Known gap:** the Docker build does not run the test suite (`npm test`) or lint (`npm run lint`) before `vite build` — a broken component can still produce a "successful" image. If build-time gating is desired, add a `RUN npm test` step (and copy test config/fixtures) before `RUN npm run build`, or run tests in CI ahead of the Docker build.

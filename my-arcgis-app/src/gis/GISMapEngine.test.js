@@ -737,7 +737,14 @@ describe("GISMapEngine portal layers", () => {
     const id = await engine.addPortalLayer(portalItem);
 
     const entry = engine.getLayers().find((l) => l.id === id);
-    expect(entry).toEqual({ id, name: "Parks", visible: true, removable: true });
+    expect(entry).toEqual({
+      id,
+      name: "Parks",
+      visible: true,
+      removable: true,
+      filterable: true,
+      filterDescription: null
+    });
 
     const view2 = makeView();
     engine.attachToView(view2);
@@ -1269,5 +1276,278 @@ describe("GISMapEngine.addColumnToLayer", () => {
 
     IdentityManager.findCredential.mockReset();
     IdentityManager.findCredential.mockReturnValue(undefined);
+  });
+});
+
+describe("GISMapEngine Filter & Aggregate System", () => {
+  let engine;
+
+  beforeEach(() => {
+    engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.fields = [
+      { name: "NAME", type: "esriFieldTypeString" },
+      { name: "RATING", type: "esriFieldTypeDouble" }
+    ];
+  });
+
+  describe("getFilterableLayers / filterableLayerIds", () => {
+    test("excludes route/stops/heat/searchResult and includes the hosted + drawings layers", () => {
+      const ids = engine.getFilterableLayers().map((l) => l.id);
+      expect(ids).toEqual(["touristAttractions", "mrtStations", "mrtLines", "drawings"]);
+    });
+
+    test("includes portal-added layers once they exist", async () => {
+      await engine.addPortalLayer({ id: "abc", title: "Extra Layer", url: "https://example.com/0" });
+      const ids = engine.getFilterableLayers().map((l) => l.id);
+      expect(ids).toContain("portal_abc");
+    });
+  });
+
+  describe("getLayerFieldSchema", () => {
+    test("loads and normalizes a hosted FeatureLayer's fields", async () => {
+      const { fields } = await engine.getLayerFieldSchema("touristAttractions");
+      expect(engine.touristAttractionLayer.load).toHaveBeenCalled();
+      expect(fields).toEqual([
+        { name: "NAME", kind: "string" },
+        { name: "RATING", kind: "number" }
+      ]);
+    });
+
+    test("returns an empty field list for an unknown layer id", async () => {
+      expect(await engine.getLayerFieldSchema("unknown")).toEqual({ fields: [] });
+    });
+
+    test("derives the drawings schema from drawingFields plus attributes found on graphics", async () => {
+      engine.drawingFields = [{ name: "label", type: "esriFieldTypeString" }];
+      engine.drawLayer.add({ symbol: { type: "simple-marker" }, attributes: { label: "a", count: 3 } });
+
+      const { fields } = await engine.getLayerFieldSchema("drawings");
+      expect(fields).toEqual(
+        expect.arrayContaining([
+          { name: "label", kind: "string" },
+          { name: "count", kind: "number" }
+        ])
+      );
+    });
+  });
+
+  describe("setLayerFilter / clearLayerFilter on a hosted FeatureLayer", () => {
+    test("sets definitionExpression and reports the filter as active", async () => {
+      const result = await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }],
+        logic: "AND"
+      });
+
+      expect(result).toEqual({ active: true, description: "RATING at least 4" });
+      expect(engine.touristAttractionLayer.definitionExpression).toBe("(RATING >= 4)");
+      expect(engine.getLayerFilterDescription("touristAttractions")).toBe("RATING at least 4");
+    });
+
+    test("an empty/unusable filter clears definitionExpression instead of throwing", async () => {
+      await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+      const result = await engine.setLayerFilter("touristAttractions", { conditions: [] });
+
+      expect(result).toEqual({ active: false, description: "" });
+      expect(engine.touristAttractionLayer.definitionExpression).toBeNull();
+      expect(engine.getLayerFilterDescription("touristAttractions")).toBeNull();
+    });
+
+    test("throws and does not store the filter when a condition is invalid", async () => {
+      await expect(
+        engine.setLayerFilter("touristAttractions", {
+          conditions: [{ field: "RATING", operator: "=", value: "not-a-number" }]
+        })
+      ).rejects.toThrow(/not a valid number/);
+      expect(engine.touristAttractionLayer.definitionExpression).toBeNull();
+      expect(engine.getLayerFilterDescription("touristAttractions")).toBeNull();
+    });
+
+    test("clearLayerFilter removes an active filter", async () => {
+      await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+      engine.clearLayerFilter("touristAttractions");
+
+      expect(engine.touristAttractionLayer.definitionExpression).toBeNull();
+      expect(engine.getLayerFilterDescription("touristAttractions")).toBeNull();
+    });
+  });
+
+  describe("setLayerFilter / clearLayerFilter on drawings", () => {
+    test("hides graphics that don't match and shows those that do", async () => {
+      const a = { symbol: { type: "simple-marker" }, attributes: { RATING: 5 } };
+      const b = { symbol: { type: "simple-marker" }, attributes: { RATING: 1 } };
+      engine.drawLayer.add(a);
+      engine.drawLayer.add(b);
+
+      await engine.setLayerFilter("drawings", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+
+      expect(a.visible).toBe(true);
+      expect(b.visible).toBe(false);
+    });
+
+    test("clearing the drawings filter makes every graphic visible again", async () => {
+      const a = { symbol: { type: "simple-marker" }, attributes: { RATING: 1 } };
+      engine.drawLayer.add(a);
+      await engine.setLayerFilter("drawings", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+      expect(a.visible).toBe(false);
+
+      engine.clearLayerFilter("drawings");
+      expect(a.visible).toBe(true);
+    });
+
+    test("a newly completed sketch is filtered against the active drawings filter", async () => {
+      engine.drawingFields = [{ name: "RATING", type: "esriFieldTypeDouble" }];
+      await engine.setLayerFilter("drawings", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+
+      const lowRatedGraphic = { attributes: undefined };
+      engine.sketchVM.emit("create", { state: "complete", graphic: lowRatedGraphic });
+      expect(lowRatedGraphic.visible).toBe(false);
+    });
+  });
+
+  describe("reapplyPersistedFilters", () => {
+    test("reapplies a hosted layer's filter to the freshly rebuilt FeatureLayer after a reattachment", async () => {
+      await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+
+      const view2 = makeView();
+      engine.attachToView(view2);
+      engine.touristAttractionLayer.fields = [
+        { name: "NAME", type: "esriFieldTypeString" },
+        { name: "RATING", type: "esriFieldTypeDouble" }
+      ];
+
+      // reapplyPersistedFilters is fire-and-forget (see attachToView) - flush
+      // the microtask queue so its promise chain has settled.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(engine.touristAttractionLayer.definitionExpression).toBe("(RATING >= 4)");
+    });
+
+    test("drops a filter that no longer validates against the reloaded schema", async () => {
+      await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+
+      const view2 = makeView();
+      engine.attachToView(view2);
+      // Simulate a schema that no longer has RATING.
+      engine.touristAttractionLayer.fields = [{ name: "NAME", type: "esriFieldTypeString" }];
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(engine.layerFilters.has("touristAttractions")).toBe(false);
+    });
+  });
+
+  describe("getLayerAggregate", () => {
+    test("aggregates a hosted layer via queryFeatureCount/queryFeatures, respecting the active filter", async () => {
+      engine.touristAttractionLayer.definitionExpression = null;
+      await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+      engine.touristAttractionLayer.queryFeatureCount.mockResolvedValue(12);
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { sum: 48, avg: 4.2 } }]
+      });
+
+      const result = await engine.getLayerAggregate("touristAttractions", {
+        field: "RATING",
+        statistics: ["sum", "avg"]
+      });
+
+      expect(engine.touristAttractionLayer.queryFeatureCount).toHaveBeenCalledWith({
+        where: "(RATING >= 4)"
+      });
+      expect(engine.touristAttractionLayer.queryFeatures).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: "(RATING >= 4)",
+          outStatistics: [
+            { statisticType: "sum", onStatisticField: "RATING", outStatisticFieldName: "sum" },
+            { statisticType: "avg", onStatisticField: "RATING", outStatisticFieldName: "avg" }
+          ]
+        })
+      );
+      expect(result).toEqual({
+        id: "touristAttractions",
+        name: "Tourist Attractions",
+        count: 12,
+        stats: { sum: 48, avg: 4.2 }
+      });
+    });
+
+    test("aggregates only a count when no field/statistics are given", async () => {
+      engine.touristAttractionLayer.queryFeatureCount.mockResolvedValue(5);
+      const result = await engine.getLayerAggregate("touristAttractions", {});
+      expect(result).toEqual({ id: "touristAttractions", name: "Tourist Attractions", count: 5, stats: {} });
+      expect(engine.touristAttractionLayer.queryFeatures).not.toHaveBeenCalled();
+    });
+
+    test("aggregates the drawings layer client-side over graphics matching the active filter", async () => {
+      engine.drawLayer.add({ symbol: { type: "simple-marker" }, attributes: { RATING: 5 } });
+      engine.drawLayer.add({ symbol: { type: "simple-marker" }, attributes: { RATING: 2 } });
+      engine.drawLayer.add({ symbol: { type: "simple-marker" }, attributes: { RATING: 4 } });
+
+      await engine.setLayerFilter("drawings", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }]
+      });
+
+      const result = await engine.getLayerAggregate("drawings", {
+        field: "RATING",
+        statistics: ["sum", "avg", "min", "max"]
+      });
+
+      expect(result).toEqual({
+        id: "drawings",
+        name: "Drawings",
+        count: 2,
+        stats: { sum: 9, avg: 4.5, min: 4, max: 5 }
+      });
+    });
+
+    test("returns a zeroed result for an unknown layer id instead of throwing", async () => {
+      await expect(engine.getLayerAggregate("unknown")).resolves.toEqual({
+        id: "unknown",
+        name: "unknown",
+        count: 0,
+        stats: {}
+      });
+    });
+  });
+
+  describe("runAnalysis", () => {
+    test("combines per-layer aggregates into a grand total", async () => {
+      engine.touristAttractionLayer.queryFeatureCount.mockResolvedValue(10);
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { sum: 40 } }]
+      });
+      engine.drawLayer.add({ symbol: { type: "simple-marker" }, attributes: { RATING: 5 } });
+      engine.drawLayer.add({ symbol: { type: "simple-marker" }, attributes: { RATING: 3 } });
+
+      const { perLayer, total } = await engine.runAnalysis(["touristAttractions", "drawings"], {
+        field: "RATING",
+        statistics: ["sum"]
+      });
+
+      expect(perLayer.map((l) => l.id)).toEqual(["touristAttractions", "drawings"]);
+      expect(total.count).toBe(12);
+      expect(total.sum).toBe(48);
+      expect(total.avg).toBe(4);
+    });
   });
 });
