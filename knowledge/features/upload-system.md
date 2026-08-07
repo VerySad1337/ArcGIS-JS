@@ -12,11 +12,16 @@
   ┌───────────────────────┬────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────┐
   │       Component       │      Core Responsibility       │                                   Key Functions                                    │
   ├───────────────────────┼────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┤
-  │ FloatingDrawTools.jsx │ UI entry point for file        │ • Renders a hidden <input type="file"> that accepts .geojson,.json. <br> •         │
-  │                       │ uploads.                       │ handleFileUpload extracts the File object and calls the prop uploadGeoJSON(file).  │
+  │ FloatingDrawTools.jsx │ UI entry point for file        │ • Renders a hidden <input type="file"> that accepts .geojson,.json, clicked        │
+  │                       │ uploads.                       │ programmatically by the "Upload GeoJSON" FAB item via uploadInputRef. <br> •       │
+  │                       │                                │ handleFileUpload extracts the File object, calls the prop uploadGeoJSON(file),     │
+  │                       │                                │ then clears target.value so re-selecting the SAME file still fires a change        │
+  │                       │                                │ event, and closes the FAB fan.                                                    │
   ├───────────────────────┼────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┤
-  │ ApplicationShell.jsx  │ Glue layer that connects UI to │ • Declares uploadGeoJSON async wrapper that logs the file name, calls              │
-  │                       │  the engine.                   │ engineRef.current.uploadGeoJSON(file), then refreshes the layer list.              │
+  │ ApplicationShell.jsx  │ Glue layer that connects UI to │ • Declares uploadGeoJSON async wrapper that marks hasInteracted (dismissing the     │
+  │                       │  the engine.                   │ first-run hint), logs the file name, calls engineRef.current.uploadGeoJSON(file,   │
+  │                       │                                │ showToast) — passing its toast function as the msg callback — then refreshes the   │
+  │                       │                                │ layer list so the Drawings row picks up new style groups.                         │
   ├───────────────────────┼────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┤
   │                       │ Core business logic for        │ • uploadGeoJSON(file, msg?) – main implementation (see details below). <br> •      │
   │ GISMapEngine.js       │ parsing, validating, and       │ Holds the permanent drawings GraphicsLayer (drawLayer). <br> • Tracks uploaded     │
@@ -50,8 +55,16 @@
 
     e. Layer insertion – this.drawLayer.addMany(graphics) adds all created graphics to the persistent Drawings GraphicsLayer.
     f. Tracking – pushes an entry into this.uploadedLayers containing a generated id, the original filename, and a reference to the drawLayer.
-    g. View navigation – calls await this.currentView.goTo(this.drawLayer) to zoom/pan the map to the newly added graphics.
-    h. Error handling – any exception is logged to the console (console.error("Upload failed:", err)).
+    g. View navigation – calls await this.currentView.goTo(graphics) to zoom/pan the map to the newly added graphics. Note this targets the graphics
+  array, not the layer: a bare GraphicsLayer is not a valid goTo target (the SDK's GoToTarget2D/3D union accepts Geometry/Graphic/Viewpoint only), so
+  the earlier goTo(this.drawLayer) silently rejected and never moved the camera. Same bug, same fix as zoomToLayer — see knowledge/index.md's
+  "Zoom to layer" notes.
+    h. Success feedback – calls msg?.(`Uploaded N feature(s) from "<filename>".`, "success"), appending ` (K unsupported feature(s) skipped)` when
+  K > 0, so a partially-supported file reports what was dropped rather than appearing to have imported cleanly.
+    i. Error handling – any exception is logged to the console (console.error("Upload failed:", err)) AND surfaced to the user as an error toast:
+  msg?.("Upload failed: the file could not be read as valid GeoJSON.", "error"). Because the whole body is inside one try/catch, this single message
+  covers every failure mode (unreadable file, malformed JSON, a features array that isn't one) — the console entry is where the specific cause is
+  distinguished.
 
   ---
   3. Drawings Layer Integration
@@ -81,9 +94,9 @@
   │ drawings      │ if (this.drawLayer?.graphics?.length > 0)                                 │ and refresh the page before uploading"); and   │
   │               │                                                                           │ aborts upload.                                 │
   ├───────────────┼───────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
-  │               │                                                                           │ If malformed, error is caught and logged       │
-  │ JSON parse    │ JSON.parse(await file.text()) (wrapped in try…catch)                      │ (console.error). No user‑visible message is    │
-  │               │                                                                           │ provided (could be enhanced).                  │
+  │               │                                                                           │ Error is caught, logged (console.error), and   │
+  │ JSON parse    │ JSON.parse(await file.text()) (wrapped in try…catch)                      │ reported as an error toast: "Upload failed:    │
+  │               │                                                                           │ the file could not be read as valid GeoJSON."  │
   ├───────────────┼───────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
   │ Geometry type │ Handles only "Point", "LineString", "Polygon"; any other type is skipped  │ Feature is dropped; msg callback reports how   │
   │  support      │ (feature.geometry stays unconvertible, so the graphic is never created).  │  many feature(s) were skipped, upload proceeds │
@@ -109,17 +122,22 @@
   5. Limitations & Risks
 
   1. No CRS conversion – The system assumes incoming coordinates are already in Web Mercator (EPSG:3857). Uploading GeoJSON in another projection
-  will place features in the wrong location.
-  2. Partial validation – Only a small subset of errors is surfaced to the user (unsaved drawings). JSON parse errors are logged to console but not
-  reported in‑UI, making debugging difficult for non‑technical users.
-  3. Geometry type restriction – Multi‑part geometries (e.g., MultiPolygon, MultiLineString) are not recognized and are skipped (reported via the
-  msg callback), not converted.
+  will place features in the wrong location. This is the most likely cause of a "successful" upload whose features land in the wrong place, and it
+  is not detected or reported — the success toast still fires.
+  2. Coarse error reporting – Every failure inside the try block collapses to one generic toast ("the file could not be read as valid GeoJSON"),
+  regardless of whether the file was unreadable, the JSON was malformed, or `geojson.features` was absent/not an array. The specific cause appears
+  only in the browser console. There is no per-feature validation: a feature whose `geometry` key is missing entirely throws (reading `.type` of
+  undefined) and aborts the whole upload, rather than being skipped the way an unsupported-but-present geometry type is.
+  3. Geometry type restriction – Multi‑part geometries (e.g., MultiPolygon, MultiLineString) are not recognized and are skipped (counted, and
+  reported in the success toast), not converted.
   4. Overwrite guard – The upload is blocked if any graphics exist in the draw layer, even if they are unrelated to the incoming file. Users must
-  explicitly save or clear existing drawings first, which could be inconvenient.
+  explicitly save or clear existing drawings first, which could be inconvenient. The guard's message tells the user to refresh the page, because
+  there is no "clear drawings" control in the UI.
   5. No deduplication – Uploaded graphics are appended directly; duplicate features from repeated uploads are not filtered.
   6. No undo / versioning – Once uploaded, graphics are part of the permanent drawLayer until the user manually clears them or saves the map.
   There's no transaction rollback if something goes wrong mid‑upload.
-  7. Error visibility – All unexpected errors go to the browser console; end‑users receive no feedback, potentially leading to silent failures.
+  7. Unsanitised input – the parsed file's structure is trusted beyond the geometry-type check; coordinate values are not validated for type or
+  range before being handed to the ArcGIS geometry constructors.
   8. Potential performance impact – Large GeoJSON files (thousands of features) are processed synchronously on the main thread; this could freeze
   the UI. No streaming or chunked handling is implemented.
 
@@ -140,4 +158,6 @@
      │     • Create Graphic
      └─ Add all Graphics to drawLayer
           → Record in uploadedLayers
-          → Zoom view to drawLayer
+          → Zoom view to the uploaded graphics array
+          → Success toast (with skipped-feature count, if any)
+        (any throw → console.error + generic error toast)

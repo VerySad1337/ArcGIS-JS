@@ -64,8 +64,12 @@ Only analyze files referenced by:
 
 * `knowledge/index.md`
 * `knowledge/architecture.md`
-* `knowledge/drawing-system.md`
-* `knowledge/upload-system.md`
+* `knowledge/features/drawing-system.md`
+* `knowledge/features/upload-system.md`
+* `knowledge/features/feature-attributes.md`
+* `knowledge/features/responsive-layout.md`
+* `knowledge/features/ui-feedback.md`
+* `knowledge/deployment.md`
 
 Do not inspect unrelated files unless:
 
@@ -123,7 +127,7 @@ All architectural recommendations must align with documented architecture.
 
 Primary reference:
 
-`knowledge/drawing-system.md`
+`knowledge/features/drawing-system.md`
 
 Relevant implementation:
 
@@ -153,7 +157,7 @@ Do not introduce alternative drawing workflows unless explicitly requested.
 
 Primary reference:
 
-`knowledge/upload-system.md`
+`knowledge/features/upload-system.md`
 
 Relevant implementation:
 

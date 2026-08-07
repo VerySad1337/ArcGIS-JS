@@ -43,8 +43,9 @@ Heatmap enable/disable and intensity live solely in `LayerControlPanel`'s "Heatm
   - `disableHeatmap`
   - `updateHeatmapIntensity`
   - Heatmap renderer configuration (`type: "heatmap"`, `colorStops`, `radius`, `maxPixelIntensity`)
-- `src/hooks/useHeatmapAnalysis.js` – Hook exposing heatmap state for UI components.
-- `src/app/ApplicationShell.jsx` – UI controls that forward heatmap actions to the engine.
+- `src/app/ApplicationShell.jsx` – `heatOn`/`heatIntensity` state and the `toggleHeatmap`/`updateIntensity` handlers that forward heatmap actions to the engine. This is the only live heatmap state in the app.
+
+**Not in use:** `src/hooks/useHeatmapAnalysis.js` exports a `useHeatmapAnalysis` hook exposing `heatmapEnabled`/`toggleHeatmap`, but **no application code imports it** — only its own test file does. The shell hand-rolls the equivalent state inline. It is dead code, kept here as a documented fact rather than a recommended entry point; see Dead Code below.
 
 ## MRT Layer System
 
@@ -62,7 +63,7 @@ Heatmap enable/disable and intensity live solely in `LayerControlPanel`'s "Heatm
 **Purpose:** Lets the user change a layer's color and border (outline) thickness directly from the layer panel.
 
 **Key Files:**
-- `src/components/LayerControlPanel.jsx` – Layer panel UI. Renders the layer list, visibility toggle, drag-to-reorder, heat intensity slider, and — for stylable layers — a per-layer chevron toggle (collapsed by default) that reveals one style-control block per `styleGroups` entry: a color `<input type="color">` and a border-width `<input type="number">` always, plus a border-color `<input type="color">` when that group's `symbolType` is `simple-fill`. Each control calls `onStyleChange(id, { ...change, symbolType })`.
+- `src/components/LayerControlPanel.jsx` – Layer panel UI. Renders the layer list, visibility toggle, zoom-to-layer, remove (portal layers only), reordering, heat intensity slider, and — for stylable layers — a per-layer chevron toggle (collapsed by default) that reveals one style-control block per `styleGroups` entry: a color `<input type="color">` and a border-width `<input type="number">` always, plus a border-color `<input type="color">` when that group's `symbolType` is `simple-fill`. Each control calls `onStyleChange(id, { ...change, symbolType })`. Reordering has three equivalent input paths — drag-and-drop, per-row Move up/Move down buttons, and `ArrowUp`/`ArrowDown` on the focused drag handle — all converging on `onReorder(from, to)`; the shell mirrors each move into an `aria-live` announcement (see `knowledge/features/ui-feedback.md`).
 - `src/gis/GISMapEngine.js`
   - `setLayerStyle(id, { color, borderWidth, outlineColor, symbolType })` – clones the target symbol(s), applies color/border-width/outline-color, and reassigns, following the same clone-then-reassign pattern as `updateHeatmapIntensity`. For the FeatureLayer-backed layers (`touristAttractions`/`mrtStations`/`mrtLines`) the mutated renderer is also written back onto a persisted engine field (`touristAttractionRenderer`/`mrtStationRenderer`/`mrtLineRenderer`) so styling survives an `attachToView` rebuild (2D/3D switch) instead of resetting to construction defaults.
   - `getLayers()` – returns a `styleGroups` array (via `symbolToStyleGroup`) per stylable layer instead of flat `color`/`borderWidth` fields.
@@ -71,8 +72,8 @@ Heatmap enable/disable and intensity live solely in `LayerControlPanel`'s "Heatm
 **Zoom to layer:** Every row in `LayerControlPanel` has a "Zoom to <layer>" button (magnifier icon) that calls `onZoomToLayer(layer.id)` → `ApplicationShell.zoomToLayer` → `engine.zoomToLayer(id, showToast)`, then `refreshLayers()` once the engine call settles. `GISMapEngine.zoomToLayer` resolves the id to the same layer instance `toggleLayer`/`reorderLayers` use.
 
 Two things a naive `view.goTo(layer)` gets wrong, both fixed here:
-- **A bare `Layer` is not a valid `goTo` target.** The ArcGIS SDK's `GoToTarget2D`/`GoToTarget3D` union (`views/types.d.ts`) only accepts `Geometry | Geometry[] | Graphic | Graphic[] | Viewpoint | number[]` — never a `Layer` instance. Passing one silently rejects. So `zoomToLayer` targets `layer.graphics.toArray()` for the `GraphicsLayer`-backed layers (`route`, `stops`, `drawings` — checked non-empty first, else an error toast "Nothing to zoom to on this layer yet.") and `layer.fullExtent` (after `load()`, since it's only populated once loading completes) for the `FeatureLayer`-backed layers (`touristAttractions`, `heat`, `mrtStations`, `mrtLines`). `uploadGeoJSON`'s pan-to-upload step had the same bug (`goTo(this.drawLayer)`) and was fixed the same way (`goTo(graphics)`).
-- **A hidden layer looks like the button did nothing.** If the target layer is currently toggled hidden, `zoomToLayer` reveals it first (setting both `layer.visible` and the matching engine visibility field, e.g. `mrtStationVisible`, so the reveal survives a 2D/3D reattachment), and `ApplicationShell`'s trailing `refreshLayers()` call updates the panel's eye icon to match.
+- **A bare `Layer` is not a valid `goTo` target.** The ArcGIS SDK's `GoToTarget2D`/`GoToTarget3D` union (`views/types.d.ts`) only accepts `Geometry | Geometry[] | Graphic | Graphic[] | Viewpoint | number[]` — never a `Layer` instance. Passing one silently rejects. So `zoomToLayer` targets `layer.graphics.toArray()` for the `GraphicsLayer`-backed layers (`route`, `stops`, `drawings`, `searchResult` — checked non-empty first, else an error toast "Nothing to zoom to on this layer yet.") and `layer.fullExtent` (after `load()`, since it's only populated once loading completes) for the `FeatureLayer`-backed layers (`touristAttractions`, `heat`, `mrtStations`, `mrtLines`, and every portal-added layer). The branch is taken on the presence of `layer.graphics`, not on a hardcoded id list, which is why portal layers — whose ids are only known at runtime — get correct behavior without being enumerated anywhere. `uploadGeoJSON`'s pan-to-upload step had the same bug (`goTo(this.drawLayer)`) and was fixed the same way (`goTo(graphics)`).
+- **A hidden layer looks like the button did nothing.** If the target layer is currently toggled hidden, `zoomToLayer` reveals it first (setting both `layer.visible` and the matching engine visibility field — `routeVisible`/`touristAttractionVisible`/`heatVisible`/`mrtStationVisible`/`mrtLineVisible`/`searchVisible`, or `portalLayerMeta.visible` for a portal layer — so the reveal survives a 2D/3D reattachment), and `ApplicationShell`'s trailing `refreshLayers()` call updates the panel's eye icon to match.
 
 Both fixes are load-bearing together: a hidden-but-hittable layer still needs a *valid* `goTo` target once revealed, or it still wouldn't zoom. The mocked `FeatureLayer`/`SketchViewModel` test doubles under `test/mocks/arcgis-core/` were extended (`fullExtent`, `load`, `cancel`, `destroy`) to keep exercising the real method calls instead of masking them.
 
@@ -81,6 +82,10 @@ Both fixes are load-bearing together: a hidden-but-hittable layer still needs a 
 **Deliberately excluded:**
 - `stops` – start/end markers are intentionally green/red; a shared layer color would erase that distinction.
 - `heat` – already has a dedicated intensity control; its color comes from `colorStops`, not a single swatch.
+- `searchResult` – transient, single-marker, engine-owned styling; it is replaced on every address search.
+- Portal layers – added at runtime with a service-supplied renderer of unknown shape, so there is no single symbol to expose. Their rows get a remove control instead.
+
+Layers with no style groups still render a row (with the chevron hidden via `visibility: hidden`, preserving the row's column alignment).
 
 **Style groups:** `getLayers()` exposes styling as a `styleGroups` array per layer rather than a single flat `color`/`borderWidth`, built by `symbolToStyleGroup(symbol, label)`. `route`, `touristAttractions`, `mrtStations`, and `mrtLines` each yield exactly one group (they own a single renderer/graphic symbol). `drawings` is the exception: since `drawLayer` holds heterogeneous graphic types (see Drawing System) with no restriction on what coexists, `getLayers()` scans `drawLayer.graphics` for every distinct symbol type present (`simple-marker`/`simple-line`/`simple-fill`) and returns one style group per type, so points/lines/polygons drawn together each get independent color/border controls instead of the whole layer being styled off one arbitrarily-chosen graphic. `setLayerStyle(id, { color, borderWidth, outlineColor, symbolType })` mirrors this: for `drawings`, passing `symbolType` scopes the update to only graphics of that geometry type. `outlineColor` (a border color distinct from fill color) only applies to `simple-fill` (polygon) groups.
 
@@ -152,7 +157,7 @@ With no Client ID configured (the default), step 5 never shows anything beyond t
   - `searchFeatures(query)` – queries `touristAttractionLayer`/`mrtStationLayer`/`mrtLineLayer` (via `searchHostedLayer`) and the local `drawLayer` (via `searchDrawings`), returning up to 10 matches per layer.
   - `zoomToSearchResult(result)` – `view.goTo(result.geometry)`, then reuses the `onFeatureSelect` callback (the same one `handleFeatureClick` uses) so picking a search result opens `FeatureAttributesPanel` exactly like clicking the feature on the map would.
   - `zoomToPoint(longitude, latitude)` – `view.goTo` for an address match, plus drops a diamond marker `Graphic` on a dedicated `searchLayer` (part of `layerOrder`, id `searchResult`) so the geocoded point is visibly confirmed on the map, not just centered under the camera. `searchGraphic`/`searchLayer` follow the same persist-on-the-engine, restore-in-`attachToView` pattern as `routeGraphic`/`routeLayer`, so the marker survives a 2D/3D reattachment. Each call replaces the previous marker rather than accumulating one per search. An address match has no backing layer graphic/schema, so (unlike a feature result) it never opens `FeatureAttributesPanel`.
-- `src/components/GlobalSearchPanel.jsx` – search box + results dropdown UI, rendered at the top of the sidebar (above `RoutingControlPanel`).
+- `src/components/GlobalSearchPanel.jsx` – search box + results dropdown UI, rendered at the top of the sidebar (above `RoutingControlPanel`). Owns its own `searching`/`searched`/`open` state and a `requestIdRef` guard that discards an in-flight response once a newer search has started, so pressing Enter twice can't leave the older result set rendered. Each result row shows a human-readable layer label (`LAYER_LABELS`, keyed by `layerId` and falling back to `type` for address matches).
 - `src/app/ApplicationShell.jsx` – `handleSearch` fans a query out to `engine.searchFeatures` and `GeocodingService.geocodeAddress` in parallel and merges the results; `handleSelectSearchResult` dispatches to `zoomToSearchResult` or `zoomToPoint` based on the result's `type`.
 
 **Feature matching:** `searchHostedLayer` reads each `FeatureLayer`'s own schema (`layer.fields`) to find its string-typed fields, since the app has no hardcoded knowledge of e.g. Tourist Attractions' name field, and builds a `where` clause ORing a case-insensitive `LIKE '%text%'` across all of them. `searchDrawings` does the equivalent client-side over `drawLayer.graphics[].attributes`, since that layer has no backing service to query. Search text is escaped (`'` doubled) before being interpolated into the `where` clause — `queryFeatures` has no parameterized-query option, so this is the closest available equivalent to a parameterized query for the ArcGIS REST query language.
@@ -180,6 +185,30 @@ With no Client ID configured (the default), step 5 never shows anything beyond t
 
 See `knowledge/features/responsive-layout.md` for details.
 
+## UI Feedback & Accessibility System
+
+**Purpose:** Cross-cutting affordances that report asynchronous outcomes and failures to the user, and keep every control operable by keyboard and screen reader. Owned by no single subsystem, which is why it is documented separately.
+
+**Key Files:**
+- `src/app/ApplicationShell.jsx` – `toast` state and `showToast(message, type = "error")` (the app's only message channel; errors persist until dismissed, non-errors auto-dismiss after `TOAST_DURATION_MS` = 4000ms), `hasInteracted` (first-run hint), `isRouting` (route busy state), `reorderAnnouncement` (`aria-live` region for layer reorders).
+- `src/components/Icon.jsx` – the shared inline-SVG icon set used by every icon-bearing control, replacing the emoji/unicode glyphs that rendered inconsistently across platforms.
+- `src/components/FloatingDrawTools.jsx` – the `.draw-status-chip` "Drawing…" indicator + Cancel button, driven by the engine's `setOnDrawStateChange` callback.
+- `src/components/LayerControlPanel.jsx` – keyboard-operable layer reordering (Move up/down buttons + `ArrowUp`/`ArrowDown` on the drag handle) alongside drag-and-drop, and the pre-load empty state.
+- `src/components/GlobalSearchPanel.jsx` – per-panel `searching` state and stale-response guard.
+
+See `knowledge/features/ui-feedback.md` for details, including the full message-by-trigger table.
+
+## Dead Code
+
+Present in the tree and covered by their own tests, but **imported by no application code**:
+- `src/hooks/useHeatmapAnalysis.js` – superseded by `ApplicationShell`'s inline `heatOn`/`heatIntensity` state.
+- `src/hooks/useRoutingEngine.js` – superseded by `ApplicationShell.handleRoute`.
+- `src/layers/heatmapLayer.js` (`createHeatmapLayer`) – superseded by the heatmap `FeatureLayer` constructed inline in `GISMapEngine.attachToView`.
+
+These inflate the reported test coverage without exercising any shipped path. This mirrors the earlier removal of `HeatmapControlPanel`/`ViewControlPanel`/`RouteSearchPanel`/`SidePanel` (see Testing System below); these three were not caught in that pass. Either delete them or wire them in — do not treat them as the entry point for new heatmap/routing work.
+
+Unused runtime dependencies in `my-arcgis-app/package.json`: `shpjs` (shapefile parsing) and `file-saver` — no `src/` file imports either; `saveDrawings` hand-rolls its download with `URL.createObjectURL` + an anchor click. The repo-root `package.json` separately declares `@hello-pangea/dnd`, `file-saver`, and `shpjs`, none of which the app imports either (`LayerControlPanel` uses native HTML5 drag events, not a DnD library).
+
 ## Testing System
 
 **Purpose:** Unit/component test coverage for the app, run via Jest.
@@ -198,6 +227,8 @@ See `knowledge/features/responsive-layout.md` for details.
 
 **Known gaps:**
 - The Docker build (see `knowledge/deployment.md`) does not run this suite before producing an image.
+- `GlobalSearchPanel.jsx` and `Icon.jsx` have no test file, unlike every other component. `GlobalSearchPanel` is the notable one: its stale-response guard (`requestIdRef`) is exactly the kind of ordering logic a unit test should pin down.
+- Three of the covered modules (`useHeatmapAnalysis`, `useRoutingEngine`, `heatmapLayer`) are dead code (see Dead Code above), so their coverage does not reflect any shipped behavior.
 
 **Covered:** `GISMapEngine.test.js` has two dedicated tests for the camera/extent continuity behavior in `attachToView` (see 2D/3D View System below, and `knowledge/architecture.md`'s "2D/3D Synchronization" section): `"carries the outgoing view's extent over to the incoming view on reattachment"` (asserts `view2.goTo` is called with `view1`'s `extent` on reattachment) and `"skips goTo on the very first attachToView call, since there is no previous view"` (asserts no `goTo` call when there is no prior view).
 

@@ -13,16 +13,21 @@ metadata:
   - Holds a `GraphicsLayer` named **Drawings** (`this.drawLayer`).
   - Uses **SketchViewModel** (`this.sketchVM`) to create point, polyline, and polygon graphics on the draw layer.
   - Exposes high‑level methods:
-    - `startPointDraw / startLineDraw / startPolygonDraw` – initiate SketchViewModel create mode.
+    - `startPointDraw / startLineDraw / startPolygonDraw` – initiate SketchViewModel create mode, and record the requested type on `this.activeDrawType`.
+    - `cancelDraw` – cancels the in-progress SketchViewModel create session.
     - `getDrawnFeatures` – collects graphics from the draw layer plus route/start/end graphics.
+    - `hasDrawings` – convenience predicate over `getDrawnFeatures().length`.
     - `saveDrawings` – serialises collected graphics to a GeoJSON `FeatureCollection` and triggers a browser download.
-    - `uploadGeoJSON` – parses a GeoJSON file, creates corresponding `Graphic` objects, adds them to the draw layer, and pans the view to the new layer.
+    - `uploadGeoJSON` – parses a GeoJSON file, creates corresponding `Graphic` objects, adds them to the draw layer, and pans the view to the newly created graphics.
+    - `setOnDrawingsChanged` / `setOnDrawStateChange` – register the two outbound UI callbacks described under *Draw State Reporting* below.
   - Manages layer ordering, visibility toggles, heatmap and MRT layers (not directly part of drawing but co‑located).
 
 - **FloatingDrawTools (src/components/FloatingDrawTools.jsx)**
   - Small UI component rendering FAB buttons for:
     - Point, line, polygon draw actions.
     - Export (GeoJSON) and import (file input) of drawings.
+  - The five tools live in a fan-out stack behind a `+` main button (`fab-main`, `aria-expanded`); the fan collapses on outside click (`mousedown` listener) and after any tool runs. Collapsed tools get `tabIndex={-1}` so they stay out of the tab order while hidden.
+  - Renders the **draw-status chip** (`.draw-status-chip`) whenever the `activeDrawType` prop is set — a live `<output>` reading "Drawing point…/line…/polygon…" with a *Cancel drawing* button wired to `onCancelDraw`. See *Draw State Reporting* below.
   - Calls callback props supplied by the surrounding **ApplicationShell**.
 
 - **GISMapView (src/components/GISMapView.jsx)**
@@ -48,6 +53,19 @@ metadata:
 5. **Layer Management** – `ApplicationShell` can toggle visibility, reorder, and query layer states via `engine.getLayers()`, `engine.toggleLayer(id)`, and `engine.reorderLayers()`.
 6. **Layer Styling** – `LayerControlPanel` exposes, behind a per-layer chevron toggle, one color/border control block per distinct symbol type present in `drawLayer` (see `knowledge/index.md`'s Layer Styling System). `engine.getLayers()` scans `drawLayer.graphics` and returns one `styleGroups` entry per symbol type found (`simple-marker`/`simple-line`/`simple-fill`), so points, lines, and polygons drawn together each get independent controls instead of the whole layer being styled off one arbitrarily-chosen graphic. `engine.setLayerStyle("drawings", { color, borderWidth, outlineColor, symbolType })` only restyles the graphics whose `symbol.type` matches the given `symbolType`. This only affects existing graphics — it does not change the default symbol `SketchViewModel` applies to newly drawn or uploaded features.
 7. **Post-draw refresh** – Because a `SketchViewModel` "create" only finishes asynchronously (after the user completes the sketch), `GISMapEngine` invokes an `onDrawingsChanged` callback (registered via `setOnDrawingsChanged`) once the graphic completes. `ApplicationShell` wires this to `refreshLayers()`, so a newly drawn graphic's style group appears in the panel immediately rather than waiting for an unrelated action (toggle/reorder) to trigger the next refresh.
+
+## Draw State Reporting
+
+Picking a draw tool arms the map but produces no immediate visual change — `SketchViewModel.create()` returns straight away and nothing happens until the user clicks on the map. Without a cue, the FAB fan closing is the only feedback, leaving the user unsure whether the tool took effect. The draw-state channel closes that gap:
+
+- `GISMapEngine.startPointDraw`/`startLineDraw`/`startPolygonDraw` set `this.activeDrawType` (`"point"`/`"polyline"`/`"polygon"`) before calling `sketchVM.create(...)`.
+- The single `sketchVM.on("create", ...)` handler installed in `attachToView` drives the callback off the sketch's own state machine:
+  - `"start"` → `onDrawStateChange?.(this.activeDrawType)`
+  - `"complete"` → seeds `event.graphic.attributes` via `buildDrawingAttributes()`, fires `onDrawingsChanged?.()`, clears `activeDrawType`, then `onDrawStateChange?.(null)`
+  - `"cancel"` → clears `activeDrawType`, then `onDrawStateChange?.(null)`
+- `ApplicationShell` registers `setOnDrawStateChange(setActiveDrawType)` in `handleViewReady` and passes the resulting `activeDrawType` down to `FloatingDrawTools`, which renders the draw-status chip and its Cancel button (`onCancelDraw` → `engine.cancelDraw()`).
+
+The same `activeDrawType` shell state is what `toggleViewMode` checks before a 2D/3D switch, so the in-progress sketch is cancelled with a toast rather than silently dropped (see the section below). Note the shell's `activeDrawType` is driven by the engine's `"start"` event, not by the button click — so the chip appears once the sketch is genuinely live, not merely requested.
 
 ## Dependencies
 - **ArcGIS Core SDK** (`@arcgis/core`):

@@ -14,6 +14,12 @@ Source files consulted (all referenced by the index and available):
 - `src/config/ArcGISConfiguration.js`
 - `src/components/LayerControlPanel.jsx`
 - `src/components/FeatureAttributesPanel.jsx`
+- `src/components/GlobalSearchPanel.jsx`
+- `src/components/PortalLayerPanel.jsx`
+- `src/components/RoutingControlPanel.jsx`
+- `src/components/Icon.jsx`
+- `src/services/PortalService.js`
+- `src/services/AuthService.js`
 
 No referenced files were missing.
 
@@ -42,6 +48,12 @@ Supporting services (`RoutingService`, `GeocodingService`) are stateless modules
 - **State retention across view swaps** — graphic state (route graphic, stop graphics, drawn features) is retained on the engine instance itself, independent of the view, so it can be restored when the engine reattaches to a new view.
 - **Drawing tool integration** — a single `SketchViewModel` is created per `attachToView` call, bound to the engine's dedicated drawing layer (`drawLayer`).
 - **Upload integration** — GeoJSON upload logic reads into the same `drawLayer` used by interactive sketching, unifying manual drawings and uploaded features under one graphics layer.
+- **Outbound notification via registered callbacks, not React state** — the engine never imports React and holds no component references. Everything it needs to push *outward* goes through three callbacks the shell registers in `handleViewReady`, all following the same shape (`setX(callback)` field, invoked with `?.()`):
+  - `setOnFeatureSelect` — a feature was selected (by map click or by picking a search result), or deselected (`null`).
+  - `setOnDrawingsChanged` — the set of graphics on `drawLayer` changed shape, so derived UI (the layer panel's style groups) must be re-read.
+  - `setOnDrawStateChange` — a sketch started or ended, carrying the active draw type (`"point"`/`"polyline"`/`"polygon"`) or `null`. This is what lets the UI show a "drawing in progress" affordance for an interaction whose completion is inherently asynchronous.
+
+  All three exist for the same architectural reason: the operations that trigger them (`hitTest` resolution, `SketchViewModel` "create" completion) settle *after* the call that started them returns, so a synchronous return value cannot carry the result back to the shell.
 
 The engine is the only part of the system that imports ArcGIS layer and graphic classes directly (`Graphic`, `GraphicsLayer`, `FeatureLayer`, `SketchViewModel`), as well as the identity/request primitives used for hosted-layer schema edits (`IdentityManager`, `esriRequest`). This makes it the architectural seam between the UI layer and the ArcGIS JS API surface.
 
@@ -58,14 +70,16 @@ The engine manages a fixed, named set of layers, tracked through a `layerOrder` 
 - `mrtStations`
 - `mrtLines`
 - `drawings`
+- `searchResult`
 
 Architectural characteristics of layer management:
 
 - **Ordering as data** — layer draw order is represented explicitly as an array of IDs rather than being implicit in creation order. Reordering operations mutate this array and then re-apply order against the live map.
 - **ID-to-layer indirection** — layer visibility, reordering, and enumeration all resolve through an ID-to-layer lookup map (`buildLayerMap()`) constructed at call time, decoupling the public layer identifiers from the underlying engine fields. `attachToView`, `toggleLayer`, `zoomToLayer`, and `reorderLayers` all resolve ids through this one method rather than each maintaining its own copy of the id-to-layer literal.
-- **Dynamic, user-added layers alongside the fixed set** — the seven `layerOrder` layers above are fixed at construction, but `addPortalLayer`/`removePortalLayer` (see `knowledge/index.md`'s Portal Layer System) let a user append/remove additional `FeatureLayer`s sourced from an ArcGIS portal search at runtime. These live in `portalLayers`/`portalLayerMeta` (keyed by a synthetic `portal_<itemId>` id) and are spread into `buildLayerMap()`'s result and appended to `layerOrder`, so they're resolvable through the exact same toggle/zoom/reorder/getLayers paths as the built-in layers without those paths needing to know a layer is portal-sourced.
-- **Layer types** — `route` and `stops` are `GraphicsLayer` instances populated by the engine directly; `touristAttractions`, `heat`, `mrtStations`, and `mrtLines` are `FeatureLayer` instances backed by external feature service URLs from `ArcGISConfiguration.js`; `drawings` is a `GraphicsLayer` shared between sketching and uploads.
-- **Visibility state** — each layer's visibility is tracked both on the engine (`routeVisible`, `heatVisible`, `touristAttractionVisible`, `mrtStationVisible`, `mrtLineVisible`) and reflected onto the corresponding ArcGIS layer's `visible` property.
+- **Dynamic, user-added layers alongside the fixed set** — the eight `layerOrder` layers above are fixed at construction, but `addPortalLayer`/`removePortalLayer` (see `knowledge/index.md`'s Portal Layer System) let a user append/remove additional `FeatureLayer`s sourced from an ArcGIS portal search at runtime. These live in `portalLayers`/`portalLayerMeta` (keyed by a synthetic `portal_<itemId>` id) and are spread into `buildLayerMap()`'s result and appended to `layerOrder`, so they're resolvable through the exact same toggle/zoom/reorder/getLayers paths as the built-in layers without those paths needing to know a layer is portal-sourced.
+- **Layer types** — `route`, `stops`, and `searchResult` are `GraphicsLayer` instances populated by the engine directly; `touristAttractions`, `heat`, `mrtStations`, and `mrtLines` are `FeatureLayer` instances backed by external feature service URLs from `ArcGISConfiguration.js`; `drawings` is a `GraphicsLayer` shared between sketching and uploads.
+- **`searchResult` as a first-class layer** — the geocoded-address marker dropped by `zoomToPoint` (see `knowledge/index.md`'s Global Search System) lives on its own `searchLayer` rather than being appended to `stops` or `drawings`, so it is independently toggleable/reorderable/zoomable and cannot be clobbered by an unrelated route or upload. Because it is a full `layerOrder` member, `getLayers()` also surfaces it as a "Search Result" row in `LayerControlPanel` like any other layer.
+- **Visibility state** — each layer's visibility is tracked both on the engine (`routeVisible`, `heatVisible`, `touristAttractionVisible`, `mrtStationVisible`, `mrtLineVisible`, `searchVisible`) and reflected onto the corresponding ArcGIS layer's `visible` property.
 - **Renderer configuration** — Tourist Attractions, MRT, and heatmap layers carry renderer configuration (a simple `simple-marker` renderer for Tourist Attractions, simple renderers for MRT stations/lines, a heatmap renderer with color stops and intensity bounds) defined at layer construction time inside the engine.
 - **UI exposure** — `getLayers()` projects internal layer state into a plain list consumed by `ApplicationShell` and layer control UI (`LayerControlPanel.jsx`), keeping the ArcGIS layer objects themselves out of the component tree.
 - **Runtime styling** — `setLayerStyle(id, { color, borderWidth, outlineColor, symbolType })` lets the layer panel mutate a layer's color/outline-width after construction, for layers with at least one coherent symbol to restyle (`route`, `touristAttractions`, `mrtStations`, `mrtLines`, `drawings`). It clones the existing renderer/graphic symbol and reassigns it — the same clone-then-reassign pattern `updateHeatmapIntensity` already uses for the heatmap renderer — rather than introducing a second renderer-mutation mechanism. `getLayers()` surfaces each stylable layer's symbols as a `styleGroups` array (via `symbolToStyleGroup`) so the panel can initialize its inputs; `drawings` can yield multiple groups (one per distinct point/line/polygon symbol type actually present in the shared `drawLayer`), while the single-renderer layers always yield exactly one. Layers without a well-defined symbol (`stops`, `heat`) return an empty `styleGroups` and are not stylable from the panel. `outlineColor` only applies to `simple-fill` (polygon) groups, and `symbolType` scopes a `drawings` update to graphics of just that geometry type.
@@ -162,11 +176,18 @@ ArcGISConfiguration.js
 RoutingService.js  <-- solveRoute() --  ApplicationShell.handleRoute
 GeocodingService.js <-- geocodeAddress() -- ApplicationShell.handleRoute
    (results passed into engine.drawRoute / engine.drawStops)
+GeocodingService.js <-- geocodeAddress() -- ApplicationShell.handleSearch
+PortalService.js   <-- searchPortalLayers() -- ApplicationShell.searchPortal
+AuthService.js     <-- signIn/signOut/checkSignInStatus() -- ApplicationShell
 
-useHeatmapAnalysis.js
-   (standalone hook exposing heatmapEnabled/toggleHeatmap;
-    not wired into ApplicationShell's heatmap state in the
-    reviewed files)
+Icon.jsx
+   (shared inline-SVG icon set; imported by ApplicationShell,
+    FloatingDrawTools, LayerControlPanel, GlobalSearchPanel,
+    PortalLayerPanel — see knowledge/features/ui-feedback.md)
+
+UNUSED / NOT WIRED IN (present in the tree, imported only by
+their own tests, not by any application code):
+   useHeatmapAnalysis.js, useRoutingEngine.js, layers/heatmapLayer.js
 ```
 
 ---
@@ -180,6 +201,7 @@ useHeatmapAnalysis.js
 - **Centralized configuration boundary.** All external service URLs and portal item IDs are defined once in `ArcGISConfiguration.js` and consumed by the engine, routing/geocoding services, and the shell, establishing a single point of change for endpoint configuration.
 - **Services as stateless functions, not engine members.** `RoutingService` and `GeocodingService` are invoked directly from `ApplicationShell` rather than from `GISMapEngine`; the engine only receives already-resolved geometry (via `drawRoute`/`drawStops`), keeping routing/geocoding concerns outside the map-engine boundary.
 - **Presentation components remain ArcGIS-agnostic where possible.** `FloatingDrawTools` and `GISMapView` operate on callback props and portal IDs rather than importing ArcGIS domain classes directly, concentrating ArcGIS API usage in the engine and view-hosting component.
+- **User feedback is centralized in the shell, not scattered across the engine.** `GISMapEngine` never renders or owns a message; long-running/failable engine methods (`zoomToLayer`, `uploadGeoJSON`, `saveDrawings`) instead take an optional `msg` callback, which `ApplicationShell` supplies as its own `showToast`. This keeps the toast's presentation and lifetime policy (see `knowledge/features/ui-feedback.md`) in one place while letting the engine report outcomes only it can know. Engine methods that a caller can meaningfully `try/catch` (`updateSelectedFeatureAttributes`, `addColumnToLayer`, `addPortalLayer`) throw instead, and the shell converts the thrown message into a toast.
 
 ---
 
