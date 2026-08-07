@@ -27,7 +27,7 @@ This file provides a high-level overview of the major subsystems in the ArcGIS J
 **Key Files:**
 - `src/app/ApplicationShell.jsx` – `handleRoute` orchestrates geocoding and routing service calls, then invokes `engineRef.current.drawRoute` and `drawStops`.
 - `src/services/RoutingService.js` – Performs route computation.
-- `src/services/GeocodingService.js` – Resolves address strings to coordinates.
+- `src/services/GeocodingService.js` – Resolves address strings to coordinates. `geocodeAddress` first normalizes the query via `normalizePostalCodeQuery`: a bare 6-digit input (e.g. `460022`) is prefixed to `S460022`, matching how Singaporeans conventionally write postal codes; an already-`S`-prefixed code or any other query (full address, etc.) passes through unchanged. It then tries the ArcGIS World Geocoding Service first (`geocodeWithEsri`, via `addressToLocations`), biased to Singapore with `countryCode: "SGP"` and a `location` centered on `103.8198, 1.3521` — without this bias, a bare Singapore postal code or short local address has no locale context and the worldwide geocoder can return zero candidates. If Esri finds nothing, it falls back to Nominatim (OpenStreetMap, `geocodeWithNominatim`, `countrycodes=sg`) — chosen specifically because it needs no API key/token at all, unlike OneMap (SLA's Singapore-specific geocoder), which as of 2025-10-01 requires a registered account and bearer-token auth this client-only app has nowhere safe to hold. If both fail, the original Esri error is thrown (not the fallback's), since Esri is the primary geocoder and its failure is the more diagnostic one.
 
 **UI:** `RoutingControlPanel.jsx` renders a "VIEW MODE" 2D/3D segmented control (`aria-pressed` on each option, replacing the previous single "Switch to 2D/3D" button), the route search form, and a "Hide/Show Route" button (`toggleRoute`, which also hides/shows the start/end stop markers via `engine.toggleRoute`). `drawStops` gives the start marker a circle style and the end marker a square style (in addition to green/red) so they're distinguishable without relying on color alone.
 
@@ -87,6 +87,24 @@ Both fixes are load-bearing together: a hidden-but-hittable layer still needs a 
 **UI gating:** `LayerControlPanel.jsx` hides all style controls behind a per-layer chevron toggle (collapsed by default) and renders one control block per `styleGroups` entry; polygon groups (`symbolType === "simple-fill"`) get Fill Color + Border Color + Border Width, point/line groups get Color + Border Width.
 
 **Drawings refresh:** because drawing a new graphic is asynchronous (`SketchViewModel` "create" completes after the user finishes sketching), the engine calls `onDrawingsChanged` (registered via `setOnDrawingsChanged`) when a graphic completes, which `ApplicationShell` wires to `refreshLayers()` — without this, the panel's `layers` state would keep serving the pre-drawing snapshot and never show style controls for a just-drawn graphic.
+
+## Global Search System
+
+**Purpose:** Lets the user search by typing text into one search box in the sidebar, matching either map feature attributes or a street address, then jump the view to whichever result they pick.
+
+**Key Files:**
+- `src/gis/GISMapEngine.js`
+  - `searchFeatures(query)` – queries `touristAttractionLayer`/`mrtStationLayer`/`mrtLineLayer` (via `searchHostedLayer`) and the local `drawLayer` (via `searchDrawings`), returning up to 10 matches per layer.
+  - `zoomToSearchResult(result)` – `view.goTo(result.geometry)`, then reuses the `onFeatureSelect` callback (the same one `handleFeatureClick` uses) so picking a search result opens `FeatureAttributesPanel` exactly like clicking the feature on the map would.
+  - `zoomToPoint(longitude, latitude)` – `view.goTo` for an address match, plus drops a diamond marker `Graphic` on a dedicated `searchLayer` (part of `layerOrder`, id `searchResult`) so the geocoded point is visibly confirmed on the map, not just centered under the camera. `searchGraphic`/`searchLayer` follow the same persist-on-the-engine, restore-in-`attachToView` pattern as `routeGraphic`/`routeLayer`, so the marker survives a 2D/3D reattachment. Each call replaces the previous marker rather than accumulating one per search. An address match has no backing layer graphic/schema, so (unlike a feature result) it never opens `FeatureAttributesPanel`.
+- `src/components/GlobalSearchPanel.jsx` – search box + results dropdown UI, rendered at the top of the sidebar (above `RoutingControlPanel`).
+- `src/app/ApplicationShell.jsx` – `handleSearch` fans a query out to `engine.searchFeatures` and `GeocodingService.geocodeAddress` in parallel and merges the results; `handleSelectSearchResult` dispatches to `zoomToSearchResult` or `zoomToPoint` based on the result's `type`.
+
+**Feature matching:** `searchHostedLayer` reads each `FeatureLayer`'s own schema (`layer.fields`) to find its string-typed fields, since the app has no hardcoded knowledge of e.g. Tourist Attractions' name field, and builds a `where` clause ORing a case-insensitive `LIKE '%text%'` across all of them. `searchDrawings` does the equivalent client-side over `drawLayer.graphics[].attributes`, since that layer has no backing service to query. Search text is escaped (`'` doubled) before being interpolated into the `where` clause — `queryFeatures` has no parameterized-query option, so this is the closest available equivalent to a parameterized query for the ArcGIS REST query language.
+
+**Address matching:** Reuses `GeocodingService.geocodeAddress` exactly as the Routing System does (see below), consistent with the architecture's rule that stateless services are called from `ApplicationShell`, not from `GISMapEngine`.
+
+**Result selection:** Both selection paths (search result vs. map click) converge on the same `onFeatureSelect` callback, so `FeatureAttributesPanel` doesn't need to know which triggered it. Since a search result has no originating pointer event, `zoomToSearchResult` derives the panel's screen position with `view.toScreen(result.geometry)` after the `goTo` animation completes, instead of the click coordinates `handleFeatureClick` uses.
 
 ## Feature Attribute Selection System
 

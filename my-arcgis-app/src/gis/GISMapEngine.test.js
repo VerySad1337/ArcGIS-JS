@@ -60,7 +60,7 @@ describe("GISMapEngine.attachToView", () => {
     expect(engine.currentMap).toBe(view.map);
     expect(engine.currentView).toBe(view);
     expect(view.map.removeAll).toHaveBeenCalled();
-    expect(view.map.add).toHaveBeenCalledTimes(7);
+    expect(view.map.add).toHaveBeenCalledTimes(8);
     expect(view.on).toHaveBeenCalledWith("click", expect.any(Function));
     expect(engine.touristAttractionLayer.url).toBeDefined();
     expect(engine.sketchVM.layer).toBe(engine.drawLayer);
@@ -394,7 +394,7 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     );
   });
 
-  test("getLayers returns 7 layers in layerOrder with empty styleGroups before any styling exists", () => {
+  test("getLayers returns 8 layers in layerOrder with empty styleGroups before any styling exists", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
 
@@ -406,7 +406,8 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
       "heat",
       "mrtStations",
       "mrtLines",
-      "drawings"
+      "drawings",
+      "searchResult"
     ]);
     expect(layers.find((l) => l.id === "route").styleGroups).toEqual([]);
     expect(layers.find((l) => l.id === "touristAttractions").styleGroups).toHaveLength(1);
@@ -634,13 +635,79 @@ describe("GISMapEngine.reorderLayers", () => {
 
     engine.reorderLayers(0, 6);
     expect(engine.layerOrder[6]).toBe("route");
-    expect(view.map.reorder).toHaveBeenCalledTimes(7);
+    expect(view.map.reorder).toHaveBeenCalledTimes(8);
   });
 
   test("updates layerOrder without touching the map when not attached", () => {
     const engine = new GISMapEngine();
     engine.reorderLayers(0, 2);
     expect(engine.layerOrder[2]).toBe("route");
+  });
+});
+
+describe("GISMapEngine.zoomToPoint", () => {
+  test("is a no-op when there is no current view", async () => {
+    const engine = new GISMapEngine();
+    await expect(engine.zoomToPoint(103.8, 1.3)).resolves.toBeUndefined();
+    expect(engine.searchGraphic).toBeNull();
+  });
+
+  test("drops a marker on searchLayer and zooms to the geocoded point", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    await engine.zoomToPoint(103.8198, 1.3521);
+
+    expect(engine.searchGraphic).not.toBeNull();
+    expect(engine.searchGraphic.geometry).toEqual({
+      type: "point",
+      longitude: 103.8198,
+      latitude: 1.3521,
+      spatialReference: { wkid: 4326 }
+    });
+    expect(engine.searchLayer.graphics.toArray()).toEqual([engine.searchGraphic]);
+    // Regression guard: goTo's `target` must be the real Graphic/Point
+    // instance, not a plain `{ type: "point", ... }` JSON object - the SDK
+    // does not coerce plain objects here (unlike Graphic's own `geometry`
+    // setter), so passing raw JSON silently fails to navigate.
+    expect(view.goTo).toHaveBeenCalledWith({
+      target: engine.searchGraphic,
+      zoom: 15
+    });
+  });
+
+  test("replaces the previous marker instead of accumulating one per search", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    await engine.zoomToPoint(103.8, 1.3);
+    await engine.zoomToPoint(104.0, 1.4);
+
+    expect(engine.searchLayer.graphics.toArray()).toHaveLength(1);
+    expect(engine.searchGraphic.geometry.longitude).toBe(104.0);
+  });
+
+  test("marker survives reattachment (e.g. a 2D/3D switch)", async () => {
+    const engine = new GISMapEngine();
+    const view1 = makeView();
+    engine.attachToView(view1);
+    await engine.zoomToPoint(103.8, 1.3);
+
+    const view2 = makeView();
+    engine.attachToView(view2);
+
+    expect(engine.searchLayer.graphics.toArray()).toEqual([engine.searchGraphic]);
+  });
+
+  test("swallows a goTo rejection instead of throwing", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    view.goTo = jest.fn().mockRejectedValue(new Error("interrupted"));
+    engine.attachToView(view);
+
+    await expect(engine.zoomToPoint(103.8, 1.3)).resolves.toBeUndefined();
   });
 });
 

@@ -394,6 +394,97 @@ arcgis-scene {
 }
 
 /* =========================
+   GLOBAL SEARCH
+========================= */
+
+.global-search-form {
+  display: flex;
+  gap: 8px;
+}
+
+.global-search-input-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.global-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.global-search-input-wrap input {
+  width: 100%;
+  padding: var(--space-2) var(--space-2) var(--space-2) 34px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+}
+
+.global-search-input-wrap input::placeholder {
+  color: var(--text-muted);
+}
+
+.global-search-form .gis-button {
+  width: auto;
+  padding: var(--space-2) var(--space-3);
+}
+
+.global-search-results {
+  margin-top: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.global-search-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: white;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.global-search-result:hover,
+.global-search-result:focus-visible {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.25);
+}
+
+.global-search-result-label {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-search-result-layer {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.global-search-empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: var(--space-2);
+}
+
+/* =========================
    HEATMAP
 ========================= */
 

@@ -3,6 +3,7 @@ const TOAST_DURATION_MS = 4000;
 import GISMapView from "../components/GISMapView";
 import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
+import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
@@ -168,6 +169,39 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
+  // Combines map-feature search (Tourist Attractions/MRT Stations/MRT
+  // Lines/Drawings, via the engine) with address geocoding (via the
+  // existing GeocodingService) into one result list. Geocoding is invoked
+  // here rather than from the engine, consistent with the existing rule
+  // that stateless services are called from the shell, not the engine.
+  const handleSearch = async (query) => {
+    const [featureResults, addressLocation] = await Promise.all([
+      engineRef.current.searchFeatures(query),
+      geocodeAddress(query).catch(() => null)
+    ]);
+
+    const addressResult = addressLocation
+      ? [{
+          type: "address",
+          layerId: "address",
+          label: query,
+          longitude: addressLocation.longitude,
+          latitude: addressLocation.latitude
+        }]
+      : [];
+
+    return [...featureResults, ...addressResult];
+  };
+
+  const handleSelectSearchResult = async (result) => {
+    setHasInteracted(true);
+    if (result.type === "address") {
+      await engineRef.current.zoomToPoint(result.longitude, result.latitude);
+    } else {
+      await engineRef.current.zoomToSearchResult(result);
+    }
+  };
+
   const drawPoint = () => {
   setHasInteracted(true);
   engineRef.current.startPointDraw();
@@ -245,6 +279,8 @@ export default function ApplicationShell() {
         className={`side-panel${sidebarOpen ? " open" : ""}`}
         tabIndex={-1}
       >
+        <GlobalSearchPanel onSearch={handleSearch} onSelectResult={handleSelectSearchResult} />
+
         <RoutingControlPanel
           is3D={is3D}
           setIs3D={toggleViewMode}

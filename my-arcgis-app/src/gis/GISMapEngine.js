@@ -31,14 +31,17 @@ export default class GISMapEngine {
   routeLayer = null;
   stopLayer = null;
   heatLayer = null;
+  searchLayer = null;
 
   routeGraphic = null;
   startGraphic = null;
   endGraphic = null;
+  searchGraphic = null;
 
   routeVisible = true;
   heatVisible = false;
   heatIntensity = 50;
+  searchVisible = true;
 
   layerOrder = [
     "route",
@@ -47,7 +50,8 @@ export default class GISMapEngine {
     "heat",
     "mrtStations",
     "mrtLines",
-    "drawings"
+    "drawings",
+    "searchResult"
   ];
 
   touristAttractionLayer = null;
@@ -156,6 +160,7 @@ export default class GISMapEngine {
 
     this.routeLayer = new GraphicsLayer({ title: "Route Layer", visible: this.routeVisible });
     this.stopLayer  = new GraphicsLayer({ title: "Stop Layer",  visible: this.routeVisible });
+    this.searchLayer = new GraphicsLayer({ title: "Search Result", visible: this.searchVisible });
 
     this.touristAttractionLayer = new FeatureLayer({
       url: HEATMAP_FEATURE_LAYER_URL,
@@ -235,6 +240,7 @@ export default class GISMapEngine {
     if (this.routeGraphic) this.routeLayer.add(this.routeGraphic);
     if (this.startGraphic) this.stopLayer.add(this.startGraphic);
     if (this.endGraphic) this.stopLayer.add(this.endGraphic);
+    if (this.searchGraphic) this.searchLayer.add(this.searchGraphic);
 
     if (existingDrawings.length) {
       // Defensively drop any graphic with no geometry (e.g. left over from
@@ -255,7 +261,8 @@ export default class GISMapEngine {
       heat: this.heatLayer,
       mrtStations: this.mrtStationLayer,
       mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer
+      drawings: this.drawLayer,
+      searchResult: this.searchLayer
     };
 
     this.layerOrder.forEach((id) => {
@@ -468,7 +475,8 @@ export default class GISMapEngine {
         name: "Drawings",
         visible: this.drawLayer?.visible,
         styleGroups: drawingsGroups
-      }
+      },
+      searchResult: { id: "searchResult", name: "Search Result", visible: this.searchLayer?.visible }
     };
 
     return l.map((id) => lookup[id]);
@@ -482,7 +490,8 @@ export default class GISMapEngine {
       heat: this.heatLayer,
       mrtStations: this.mrtStationLayer,
       mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer
+      drawings: this.drawLayer,
+      searchResult: this.searchLayer
     };
 
     const layer = map[id];
@@ -502,7 +511,8 @@ export default class GISMapEngine {
       heat: this.heatLayer,
       mrtStations: this.mrtStationLayer,
       mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer
+      drawings: this.drawLayer,
+      searchResult: this.searchLayer
     };
 
     const layer = map[id];
@@ -519,7 +529,8 @@ export default class GISMapEngine {
         touristAttractions: "touristAttractionVisible",
         heat: "heatVisible",
         mrtStations: "mrtStationVisible",
-        mrtLines: "mrtLineVisible"
+        mrtLines: "mrtLineVisible",
+        searchResult: "searchVisible"
       }[id];
       if (visibilityField) this[visibilityField] = true;
     }
@@ -640,7 +651,8 @@ export default class GISMapEngine {
       touristAttractions: this.touristAttractionLayer,
       mrtStations: this.mrtStationLayer,
       mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer
+      drawings: this.drawLayer,
+      searchResult: this.searchLayer
     };
 
     order.forEach((id, i) => {
@@ -793,6 +805,181 @@ export default class GISMapEngine {
     msg?.("Upload failed: the file could not be read as valid GeoJSON.", "error");
   }
 }
+
+  // Global feature search: queries every hosted FeatureLayer's string fields
+  // for a case-insensitive substring match, plus the local drawings layer's
+  // in-memory attributes. Field names come from the layer's own schema (not
+  // user input), and the search text is escaped (doubling single quotes)
+  // before being interpolated into the `where` clause - queryFeatures has no
+  // parameterized-query option, so this is the closest equivalent available
+  // for the ArcGIS REST query language.
+  static escapeForWhereClause(text) {
+    return text.replace(/'/g, "''");
+  }
+
+  pickSearchLabel(attributes, candidateFields) {
+    if (!attributes) return null;
+    for (const field of candidateFields) {
+      if (attributes[field]) return String(attributes[field]);
+    }
+    const firstValue = Object.values(attributes).find((v) => v != null && v !== "");
+    return firstValue != null ? String(firstValue) : null;
+  }
+
+  async searchHostedLayer(id, layer, title, text) {
+    if (!layer) return [];
+    try {
+      await layer.load();
+      const stringFields = (layer.fields || [])
+        .filter((f) => f.type === "string")
+        .map((f) => f.name);
+      if (!stringFields.length) return [];
+
+      const escaped = GISMapEngine.escapeForWhereClause(text);
+      const where = stringFields
+        .map((f) => `UPPER(${f}) LIKE UPPER('%${escaped}%')`)
+        .join(" OR ");
+
+      const result = await layer.queryFeatures({
+        where,
+        outFields: ["*"],
+        returnGeometry: true,
+        num: 10
+      });
+
+      return result.features.map((feature) => ({
+        type: "feature",
+        layerId: id,
+        layerTitle: title,
+        label: this.pickSearchLabel(feature.attributes, stringFields) || title,
+        attributes: feature.attributes,
+        objectIdField: layer.objectIdField,
+        geometry: feature.geometry,
+        graphic: feature
+      }));
+    } catch (err) {
+      console.error(`Search failed for layer "${title}":`, err);
+      return [];
+    }
+  }
+
+  searchDrawings(text) {
+    const needle = text.toLowerCase();
+    return this.drawLayer.graphics
+      .filter((g) =>
+        Object.values(g.attributes || {}).some((v) =>
+          String(v ?? "").toLowerCase().includes(needle)
+        )
+      )
+      .toArray()
+      .slice(0, 10)
+      .map((g) => ({
+        type: "feature",
+        layerId: "drawings",
+        layerTitle: "Drawings",
+        label: this.pickSearchLabel(g.attributes, Object.keys(g.attributes || {})) || "Drawing",
+        attributes: g.attributes,
+        objectIdField: null,
+        geometry: g.geometry,
+        graphic: g
+      }));
+  }
+
+  // Returns up to 10 matches per layer across Tourist Attractions, MRT
+  // Stations, MRT Lines, and Drawings. Address geocoding is handled by
+  // ApplicationShell (via GeocodingService) rather than here, consistent
+  // with the existing rule that stateless services are called from the
+  // shell, not from the engine.
+  async searchFeatures(query) {
+    const text = query?.trim();
+    if (!text) return [];
+
+    const hostedTargets = [
+      { id: "touristAttractions", layer: this.touristAttractionLayer, title: "Tourist Attractions" },
+      { id: "mrtStations", layer: this.mrtStationLayer, title: "MRT Stations" },
+      { id: "mrtLines", layer: this.mrtLineLayer, title: "MRT Lines" }
+    ];
+
+    const hostedResults = await Promise.all(
+      hostedTargets.map(({ id, layer, title }) => this.searchHostedLayer(id, layer, title, text))
+    );
+
+    return [...hostedResults.flat(), ...this.searchDrawings(text)];
+  }
+
+  // Zooms to and selects a feature search result, reusing the same
+  // onFeatureSelect callback the click-to-select flow uses so the attribute
+  // panel opens identically either way. Screen coordinates for the panel's
+  // position are derived from the view after the camera move completes,
+  // since a search result (unlike a click) has no originating pointer event.
+  async zoomToSearchResult(result) {
+    if (!this.currentView || !result?.geometry) return;
+
+    try {
+      await this.currentView.goTo(result.geometry);
+    } catch {
+      return;
+    }
+
+    const screenPoint = this.currentView.toScreen(result.geometry);
+
+    this.selectedGraphic = result.graphic || null;
+    this.selectedLayerId = result.layerId;
+
+    this.onFeatureSelect?.({
+      layerId: result.layerId,
+      layerTitle: result.layerTitle,
+      objectIdField: result.objectIdField,
+      attributes: result.attributes,
+      x: screenPoint.x,
+      y: screenPoint.y
+    });
+  }
+
+  // Zooms to a geocoded address point and drops a pin-style marker there, so
+  // geocoding a search result is visibly confirmed on the map instead of
+  // just moving the camera with nothing to show for it. No feature/attribute
+  // panel applies here since an address match has no backing layer graphic.
+  // The marker is kept on its own dedicated searchLayer (rather than e.g.
+  // the route's stop markers) so it doesn't get confused with or overwritten
+  // by unrelated route/drawing graphics, and persists across 2D/3D
+  // reattachment the same way routeGraphic/startGraphic/endGraphic do.
+  async zoomToPoint(longitude, latitude) {
+    if (!this.currentView) return;
+
+    const point = { type: "point", longitude, latitude, spatialReference: { wkid: 4326 } };
+
+    this.searchGraphic = new Graphic({
+      geometry: point,
+      symbol: {
+        type: "simple-marker",
+        style: "diamond",
+        color: [56, 189, 248],
+        size: 14,
+        outline: { color: "white", width: 1.5 }
+      }
+    });
+
+    if (this.searchLayer) {
+      this.searchLayer.removeAll();
+      this.searchLayer.add(this.searchGraphic);
+    }
+
+    // `view.goTo()`'s `target` requires a real Geometry/Graphic instance -
+    // unlike Graphic's own `geometry` setter (used just above), it does not
+    // coerce a plain `{ type: "point", ... }` JSON object. Passing the raw
+    // `point` object here silently failed to navigate (no error visible to
+    // the user), leaving the camera wherever it already was while the
+    // marker got added off-screen - looking like the search "didn't work"
+    // even though the marker was rendered. Passing the Graphic itself is
+    // both a valid goTo target and guaranteed to carry the real, converted
+    // Point geometry.
+    try {
+      await this.currentView.goTo({ target: this.searchGraphic, zoom: 15 });
+    } catch {
+      // Ignore navigation failures (e.g. an interrupted animation).
+    }
+  }
 
   async updateSelectedFeatureAttributes(updates) {
     if (!this.selectedGraphic || !this.selectedLayerId) {
