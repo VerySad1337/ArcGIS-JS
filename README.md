@@ -8,6 +8,7 @@ Instruction:
 
 
 Snapshot of implementation process:
+
 15) Implemented filter and aggregate function on feature layer.
 <img width="1342" height="881" alt="image" src="https://github.com/user-attachments/assets/d5e7d3a6-ac9d-4e00-8917-ad389a28ad72" />
 
