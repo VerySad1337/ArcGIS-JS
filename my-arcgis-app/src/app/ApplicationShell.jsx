@@ -217,6 +217,25 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
+  // Layer Annotation: same throw-and-toast/refresh convention as
+  // applyLayerFilter/clearLayerFilter above - setLayerAnnotation throws on
+  // a field that doesn't exist on the layer's schema.
+  const setLayerAnnotation = async (id, field) => {
+    try {
+      await engineRef.current.setLayerAnnotation(id, field);
+      refreshLayers();
+      const layerName = engineRef.current.getLayers().find((l) => l?.id === id)?.name || id;
+      showToast(`"${layerName}" is now labeled by "${field}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Invalid annotation field.", "error");
+    }
+  };
+
+  const clearLayerAnnotation = (id) => {
+    engineRef.current.clearLayerAnnotation(id);
+    refreshLayers();
+  };
+
   const runAnalysis = async (ids, options) => {
     try {
       return await engineRef.current.runAnalysis(ids, options);
@@ -434,6 +453,8 @@ export default function ApplicationShell() {
           onApplyFilter={applyLayerFilter}
           onClearFilter={clearLayerFilter}
           onRunAggregate={runAnalysis}
+          onSetAnnotation={setLayerAnnotation}
+          onClearAnnotation={clearLayerAnnotation}
         />
 
         <RoutingControlPanel

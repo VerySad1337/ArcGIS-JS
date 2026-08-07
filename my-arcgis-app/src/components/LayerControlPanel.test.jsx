@@ -45,6 +45,8 @@ function setup(overrides = {}) {
     onApplyFilter: jest.fn().mockResolvedValue(undefined),
     onClearFilter: jest.fn(),
     onRunAggregate: jest.fn().mockResolvedValue({ total: { count: 3, sum: 12 } }),
+    onSetAnnotation: jest.fn().mockResolvedValue(undefined),
+    onClearAnnotation: jest.fn(),
     ...overrides
   };
   const utils = render(<LayerControlPanel {...props} />);

@@ -156,6 +156,13 @@ export default class GISMapEngine {
   // searchResult is a transient single marker replaced on every search.
   static ANALYSIS_EXCLUDED_LAYER_IDS = new Set(["route", "stops", "heat", "searchResult"]);
 
+  // Active per-layer annotation (map-label) field, keyed by layerOrder/portal
+  // id - same source-of-truth role as layerFilters above, and the same
+  // reason it needs to survive attachToView: the FeatureLayer-backed layers
+  // this applies to are fully reconstructed on every 2D/3D switch, so a
+  // layer's own `labelingInfo` can't be relied on to hold a runtime change.
+  layerAnnotations = new Map();
+
   selectedGraphic = null;
   selectedLayerId = null;
 
@@ -374,6 +381,12 @@ export default class GISMapEngine {
     // Fire-and-forget: it depends on each layer's fields loading, which
     // attachToView itself does not (and should not) block on.
     this.reapplyPersistedFilters();
+
+    // Same rebuild-then-fire-and-forget-reapply pattern as filters above -
+    // touristAttractions/mrtStations/mrtLines/portal layers are fresh
+    // FeatureLayer instances here, so any labelingInfo a user applied via
+    // setLayerAnnotation needs recomputing against the new instance.
+    this.reapplyPersistedAnnotations();
 
     if (previousExtent) {
       view.goTo(previousExtent).catch(() => {});
@@ -694,6 +707,105 @@ export default class GISMapEngine {
     return filter ? describeFilter(filter) || null : null;
   }
 
+  // ---------------------------------------------------------------------
+  // Layer Annotation (map labels)
+  //
+  // Lets a user pick a layer and one of its attribute fields, and have that
+  // field's value rendered as a text label on every feature - ArcGIS's
+  // native `labelingInfo` mechanism, not a new drawn graphic. Restricted to
+  // the FeatureLayer-backed layers (the three fixed hosted layers plus any
+  // portal layers): a GraphicsLayer (`drawings`, `route`, `stops`, ...) has
+  // no `labelingInfo`/`labelsVisible` support in the ArcGIS JS API, so
+  // "drawings" is deliberately excluded even though it is otherwise
+  // filterable. `heat` has no queryable schema of its own (see
+  // ANALYSIS_EXCLUDED_LAYER_IDS), so it's already excluded via
+  // filterableLayerIds().
+  // ---------------------------------------------------------------------
+
+  annotatableLayerIds() {
+    return this.filterableLayerIds().filter((id) => id !== "drawings");
+  }
+
+  // Applies (or clears, when field is falsy) a label on the live layer.
+  // No-ops for a layer that doesn't support labelingInfo (e.g. it wasn't
+  // resolved, or is a GraphicsLayer that slipped through some other path).
+  applyAnnotationToLayer(id, field) {
+    const layer = this.buildLayerMap()[id];
+    if (!layer || !("labelingInfo" in layer)) return;
+
+    if (!field) {
+      layer.labelingInfo = null;
+      layer.labelsVisible = false;
+      return;
+    }
+
+    layer.labelingInfo = [
+      {
+        labelExpressionInfo: { expression: `$feature.${field}` },
+        symbol: {
+          type: "text",
+          color: "black",
+          haloColor: "white",
+          haloSize: 1,
+          font: { size: 10, weight: "bold" }
+        }
+      }
+    ];
+    layer.labelsVisible = true;
+  }
+
+  // Validates the field against the layer's own schema (throws otherwise,
+  // same throw-and-let-the-shell-toast convention as setLayerFilter/
+  // updateSelectedFeatureAttributes/addColumnToLayer/addPortalLayer), then
+  // persists and applies it. Passing a falsy field clears the annotation.
+  async setLayerAnnotation(id, field) {
+    if (!field) {
+      this.clearLayerAnnotation(id);
+      return;
+    }
+
+    const { fields } = await this.getLayerFieldSchema(id);
+    if (!fields.some((f) => f.name === field)) {
+      throw new Error(`"${field}" is not a field on this layer.`);
+    }
+
+    this.layerAnnotations.set(id, field);
+    this.applyAnnotationToLayer(id, field);
+  }
+
+  clearLayerAnnotation(id) {
+    this.layerAnnotations.delete(id);
+    this.applyAnnotationToLayer(id, null);
+  }
+
+  getLayerAnnotationField(id) {
+    return this.layerAnnotations.get(id) || null;
+  }
+
+  // Re-derives labelingInfo for every hosted layer with an active annotation
+  // after attachToView rebuilds them as fresh FeatureLayer instances (a
+  // 2D/3D switch, in particular) - the same fire-and-forget pattern as
+  // reapplyPersistedFilters, for the same reason (each layer's fields need
+  // to load first, and attachToView itself must stay synchronous). A field
+  // that no longer exists on a reloaded schema (e.g. a portal service that
+  // changed shape) is dropped rather than left throwing on every future
+  // reattachment.
+  reapplyPersistedAnnotations() {
+    this.layerAnnotations.forEach((field, id) => {
+      this.getLayerFieldSchema(id)
+        .then(({ fields }) => {
+          if (!fields.some((f) => f.name === field)) {
+            this.layerAnnotations.delete(id);
+            return;
+          }
+          this.applyAnnotationToLayer(id, field);
+        })
+        .catch(() => {
+          this.layerAnnotations.delete(id);
+        });
+    });
+  }
+
   // Aggregates one layer: a feature count plus, when `field`/`statistics`
   // are supplied, numeric statistics - all computed over whatever the
   // layer's currently active filter (if any) leaves visible, so "aggregate"
@@ -919,7 +1031,9 @@ export default class GISMapEngine {
         visible: this.touristAttractionLayer?.visible,
         styleGroups: touristAttractionSymbol ? [this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions")] : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("touristAttractions")
+        filterDescription: this.getLayerFilterDescription("touristAttractions"),
+        annotatable: true,
+        annotationField: this.getLayerAnnotationField("touristAttractions")
       },
       heat: { id: "heat", name: "Heatmap", visible: this.heatLayer?.visible },
       mrtStations: {
@@ -928,7 +1042,9 @@ export default class GISMapEngine {
         visible: this.mrtStationLayer?.visible,
         styleGroups: mrtStationSymbol ? [this.symbolToStyleGroup(mrtStationSymbol, "Stations")] : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("mrtStations")
+        filterDescription: this.getLayerFilterDescription("mrtStations"),
+        annotatable: true,
+        annotationField: this.getLayerAnnotationField("mrtStations")
       },
       mrtLines: {
         id: "mrtLines",
@@ -936,7 +1052,9 @@ export default class GISMapEngine {
         visible: this.mrtLineLayer?.visible,
         styleGroups: mrtLineSymbol ? [this.symbolToStyleGroup(mrtLineSymbol, "Lines")] : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("mrtLines")
+        filterDescription: this.getLayerFilterDescription("mrtLines"),
+        annotatable: true,
+        annotationField: this.getLayerAnnotationField("mrtLines")
       },
       drawings: {
         id: "drawings",
@@ -969,7 +1087,9 @@ export default class GISMapEngine {
         removable: true,
         styleGroups: portalSymbol ? [this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer")] : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription(id)
+        filterDescription: this.getLayerFilterDescription(id),
+        annotatable: true,
+        annotationField: this.getLayerAnnotationField(id)
       };
     });
 

@@ -98,7 +98,9 @@ export default function LayerControlPanel({
   onGetLayerFields,
   onApplyFilter,
   onClearFilter,
-  onRunAggregate
+  onRunAggregate,
+  onSetAnnotation,
+  onClearAnnotation
 }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragBlockIndex, setDragBlockIndex] = useState(null);
@@ -134,11 +136,13 @@ export default function LayerControlPanel({
     return fields;
   };
 
-  const toggleExpanded = (layer, isFilterable) => {
+  const toggleExpanded = (layer, needsFields) => {
     const opening = !expandedIds[layer.id];
     setExpandedIds((prev) => ({ ...prev, [layer.id]: !prev[layer.id] }));
-    if (opening && isFilterable) {
+    if (opening && needsFields) {
       if (!fieldsById[layer.id]) ensureFieldsLoaded(layer.id);
+    }
+    if (opening && layer.filterable) {
       setConditionsById((prev) => (prev[layer.id] ? prev : { ...prev, [layer.id]: [emptyCondition()] }));
       setLogicById((prev) => (prev[layer.id] ? prev : { ...prev, [layer.id]: "AND" }));
     }
@@ -364,7 +368,8 @@ export default function LayerControlPanel({
     const styleGroups = layer.styleGroups ?? [];
     const isStylable = styleGroups.length > 0;
     const isFilterable = Boolean(layer.filterable);
-    const isExpandable = isStylable || isFilterable;
+    const isAnnotatable = Boolean(layer.annotatable);
+    const isExpandable = isStylable || isFilterable || isAnnotatable;
     const isExpanded = isExpandable && expandedIds[layer.id];
     const fields = fieldsById[layer.id] || [];
     const conditions = conditionsById[layer.id] || [emptyCondition()];
@@ -482,7 +487,7 @@ export default function LayerControlPanel({
               className="layer-chevron-btn"
               style={{ visibility: isExpandable ? "visible" : "hidden" }}
               disabled={!isExpandable}
-              onClick={() => toggleExpanded(layer, isFilterable)}
+              onClick={() => toggleExpanded(layer, isFilterable || isAnnotatable)}
               aria-label="Toggle layer styling and filter options"
             >
               <Icon name={isExpanded ? "chevronUp" : "chevronDown"} />
@@ -786,6 +791,44 @@ export default function LayerControlPanel({
           </div>
         )}
 
+        {isExpanded && isAnnotatable && (
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen(layer.id, "annotate")}
+              onClick={() => toggleSection(layer.id, "annotate")}
+            >
+              <Icon name={isSectionOpen(layer.id, "annotate") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Annotate</span>
+            </button>
+
+            {isSectionOpen(layer.id, "annotate") && (
+              <div className="layer-filter-controls">
+                <label className="analysis-aggregate-field">
+                  <span>Label features by field</span>
+                  <select
+                    value={layer.annotationField || ""}
+                    aria-label={`Annotation field for ${layer.name}`}
+                    onChange={(e) => {
+                      const field = e.target.value;
+                      if (field) onSetAnnotation(layer.id, field);
+                      else onClearAnnotation(layer.id);
+                    }}
+                  >
+                    <option value="">None</option>
+                    {fields.map((f) => (
+                      <option key={f.name} value={f.name}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+          </div>
+        )}
+
         {layer.id === "heat" && layer.visible && (
           <div className="heat-slider-container">
             <input
@@ -949,7 +992,9 @@ LayerControlPanel.propTypes = {
       styleGroups: PropTypes.array,
       removable: PropTypes.bool,
       filterable: PropTypes.bool,
-      filterDescription: PropTypes.string
+      filterDescription: PropTypes.string,
+      annotatable: PropTypes.bool,
+      annotationField: PropTypes.string
     })
   ).isRequired,
   onToggle: PropTypes.func.isRequired,
@@ -962,5 +1007,7 @@ LayerControlPanel.propTypes = {
   onGetLayerFields: PropTypes.func.isRequired,
   onApplyFilter: PropTypes.func.isRequired,
   onClearFilter: PropTypes.func.isRequired,
-  onRunAggregate: PropTypes.func.isRequired
+  onRunAggregate: PropTypes.func.isRequired,
+  onSetAnnotation: PropTypes.func.isRequired,
+  onClearAnnotation: PropTypes.func.isRequired
 };

@@ -744,7 +744,9 @@ describe("GISMapEngine portal layers", () => {
       removable: true,
       styleGroups: [],
       filterable: true,
-      filterDescription: null
+      filterDescription: null,
+      annotatable: true,
+      annotationField: null
     });
 
     const view2 = makeView();
