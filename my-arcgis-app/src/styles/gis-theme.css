@@ -1233,6 +1233,16 @@ input[type="range"] {
   cursor:default;
 }
 
+/* Shown in place of the Edit button when the current user can't write to
+   the selected feature's layer. Stated up front so the panel reads as
+   deliberately read-only rather than broken. */
+.feature-attributes-readonly-note{
+  flex:1;
+  color:var(--text-muted);
+  font-size:var(--text-sm);
+  line-height:1.4;
+}
+
 /* =========================
    REDUCED MOTION
 ========================= */

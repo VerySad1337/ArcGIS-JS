@@ -6,7 +6,18 @@ const POPUP_WIDTH = 280;
 const POPUP_MAX_HEIGHT = 320;
 const OFFSET = 14;
 
-export default function FeatureAttributesPanel({ feature, onClose, onSaveAttributes, onAddColumn }) {
+// `canEdit` gates the editing affordances rather than the edit *attempt*.
+// Showing Edit/Add Column to a user who can't use them meant the rejection
+// surfaced as IdentityManager's own sign-in modal, which reads as the app
+// demanding a login. Viewing attributes never requires an account, so the
+// read-only panel is the default and editing is additive.
+export default function FeatureAttributesPanel({
+  feature,
+  onClose,
+  onSaveAttributes,
+  onAddColumn,
+  canEdit = true
+}) {
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState({});
   const [newFieldName, setNewFieldName] = useState("");
@@ -133,7 +144,12 @@ export default function FeatureAttributesPanel({ feature, onClose, onSaveAttribu
       </div>
 
       <div className="feature-attributes-footer">
-        {editMode ? (
+        {!canEdit && (
+          <span className="feature-attributes-readonly-note">
+            Read-only — sign in with an account that can edit this layer.
+          </span>
+        )}
+        {canEdit && editMode && (
           <>
             <button type="button" disabled={saving} onClick={handleSave}>
               {saving ? "Saving..." : "Save"}
@@ -142,7 +158,8 @@ export default function FeatureAttributesPanel({ feature, onClose, onSaveAttribu
               Cancel
             </button>
           </>
-        ) : (
+        )}
+        {canEdit && !editMode && (
           <button type="button" onClick={startEdit}>
             Edit
           </button>
@@ -163,5 +180,6 @@ FeatureAttributesPanel.propTypes = {
   }),
   onClose: PropTypes.func,
   onSaveAttributes: PropTypes.func,
-  onAddColumn: PropTypes.func
+  onAddColumn: PropTypes.func,
+  canEdit: PropTypes.bool
 };

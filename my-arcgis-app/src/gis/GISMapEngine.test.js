@@ -649,19 +649,61 @@ describe("GISMapEngine.reorderLayers", () => {
 describe("GISMapEngine portal layers", () => {
   const portalItem = { id: "abc123", title: "Parks", url: "https://example.com/Parks/FeatureServer" };
 
-  test("addPortalLayer throws for an item with no url", () => {
+  test("addPortalLayer rejects an item with no url", async () => {
     const engine = new GISMapEngine();
-    expect(() => engine.addPortalLayer({ id: "x", title: "No URL" })).toThrow(
+    await expect(engine.addPortalLayer({ id: "x", title: "No URL" })).rejects.toThrow(
       "This portal item has no queryable layer URL."
     );
   });
 
-  test("addPortalLayer registers the layer, appends it to layerOrder, and adds it to an attached map", () => {
+  test("refuses a portal item whose service is not anonymously accessible, instead of forcing a sign-in", async () => {
+    // Portal search happily returns items that are publicly *listed* but whose
+    // service is Esri subscription content (error 499) or another user's
+    // restricted item (403). Letting the FeatureLayer hit that makes
+    // IdentityManager open its own sign-in modal, so the app appears to demand
+    // a login. The engine must probe first and report it as a normal error.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    esriRequest.mockResolvedValueOnce({
+      data: { error: { code: 499, message: "Token Required for subscription content" } }
+    });
+
+    await expect(engine.addPortalLayer(portalItem)).rejects.toThrow(
+      '"Parks" needs an ArcGIS account with access to it'
+    );
+    expect(engine.portalLayers.size).toBe(0);
+    expect(engine.layerOrder).not.toContain("portal_abc123");
+  });
+
+  test("probes the service without prompting for credentials", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    esriRequest.mockClear();
+
+    await engine.addPortalLayer(portalItem);
+
+    expect(esriRequest).toHaveBeenCalledWith(
+      portalItem.url,
+      expect.objectContaining({ authMode: "no-prompt" })
+    );
+  });
+
+  test("refuses when the probe request itself rejects", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    esriRequest.mockRejectedValueOnce(new Error("network down"));
+
+    await expect(engine.addPortalLayer(portalItem)).rejects.toThrow(
+      "needs an ArcGIS account with access to it"
+    );
+  });
+
+  test("addPortalLayer registers the layer, appends it to layerOrder, and adds it to an attached map", async () => {
     const engine = new GISMapEngine();
     const view = makeView();
     engine.attachToView(view);
 
-    const id = engine.addPortalLayer(portalItem);
+    const id = await engine.addPortalLayer(portalItem);
 
     expect(id).toBe("portal_abc123");
     expect(engine.layerOrder).toContain(id);
@@ -669,30 +711,30 @@ describe("GISMapEngine portal layers", () => {
     expect(view.map.add).toHaveBeenCalledWith(engine.portalLayers.get(id));
   });
 
-  test("addPortalLayer is a no-op (returns the existing id) when the same item is added twice", () => {
+  test("addPortalLayer is a no-op (returns the existing id) when the same item is added twice", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
 
-    const firstId = engine.addPortalLayer(portalItem);
+    const firstId = await engine.addPortalLayer(portalItem);
     const layerBefore = engine.portalLayers.get(firstId);
-    const secondId = engine.addPortalLayer(portalItem);
+    const secondId = await engine.addPortalLayer(portalItem);
 
     expect(secondId).toBe(firstId);
     expect(engine.layerOrder.filter((x) => x === firstId)).toHaveLength(1);
     expect(engine.portalLayers.get(firstId)).toBe(layerBefore);
   });
 
-  test("addPortalLayer works before the engine is attached to a view", () => {
+  test("addPortalLayer works before the engine is attached to a view", async () => {
     const engine = new GISMapEngine();
-    const id = engine.addPortalLayer(portalItem);
+    const id = await engine.addPortalLayer(portalItem);
     expect(engine.portalLayers.get(id)).toBeDefined();
   });
 
-  test("portal layers appear in getLayers as removable and survive a 2D/3D reattachment", () => {
+  test("portal layers appear in getLayers as removable and survive a 2D/3D reattachment", async () => {
     const engine = new GISMapEngine();
     const view1 = makeView();
     engine.attachToView(view1);
-    const id = engine.addPortalLayer(portalItem);
+    const id = await engine.addPortalLayer(portalItem);
 
     const entry = engine.getLayers().find((l) => l.id === id);
     expect(entry).toEqual({ id, name: "Parks", visible: true, removable: true });
@@ -705,11 +747,11 @@ describe("GISMapEngine portal layers", () => {
     expect(view2.map.add).toHaveBeenCalledWith(engine.portalLayers.get(id));
   });
 
-  test("toggleLayer flips a portal layer's visibility and keeps portalLayerMeta in sync across reattachment", () => {
+  test("toggleLayer flips a portal layer's visibility and keeps portalLayerMeta in sync across reattachment", async () => {
     const engine = new GISMapEngine();
     const view1 = makeView();
     engine.attachToView(view1);
-    const id = engine.addPortalLayer(portalItem);
+    const id = await engine.addPortalLayer(portalItem);
 
     engine.toggleLayer(id);
     expect(engine.portalLayers.get(id).visible).toBe(false);
@@ -719,11 +761,11 @@ describe("GISMapEngine portal layers", () => {
     expect(engine.portalLayers.get(id).visible).toBe(false);
   });
 
-  test("removePortalLayer removes it from the map, layerOrder, and internal maps", () => {
+  test("removePortalLayer removes it from the map, layerOrder, and internal maps", async () => {
     const engine = new GISMapEngine();
     const view = makeView();
     engine.attachToView(view);
-    const id = engine.addPortalLayer(portalItem);
+    const id = await engine.addPortalLayer(portalItem);
     const layer = engine.portalLayers.get(id);
 
     engine.removePortalLayer(id);
@@ -1047,6 +1089,38 @@ describe("GISMapEngine.updateSelectedFeatureAttributes", () => {
     expect(result).toEqual({ success: true, attributes: { OBJECTID: 7, name: "new" } });
   });
 
+  test("refuses a read-only hosted layer instead of letting applyEdits trigger a sign-in prompt", async () => {
+    // The hosted services are published Query-only, so applyEdits returns
+    // 403 and IdentityManager answers a 403 by opening its own sign-in
+    // modal. Checking the advertised capabilities first keeps that from
+    // ever being reached, so an anonymous user gets a toast, not a login.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7 } };
+    engine.touristAttractionLayer.title = "Tourist Attractions";
+    engine.touristAttractionLayer.capabilities = { operations: { supportsUpdate: false } };
+
+    await expect(engine.updateSelectedFeatureAttributes({ name: "x" })).rejects.toThrow(
+      '"Tourist Attractions" is read-only for the current user.'
+    );
+    expect(engine.touristAttractionLayer.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test("still edits when the layer advertises update support", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7, name: "old" } };
+    engine.touristAttractionLayer.objectIdField = "OBJECTID";
+    engine.touristAttractionLayer.capabilities = { operations: { supportsUpdate: true } };
+    engine.touristAttractionLayer.applyEdits.mockResolvedValue({ updateFeatureResults: [{}] });
+
+    await expect(
+      engine.updateSelectedFeatureAttributes({ name: "new" })
+    ).resolves.toEqual({ success: true, attributes: { OBJECTID: 7, name: "new" } });
+  });
+
   test("throws the service error message when applyEdits reports a failure", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
@@ -1119,10 +1193,28 @@ describe("GISMapEngine.addColumnToLayer", () => {
     await expect(engine.addColumnToLayer("unknown-layer", "field")).rejects.toThrow("Layer not found.");
   });
 
+  test("does not force a sign-in when nobody is signed in", async () => {
+    // Regression test: addColumnToLayer used to call getCredential()
+    // unconditionally, which opens IdentityManager's own sign-in modal when
+    // no credential exists - forcing a login on an app that must stay usable
+    // anonymously. It must fail with a plain error instead.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue(undefined);
+    IdentityManager.getCredential.mockClear();
+
+    await expect(engine.addColumnToLayer("touristAttractions", "newField")).rejects.toThrow(
+      "Sign in with an account that owns this layer to add a column."
+    );
+    expect(IdentityManager.getCredential).not.toHaveBeenCalled();
+    expect(esriRequest).not.toHaveBeenCalled();
+  });
+
   test("adds a field to a hosted layer via addToDefinition and refreshes it", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
     engine.touristAttractionLayer.url = "https://example.com/FeatureServer";
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
     esriRequest.mockResolvedValueOnce({ data: {} });
 
     const result = await engine.addColumnToLayer("touristAttractions", "newField", "esriFieldTypeString", "d");
@@ -1139,6 +1231,7 @@ describe("GISMapEngine.addColumnToLayer", () => {
   test("throws the service error message when addToDefinition fails", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
     esriRequest.mockResolvedValueOnce({ data: { error: { message: "Not authorized" } } });
 
     await expect(
@@ -1150,10 +1243,31 @@ describe("GISMapEngine.addColumnToLayer", () => {
   test("falls back to a generic message when addToDefinition fails without one", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
     esriRequest.mockResolvedValueOnce({ data: { error: {} } });
 
     await expect(engine.addColumnToLayer("touristAttractions", "newField")).rejects.toThrow(
       "Failed to add column to layer."
     );
+  });
+
+  test("falls back to the portal credential when there is no per-service one", async () => {
+    // An ArcGIS Online sign-in registers a credential for the portal, which
+    // federates to hosted services, rather than one per service URL. Looking
+    // only at the service URL would wrongly block a genuinely signed-in user.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.url = "https://example.com/FeatureServer";
+    IdentityManager.findCredential.mockImplementation((url) =>
+      url.includes("/sharing") ? { token: "portal-token" } : undefined
+    );
+    esriRequest.mockResolvedValueOnce({ data: {} });
+
+    await expect(
+      engine.addColumnToLayer("touristAttractions", "newField")
+    ).resolves.toEqual({ success: true });
+
+    IdentityManager.findCredential.mockReset();
+    IdentityManager.findCredential.mockReturnValue(undefined);
   });
 });

@@ -4,7 +4,8 @@ import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import {
   HEATMAP_FEATURE_LAYER_URL,
   MRT_STATION_FEATURE_LAYER_URL,
-  MRT_LINE_FEATURE_LAYER_URL
+  MRT_LINE_FEATURE_LAYER_URL,
+  PORTAL_URL
 } from "../config/ArcGISConfiguration";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import IdentityManager from "@arcgis/core/identity/IdentityManager";
@@ -554,11 +555,45 @@ export default class GISMapEngine {
   // plain objects that service returns ({ id, title, url, ... }). Adding the
   // same portal item twice is a no-op (returns the existing layer's id)
   // rather than creating a duplicate layer.
-  addPortalLayer(item) {
+  // Portal search lists items that are publicly *discoverable* but whose
+  // backing service may not be publicly *accessible*: Esri subscription
+  // content answers an anonymous request with error 499 ("Token Required for
+  // subscription content"), and another user's restricted item answers with
+  // 403 even when the app's API key is attached. Both are ordinary results in
+  // a normal search - `access: "public"` on the item says nothing about the
+  // service behind it.
+  //
+  // Letting a FeatureLayer hit that failure means IdentityManager answers the
+  // 499/403 by opening its own sign-in modal, so picking the wrong search
+  // result appears to make the whole app demand a login. Probing first with
+  // authMode "no-prompt" keeps the failure ours to report: the request fails
+  // instead of prompting, and the shell shows an ordinary toast.
+  async canAccessPortalService(url) {
+    try {
+      const response = await esriRequest(url, {
+        query: { f: "json" },
+        responseType: "json",
+        authMode: "no-prompt"
+      });
+      // ArcGIS REST reports authorization failures as HTTP 200 with an error
+      // body, so a resolved promise is not on its own proof of access.
+      return !response?.data?.error;
+    } catch {
+      return false;
+    }
+  }
+
+  async addPortalLayer(item) {
     if (!item?.url) throw new Error("This portal item has no queryable layer URL.");
 
     const layerId = `portal_${item.id}`;
     if (this.portalLayerMeta.has(layerId)) return layerId;
+
+    if (!(await this.canAccessPortalService(item.url))) {
+      throw new Error(
+        `"${item.title || "This layer"}" needs an ArcGIS account with access to it — it isn't available anonymously.`
+      );
+    }
 
     const meta = { title: item.title || "Portal Layer", url: item.url, visible: true };
     this.portalLayerMeta.set(layerId, meta);
@@ -1072,6 +1107,19 @@ export default class GISMapEngine {
     const layer = this.hostedLayerById(this.selectedLayerId);
     if (!layer) throw new Error("Layer not found.");
 
+    // A hosted service the current identity can't write to rejects applyEdits
+    // with a 403, and IdentityManager answers a 403 by opening its own
+    // sign-in modal - forcing a login on a user who only wanted to look at
+    // the map. The app's public API key is a read-only identity for these
+    // services, so that was the default experience. Checking the layer's
+    // advertised capabilities first turns it into an ordinary error toast
+    // and leaves the app fully usable read-only.
+    if (layer.capabilities?.operations?.supportsUpdate === false) {
+      throw new Error(
+        `"${layer.title}" is read-only for the current user. Sign in with an account that can edit it.`
+      );
+    }
+
     const objectIdField = layer.objectIdField;
     const objectId = this.selectedGraphic.attributes[objectIdField];
 
@@ -1112,6 +1160,24 @@ export default class GISMapEngine {
     // Adding a field to a hosted feature service is an admin schema change:
     // it requires a token from a user with edit/admin privileges on the item,
     // not just the app's public API key.
+    //
+    // getCredential() ACQUIRES a credential, which means opening the SDK's
+    // own sign-in modal whenever there isn't one - so this call used to
+    // force a login unconditionally, every time, on an app that is meant to
+    // work anonymously. findCredential() is the non-prompting lookup: it
+    // returns undefined instead of prompting, letting us fail with our own
+    // toast. Both the service URL and the portal are checked because an
+    // ArcGIS Online sign-in registers a portal credential that federates to
+    // the hosted service rather than a per-service one. When a credential
+    // does exist, the getCredential() below resolves from it silently.
+    const existingCredential =
+      IdentityManager.findCredential(layer.url) ||
+      IdentityManager.findCredential(`${PORTAL_URL}/sharing`);
+
+    if (!existingCredential) {
+      throw new Error("Sign in with an account that owns this layer to add a column.");
+    }
+
     const credential = await IdentityManager.getCredential(layer.url);
     const addToDefinitionUrl = `${layer.url}/${layer.layerId ?? 0}/addToDefinition`;
 

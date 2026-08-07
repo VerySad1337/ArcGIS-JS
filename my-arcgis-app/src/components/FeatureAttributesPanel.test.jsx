@@ -17,6 +17,24 @@ describe("FeatureAttributesPanel", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  test("hides every editing affordance when canEdit is false", () => {
+    // Viewing attributes must never require an account. Offering Edit to a
+    // user who can't write meant the rejection surfaced as IdentityManager's
+    // own sign-in modal, which reads as the app demanding a login.
+    render(<FeatureAttributesPanel feature={baseFeature} canEdit={false} />);
+
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument();
+    // Attribute values are still fully readable.
+    expect(screen.getByText("Merlion")).toBeInTheDocument();
+  });
+
+  test("keeps the Edit button when canEdit is true", () => {
+    render(<FeatureAttributesPanel feature={baseFeature} canEdit />);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.queryByText(/read-only/i)).not.toBeInTheDocument();
+  });
+
   test("renders the layer title and attribute rows", () => {
     render(<FeatureAttributesPanel feature={baseFeature} />);
     expect(screen.getByText("Tourist Attractions")).toBeInTheDocument();

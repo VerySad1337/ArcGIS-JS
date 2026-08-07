@@ -195,9 +195,13 @@ export default function ApplicationShell() {
     }
   };
 
-  const addPortalLayer = (item) => {
+  // Async because the engine probes the service for accessibility before
+  // registering the layer - a portal item can be publicly listed while its
+  // service is subscription-only or restricted, and letting that failure
+  // reach the SDK would surface as a forced sign-in modal.
+  const addPortalLayer = async (item) => {
     try {
-      engineRef.current.addPortalLayer(item);
+      await engineRef.current.addPortalLayer(item);
       refreshLayers();
       showToast(`Added "${item.title}" to layers.`, "success");
     } catch (err) {
@@ -301,6 +305,16 @@ export default function ApplicationShell() {
     }
   };
 
+  // Drawings live in memory on the local GraphicsLayer, so editing them needs
+  // no account and must keep working anonymously - that is the app's normal
+  // mode. The hosted FeatureLayers are a different story: writing to them
+  // needs a real credential, and offering the controls anyway meant the
+  // rejection surfaced as IdentityManager's own sign-in modal. Hiding them
+  // until there is a credential keeps the app read-only-usable instead of
+  // appearing to require a login.
+  const canEditSelectedFeature =
+    selectedFeature?.layerId === "drawings" || Boolean(signedInUser);
+
   const handleAddColumn = async (fieldName, defaultValue) => {
     if (!selectedFeature) return;
     try {
@@ -402,6 +416,7 @@ export default function ApplicationShell() {
           onClose={() => setSelectedFeature(null)}
           onSaveAttributes={handleSaveAttributes}
           onAddColumn={handleAddColumn}
+          canEdit={canEditSelectedFeature}
         />
       </div>
       {toast && (

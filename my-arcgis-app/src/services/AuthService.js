@@ -70,6 +70,24 @@ export async function signIn() {
   return loadSignedInUser();
 }
 
+// Non-prompting counterpart to signIn(): reports whether IdentityManager
+// already holds a credential for the configured portal, WITHOUT opening a
+// sign-in dialog.
+//
+// This distinction is the whole point: getCredential() *acquires* a
+// credential, which means showing the SDK's own sign-in modal when there
+// isn't one - hijacking the page to demand a login the user never asked
+// for. findCredential() only *looks up* an existing one and returns
+// undefined otherwise. Anything deciding "should I offer this privileged
+// action?" must use this, never getCredential().
+export function hasPortalCredential() {
+  try {
+    return Boolean(IdentityManager.findCredential(`${PORTAL_URL}/sharing`));
+  } catch {
+    return false;
+  }
+}
+
 // Destroys every credential IdentityManager is holding, immediately
 // reverting subsequent portal requests (e.g. the next search) to
 // anonymous.

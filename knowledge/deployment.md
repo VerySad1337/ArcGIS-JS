@@ -21,12 +21,33 @@
 
 Consequences of that removal:
 - `npm run dev`, `npm test`, `npm run build`, and `docker build --build-arg VITE_ARCGIS_API_KEY=<key> .` are all unaffected — none of them ever read the root `.env`.
-- **`docker compose up --build` now requires `VITE_ARCGIS_API_KEY` in the ambient environment.** Compose previously interpolated `${VITE_ARCGIS_API_KEY}` in `docker-compose.yml` from the repo-root `.env`. With no `.env` and no exported variable, Compose interpolates it to an **empty string** and emits only a warning — the image builds "successfully" with no API key baked in, and the failure surfaces later at runtime as a blank/unauthorized map. Export it before building:
+- **`docker compose` must now be pointed at the app's `.env` explicitly:**
   ```
-  export VITE_ARCGIS_API_KEY=<key>   # PowerShell: $env:VITE_ARCGIS_API_KEY = "<key>"
-  docker compose up --build
+  docker compose --env-file my-arcgis-app/.env up --build
   ```
-  To make that misconfiguration loud instead of silent, change the compose file to `${VITE_ARCGIS_API_KEY:?VITE_ARCGIS_API_KEY must be set}`, which aborts the build rather than baking an empty key. Not currently applied.
+  Compose interpolates build args from *its own* env file, which defaults to a `.env` beside `docker-compose.yml`. `--env-file` redirects that to the one file Vite already reads, so the secret exists in exactly one untracked place.
+
+### Postmortem: deleting the root `.env` silently broke the deployed app
+
+This is worth stating plainly because the failure mode was badly misleading, and the diagnosis initially went the wrong way.
+
+Removing the root `.env` left `${VITE_ARCGIS_API_KEY}` with nothing to interpolate from. Compose substituted an **empty string** and emitted only a warning, so:
+
+1. `docker compose up --build` reported success.
+2. The image was built with `esriConfig.apiKey` empty.
+3. Public layers still worked, so the map looked fine.
+4. **Esri subscription content began returning error 499** ("Token Required for subscription content") — most visibly when adding a layer from the portal panel.
+5. `IdentityManager` answers a 499 by opening its own sign-in dialog.
+
+The app therefore appeared to have "started requiring a login," with no error anywhere pointing at a missing build arg. Verified by grepping the served bundle in both images: the pre-deletion image contained the key, the post-deletion one contained zero occurrences of it.
+
+Two lessons encoded in the current setup:
+- **`${VAR:?message}`, never bare `${VAR}`, for anything that must be present at build time.** The compose file now aborts instead of shipping an image with an empty key. Confirmed both ways: `docker compose config` fails without `--env-file` and resolves with it.
+- **A missing build-time secret does not fail where it is missing.** It fails much later, in a subsystem that looks unrelated, as an authentication prompt. When "the app suddenly wants a login," check what got baked into the bundle before investigating auth code:
+  ```
+  docker exec <container> grep -ro "AAPT" /usr/share/nginx/html/assets | wc -l
+  ```
+- **Check how the app is actually run before touching build configuration.** `npm run dev` and `docker compose` read different env files; a file that is inert for one can be load-bearing for the other.
 - **OAuth cannot be configured for a Docker/Compose build at all.** `VITE_ARCGIS_OAUTH_CLIENT_ID` and `VITE_ARCGIS_PORTAL_URL` are read by the app but never passed through as build args — `docker-compose.yml` forwards only `VITE_ARCGIS_API_KEY` and the `Dockerfile` declares only that one `ARG`. A containerized deployment therefore always runs anonymous-only, regardless of what `my-arcgis-app/.env` says, because that file is `.dockerignore`d/not copied and Vite inlines these at build time. Fixing this needs a new `ARG`/`ENV` pair in the `Dockerfile` plus a matching entry under `build.args` in `docker-compose.yml`.
 
 **Build & run:**

@@ -1,8 +1,25 @@
+# Run with:
+#
+#   docker compose --env-file my-arcgis-app/.env up --build
+#
+# Compose interpolates the build args below from its *own* env file, which by
+# default is a .env sitting next to this compose file. There deliberately isn't
+# one: the repo-root .env used to be that source, but it duplicated the API key
+# that already lives in my-arcgis-app/.env (the only file Vite reads) and it had
+# been committed to git with a real key. Pointing --env-file at the app's own
+# .env keeps exactly one copy of the secret, untracked.
+#
+# The ":?" on each variable makes a missing value abort the build. Without it,
+# Compose substitutes an empty string and emits only a warning, so the image
+# builds "successfully" with no API key baked in - and the failure surfaces much
+# later, at runtime, as subscription content returning 499 and the ArcGIS SDK
+# popping a sign-in dialog. That silent mode is what made a deleted .env look
+# like the app had started demanding a login.
 services:
   arcgis-app:
     build:
       context: .
       args:
-        VITE_ARCGIS_API_KEY: ${VITE_ARCGIS_API_KEY}
+        VITE_ARCGIS_API_KEY: "${VITE_ARCGIS_API_KEY:?missing - rerun with --env-file my-arcgis-app/.env}"
     ports:
       - "8080:80"
