@@ -8,6 +8,8 @@ import {
   PORTAL_URL
 } from "../config/ArcGISConfiguration";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
+import Slice from "@arcgis/core/widgets/Slice";
+import { geodesicBuffer } from "@arcgis/core/geometry/geometryEngine";
 import IdentityManager from "@arcgis/core/identity/IdentityManager";
 import esriRequest from "@arcgis/core/request";
 import {
@@ -111,6 +113,16 @@ export default class GISMapEngine {
   drawLayer = new GraphicsLayer({ title: "Drawings", elevationInfo: { mode: "on-the-ground" } });
   sketchVM = null;
 
+  // Spatial Analysis (Buffer + Slice) - see the "ANALYSIS" sidebar card.
+  // Both tools are deliberately restricted to the 3D SceneView: Slice is an
+  // ArcGIS widget that only ever operates against a SceneView to begin
+  // with, and Buffer is held under the same restriction so the card offers
+  // one consistent "3D only" rule rather than one tool working in 2D and
+  // the other silently failing there. sliceWidget is null whenever Slice
+  // is inactive; it is bound directly to the live SceneView, so it cannot
+  // survive a 2D/3D reattachment and is torn down in detachFromView.
+  sliceWidget = null;
+
   uploadedLayers = [];
 
   onFeatureSelect = null;
@@ -181,6 +193,16 @@ export default class GISMapEngine {
   // old map's layers loses them for the rest of the session.
   detachFromView() {
     this.currentMap?.removeAll();
+    // sliceWidget holds a live reference into this.currentView's own UI
+    // (view.ui.add), so it must be torn down here - before that view is
+    // destroyed by the outgoing custom element's unmount - rather than left
+    // for attachToView to discover once currentView has already been
+    // overwritten with the new view.
+    if (this.sliceWidget) {
+      this.currentView?.ui.remove(this.sliceWidget);
+      this.sliceWidget.destroy();
+      this.sliceWidget = null;
+    }
   }
 
   // Single source of truth for id -> layer resolution, used by every
@@ -422,6 +444,96 @@ export default class GISMapEngine {
       attributes[field.name] = field.defaultValue ?? null;
     });
     return { ...attributes, ...overrides };
+  }
+
+  // ---------------------------------------------------------------------
+  // Spatial Analysis System (Buffer + Slice)
+  //
+  // Slice is gated on isSceneView() - it wraps an ArcGIS widget that only
+  // ever operates against a SceneView to begin with (see the sliceWidget
+  // field comment). Buffer has no such technical constraint - geodesicBuffer
+  // is pure geometry math, independent of the current view - so it works in
+  // both 2D and 3D. Buffer results are added to the existing drawLayer
+  // rather than a dedicated layer, so they get styling/filtering/export for
+  // free through the machinery drawings already have, tagged with
+  // attributes.analysisType so they're identifiable if that's ever needed.
+  // ---------------------------------------------------------------------
+
+  isSceneView() {
+    return this.currentView?.type === "3d";
+  }
+
+  isSliceActive() {
+    return Boolean(this.sliceWidget);
+  }
+
+  // Buffers the currently-selected feature (see handleFeatureClick) by the
+  // given distance/unit and adds the resulting polygon to drawLayer. Works
+  // in both 2D and 3D. msg is the shell's showToast, invoked here (rather
+  // than thrown) since there is no calling code that needs to branch on
+  // success/failure beyond telling the user, matching zoomToLayer/
+  // uploadGeoJSON's msg-callback convention.
+  bufferSelectedFeature(distance, unit = "meters", msg) {
+    if (!this.selectedGraphic?.geometry) {
+      msg?.("Select a feature on the map first.", "error");
+      return;
+    }
+    if (!Number.isFinite(distance) || distance <= 0) {
+      msg?.("Enter a buffer distance greater than 0.", "error");
+      return;
+    }
+
+    let bufferGeometry;
+    try {
+      bufferGeometry = geodesicBuffer(this.selectedGraphic.geometry, distance, unit);
+    } catch {
+      bufferGeometry = null;
+    }
+    if (!bufferGeometry) {
+      msg?.("Could not buffer the selected feature.", "error");
+      return;
+    }
+
+    const graphic = new Graphic({
+      geometry: bufferGeometry,
+      symbol: {
+        type: "simple-fill",
+        color: [255, 140, 0, 0.3],
+        outline: { color: [255, 140, 0, 0.9], width: 1.5 }
+      },
+      attributes: this.buildDrawingAttributes({
+        analysisType: "buffer",
+        bufferDistance: distance,
+        bufferUnit: unit
+      })
+    });
+
+    this.drawLayer.add(graphic);
+    this.applyDrawingsFilterToGraphic(graphic);
+    this.onDrawingsChanged?.();
+    msg?.(`Buffer created (${distance} ${unit}).`, "success");
+  }
+
+  // Starts/stops the ArcGIS Slice widget, which lets the user drag out a
+  // box to interactively cut away part of the 3D scene. The widget owns its
+  // own on-map UI once added (view.ui.add) - there is nothing further for
+  // the engine to drive once it's active.
+  startSlice(msg) {
+    if (!this.isSceneView()) {
+      msg?.("Slice is only available in 3D view.", "error");
+      return;
+    }
+    if (this.sliceWidget) return;
+
+    this.sliceWidget = new Slice({ view: this.currentView });
+    this.currentView.ui.add(this.sliceWidget, "top-right");
+  }
+
+  stopSlice() {
+    if (!this.sliceWidget) return;
+    this.currentView?.ui.remove(this.sliceWidget);
+    this.sliceWidget.destroy();
+    this.sliceWidget = null;
   }
 
   // ---------------------------------------------------------------------

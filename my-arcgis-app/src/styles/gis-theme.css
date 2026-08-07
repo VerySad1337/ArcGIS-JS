@@ -1748,6 +1748,56 @@ input[type="range"] {
 }
 
 /* =========================
+   SPATIAL ANALYSIS (Buffer + Slice)
+========================= */
+
+.analysis-tool-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+}
+
+.analysis-tool-section:last-child {
+  margin-bottom: 0;
+}
+
+.analysis-tool-label {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.analysis-tool-row {
+  display: flex;
+  gap: 8px;
+}
+
+.analysis-tool-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+}
+
+.analysis-tool-row select {
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+}
+
+.analysis-tool-hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  margin: 0;
+}
+
+/* =========================
    REDUCED MOTION
 ========================= */
 

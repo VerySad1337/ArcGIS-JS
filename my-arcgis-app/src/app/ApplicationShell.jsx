@@ -6,6 +6,7 @@ import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
+import AnalysisPanel from "../components/AnalysisPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
@@ -36,6 +37,7 @@ export default function ApplicationShell() {
   const sidePanelRef = useRef(null);
   const [signedInUser, setSignedInUser] = useState(null);
   const [signingIn, setSigningIn] = useState(false);
+  const [sliceActive, setSliceActive] = useState(false);
 
   useEffect(() => {
     if (!isOAuthConfigured()) return;
@@ -93,6 +95,10 @@ export default function ApplicationShell() {
     // permanently wiping their graphics before the next attachToView call
     // ever gets a chance to save them. See GISMapEngine.detachFromView.
     engineRef.current.detachFromView();
+    // detachFromView tears down the Slice widget (it's bound to the
+    // outgoing view's own UI and can't survive the reattachment), so the
+    // shell's mirror of that state needs to follow.
+    if (sliceActive) setSliceActive(false);
     setIs3D(next);
   };
 
@@ -218,6 +224,26 @@ export default function ApplicationShell() {
       showToast(err.message || "Analysis failed.", "error");
       return null;
     }
+  };
+
+  // Spatial Analysis (ANALYSIS card): Buffer and Slice are both 3D-only -
+  // see GISMapEngine.isSceneView. bufferSelectedFeature reports its own
+  // success/failure via the msg callback (same convention as
+  // zoomToLayer/uploadGeoJSON), so this wrapper only needs to refresh the
+  // layer list afterward, since a successful buffer adds a graphic to the
+  // already-tracked drawings layer.
+  const bufferSelectedFeature = (distance, unit) => {
+    engineRef.current.bufferSelectedFeature(distance, unit, showToast);
+    refreshLayers();
+  };
+
+  const toggleSlice = () => {
+    if (sliceActive) {
+      engineRef.current.stopSlice();
+    } else {
+      engineRef.current.startSlice(showToast);
+    }
+    setSliceActive(engineRef.current.isSliceActive());
   };
 
   // Portal layer search itself is a stateless service call (consistent with
@@ -415,6 +441,14 @@ export default function ApplicationShell() {
           toggleRoute={toggleRoute}
           onRoute={handleRoute}
           isRouting={isRouting}
+        />
+
+        <AnalysisPanel
+          is3D={is3D}
+          selectedFeature={selectedFeature}
+          onBuffer={bufferSelectedFeature}
+          sliceActive={sliceActive}
+          onToggleSlice={toggleSlice}
         />
 
         <PortalLayerPanel
