@@ -264,6 +264,19 @@ arcgis-scene {
   margin-bottom: var(--space-3);
 }
 
+.panel-title-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: var(--space-3);
+}
+
 /* =========================
    BUTTONS
 ========================= */
@@ -478,6 +491,71 @@ arcgis-scene {
   color: var(--text-muted);
 }
 
+.portal-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: var(--space-2);
+  margin-bottom: 10px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.portal-account-status {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.portal-account-status strong {
+  color: white;
+}
+
+.portal-account-btn {
+  flex-shrink: 0;
+  width: auto;
+  margin-top: 0;
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+}
+
+.portal-search-results {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.portal-search-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.portal-result-title {
+  font-size: var(--text-sm);
+  color: white;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portal-result-add-btn {
+  flex-shrink: 0;
+  width: auto;
+  margin-top: 0;
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+}
+
 .global-search-empty {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -629,6 +707,18 @@ input[type="range"] {
   color: var(--text-muted);
   cursor: pointer;
   padding: 4px;
+}
+
+.layer-remove-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.layer-remove-btn:hover {
+  color: #f87171;
 }
 
 /* Transparent to layout on desktop, where there's enough width for all six

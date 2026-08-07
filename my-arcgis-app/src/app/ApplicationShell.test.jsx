@@ -5,10 +5,14 @@ import ApplicationShell from "./ApplicationShell";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
+import { searchPortalLayers } from "../services/PortalService";
+import { isOAuthConfigured, checkSignInStatus, signIn, signOut } from "../services/AuthService";
 
 jest.mock("../gis/GISMapEngine");
 jest.mock("../services/RoutingService");
 jest.mock("../services/GeocodingService");
+jest.mock("../services/PortalService");
+jest.mock("../services/AuthService");
 
 jest.mock("../components/GISMapView", () => (props) => (
   <button data-testid="fake-view-ready" onClick={() => props.onViewReady({ id: "fake-view" })}>
@@ -35,6 +39,22 @@ jest.mock("../components/LayerControlPanel", () => (props) => (
     <button onClick={() => props.onReorder(0, 1)}>reorder-layer</button>
     <button onClick={() => props.onStyleChange("route", { color: "#fff" })}>style-layer</button>
     <button onClick={() => props.onZoomToLayer("route")}>zoom-layer</button>
+    <button onClick={() => props.onRemove("portal_abc")}>remove-layer</button>
+  </div>
+));
+
+jest.mock("../components/PortalLayerPanel", () => (props) => (
+  <div data-testid="portal-layer-panel">
+    <span data-testid="oauth-configured">{String(props.oauthConfigured)}</span>
+    <span data-testid="signed-in-user">{props.signedInUser?.fullName ?? ""}</span>
+    <button onClick={() => props.onSearch("parks")}>search-portal</button>
+    <button
+      onClick={() => props.onAddLayer({ id: "abc", title: "Parks", url: "https://example.com/Parks/FeatureServer" })}
+    >
+      add-portal-layer
+    </button>
+    <button onClick={props.onSignIn}>sign-in</button>
+    <button onClick={props.onSignOut}>sign-out</button>
   </div>
 ));
 
@@ -77,6 +97,7 @@ describe("ApplicationShell", () => {
       Promise.resolve({ longitude: addr === "Start" ? 1 : 2, latitude: addr === "Start" ? 3 : 4 })
     );
     GISMapEngine.prototype.getLayers.mockReturnValue([]);
+    isOAuthConfigured.mockReturnValue(false);
   });
 
   test("renders the core layout", () => {
@@ -354,5 +375,115 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("close-feature"));
     expect(screen.queryByTestId("feature-panel")).not.toBeInTheDocument();
+  });
+
+  test("searching the portal forwards to searchPortalLayers", async () => {
+    const user = userEvent.setup();
+    searchPortalLayers.mockResolvedValue([{ id: "abc", title: "Parks" }]);
+    render(<ApplicationShell />);
+
+    await user.click(screen.getByText("search-portal"));
+    expect(searchPortalLayers).toHaveBeenCalledWith("parks");
+  });
+
+  test("a failed portal search shows a toast and resolves to an empty list", async () => {
+    const user = userEvent.setup();
+    searchPortalLayers.mockRejectedValue(new Error("portal down"));
+    render(<ApplicationShell />);
+
+    await user.click(screen.getByText("search-portal"));
+    expect(await screen.findByText("portal down")).toBeInTheDocument();
+  });
+
+  test("adding a portal layer calls engine.addPortalLayer, refreshes layers, and shows a toast", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("add-portal-layer"));
+
+    expect(engine.addPortalLayer).toHaveBeenCalledWith({
+      id: "abc",
+      title: "Parks",
+      url: "https://example.com/Parks/FeatureServer"
+    });
+    expect(await screen.findByText('Added "Parks" to layers.')).toBeInTheDocument();
+  });
+
+  test("a failed portal-layer add shows the error message as a toast", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.addPortalLayer.mockImplementation(() => {
+      throw new Error("no url");
+    });
+
+    await user.click(screen.getByText("add-portal-layer"));
+    expect(await screen.findByText("no url")).toBeInTheDocument();
+  });
+
+  test("removing a portal layer calls engine.removePortalLayer and refreshes layers", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("remove-layer"));
+    expect(engine.removePortalLayer).toHaveBeenCalledWith("portal_abc");
+  });
+
+  test("without OAuth configured, sign-in is never attempted and existing behavior is unaffected", () => {
+    render(<ApplicationShell />);
+
+    expect(checkSignInStatus).not.toHaveBeenCalled();
+    expect(screen.getByTestId("oauth-configured")).toHaveTextContent("false");
+  });
+
+  test("with OAuth configured, checks for a restored session on mount", async () => {
+    isOAuthConfigured.mockReturnValue(true);
+    checkSignInStatus.mockResolvedValue({ username: "jdoe", fullName: "Jane Doe" });
+
+    render(<ApplicationShell />);
+
+    expect(checkSignInStatus).toHaveBeenCalled();
+    expect(await screen.findByText("Jane Doe")).toBeInTheDocument();
+  });
+
+  test("signing in updates the signed-in user and shows a success toast", async () => {
+    const user = userEvent.setup();
+    isOAuthConfigured.mockReturnValue(true);
+    checkSignInStatus.mockResolvedValue(null);
+    signIn.mockResolvedValue({ username: "jdoe", fullName: "Jane Doe" });
+    render(<ApplicationShell />);
+
+    await user.click(screen.getByText("sign-in"));
+
+    expect(await screen.findByText("Signed in as Jane Doe.")).toBeInTheDocument();
+    expect(screen.getByTestId("signed-in-user")).toHaveTextContent("Jane Doe");
+  });
+
+  test("a failed or cancelled sign-in shows an error toast", async () => {
+    const user = userEvent.setup();
+    isOAuthConfigured.mockReturnValue(true);
+    checkSignInStatus.mockResolvedValue(null);
+    signIn.mockRejectedValue(new Error("popup closed"));
+    render(<ApplicationShell />);
+
+    await user.click(screen.getByText("sign-in"));
+
+    expect(await screen.findByText("popup closed")).toBeInTheDocument();
+  });
+
+  test("signing out clears the signed-in user and shows a toast", async () => {
+    const user = userEvent.setup();
+    isOAuthConfigured.mockReturnValue(true);
+    checkSignInStatus.mockResolvedValue({ username: "jdoe", fullName: "Jane Doe" });
+    render(<ApplicationShell />);
+    await screen.findByText("Jane Doe");
+
+    await user.click(screen.getByText("sign-out"));
+
+    expect(signOut).toHaveBeenCalled();
+    expect(await screen.findByText("Signed out.")).toBeInTheDocument();
+    expect(screen.getByTestId("signed-in-user")).toHaveTextContent("");
   });
 });

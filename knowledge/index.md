@@ -88,6 +88,61 @@ Both fixes are load-bearing together: a hidden-but-hittable layer still needs a 
 
 **Drawings refresh:** because drawing a new graphic is asynchronous (`SketchViewModel` "create" completes after the user finishes sketching), the engine calls `onDrawingsChanged` (registered via `setOnDrawingsChanged`) when a graphic completes, which `ApplicationShell` wires to `refreshLayers()` — without this, the panel's `layers` state would keep serving the pre-drawing snapshot and never show style controls for a just-drawn graphic.
 
+## Portal Layer System
+
+**Purpose:** Lets the user search an ArcGIS portal (ArcGIS Online, or an Enterprise portal via `esriConfig.portalUrl`) for Feature Service items and add one as a live map layer, using the same toggle/reorder/zoom/remove plumbing as the built-in layers.
+
+**Key Files:**
+- `src/services/PortalService.js` – `searchPortalLayers(query, { num })`, a stateless service (same architectural role as `RoutingService`/`GeocodingService`) that wraps the ArcGIS JS API's `Portal`/`PortalQueryParams` classes. Queries are restricted to `type:"Feature Service"` and results with no `url` are filtered out, since those are the only items `GISMapEngine.addPortalLayer` can turn into a `FeatureLayer`.
+- `src/gis/GISMapEngine.js`
+  - `portalLayers` (Map of id -> live `FeatureLayer`) / `portalLayerMeta` (Map of id -> `{ title, url, visible }`) – the dynamic counterpart to the fixed `layerOrder` set. A portal-added layer's id is `portal_<portalItemId>`.
+  - `addPortalLayer(item)` – creates a `FeatureLayer` from a `PortalService` search result, registers it under a `portal_<id>` key, appends that id to `layerOrder`, and adds it to the live map if attached. Adding the same portal item twice returns the existing id instead of duplicating the layer. Throws if the item has no `url`.
+  - `removePortalLayer(id)` – removes the layer from the map and from `portalLayers`/`portalLayerMeta`/`layerOrder`. A no-op for any id the engine didn't add itself (i.e. one of the built-in layers).
+  - `buildLayerMap()` – single id-to-layer resolution helper (spreads `portalLayers` in alongside the fixed layers) now shared by `attachToView`, `toggleLayer`, `zoomToLayer`, and `reorderLayers`, replacing four previously-duplicated object literals.
+  - `getLayers()` – appends one `{ id, name, visible, removable: true }` entry per portal layer so `LayerControlPanel` can render them like any other row, but with a remove control the built-in layers don't get.
+- `src/components/PortalLayerPanel.jsx` – collapsed-by-default search UI (search box + result list with an "Add" button per result), rendered in `ApplicationShell`'s sidebar above `LayerControlPanel`.
+- `src/components/LayerControlPanel.jsx` – renders a remove (✕) button per row when `layer.removable` is true, calling `onRemove(layer.id)`.
+- `src/app/ApplicationShell.jsx` – `searchPortal` (calls `PortalService.searchPortalLayers`, toasts and returns `[]` on failure), `addPortalLayer` (calls `engine.addPortalLayer`, refreshes layers, toasts success/failure), `removePortalLayer` (calls `engine.removePortalLayer`, refreshes layers).
+
+**Persistence across 2D/3D reattachment:** Like `touristAttractionLayer`/`mrtStationLayer`/`mrtLineLayer`, portal `FeatureLayer` instances are NOT reused across an `attachToView` call — `portalLayerMeta` (title/url/visible) is their real source of truth, and `attachToView` rebuilds `this.portalLayers` from it on every call, consistent with `knowledge/architecture.md`'s "Renderer continuity for rebuilt FeatureLayers" reasoning (a fresh `FeatureLayer` instance is cheap and avoids relying on an instance surviving the outgoing map's destroy cascade).
+
+**Deliberately excluded:** Portal layers are not wired into `handleFeatureClick`'s selectable-layers list or the attribute-edit path (`resolveLayerId`/`hostedLayerById`/`updateSelectedFeatureAttributes`) — they are visualize/toggle/zoom-only. Extending click-to-select and editing to arbitrary portal layers would need per-layer schema handling beyond what a user-added layer of unknown shape can assume.
+
+### Portal Sign-In (OAuth)
+
+**Purpose:** Optional ArcGIS OAuth 2.0 sign-in so portal search (above) reflects an authenticated user's own organization/private/group-shared content instead of only public items. Entirely inactive (every function is a no-op / not rendered) unless explicitly configured — the app's pre-existing anonymous-only behavior is the default.
+
+**Key Files:**
+- `src/services/AuthService.js` – `isOAuthConfigured()`, `checkSignInStatus()`, `signIn()`, `signOut()`. Wraps `@arcgis/core/identity/{IdentityManager,OAuthInfo}` and `@arcgis/core/portal/Portal`. `OAuthInfo`/`IdentityManager.registerOAuthInfos` are set up once (lazily, on first use) and reused for the rest of the session. Sign-in opens a **popup** (`OAuthInfo({ popup: true })`) rather than redirecting the whole SPA away and back, so in-progress app state (drawings, route, open panels) survives sign-in. `signIn()`/`checkSignInStatus()` both resolve to a plain `{ username, fullName, orgId, thumbnailUrl }` profile (or `null`) by loading a fresh `Portal` against the configured portal URL and reading `portal.user` once `IdentityManager` has a credential.
+- `src/config/ArcGISConfiguration.js` – `OAUTH_APP_ID` (from `VITE_ARCGIS_OAUTH_CLIENT_ID`) and `PORTAL_URL` (from `VITE_ARCGIS_PORTAL_URL`, defaulting to `https://www.arcgis.com`). Setting `VITE_ARCGIS_PORTAL_URL` also sets `esriConfig.portalUrl`, so an Enterprise deployment can target its own portal without a code change.
+- `src/services/PortalService.js` – its module-level `Portal` singleton now explicitly targets `PORTAL_URL` (rather than the SDK's no-args default) so it stays in sync with `AuthService`'s sign-in target: once `IdentityManager` holds a credential for that URL, this `Portal`'s `queryItems` requests pick it up automatically (the SDK attaches matching credentials at request time), with no code path connecting the two modules directly.
+- `src/components/PortalLayerPanel.jsx` – renders a "Signed in as `<fullName>` — Sign out" / "Sign in" row above the search form, but only when `oauthConfigured` is true; renders nothing extra when it's false, so an app with no OAuth client ID configured shows exactly the UI it had before this feature existed.
+- `src/app/ApplicationShell.jsx` – on mount, calls `AuthService.checkSignInStatus()` (skipped entirely if `isOAuthConfigured()` is false) to restore a session that survived a page reload, since `IdentityManager` persists credentials in the browser. `handleSignIn`/`handleSignOut` wrap `AuthService.signIn`/`signOut`, updating `signedInUser` state and toasting success/failure.
+
+**Configuration (`.env`, both optional):**
+- `VITE_ARCGIS_OAUTH_CLIENT_ID` – the OAuth 2.0 application's Client ID, registered under the target ArcGIS organization (ArcGIS Online: Developer dashboard > OAuth 2.0 > New Application; Enterprise: an Application item registered in Portal). That OAuth application's registered redirect URIs must include this app's deployed URL(s), or the popup sign-in flow will be rejected by the portal - this is configured on the ArcGIS side, not in this codebase.
+- `VITE_ARCGIS_PORTAL_URL` – an Enterprise portal's sharing root (e.g. `https://your-enterprise-domain/portal`). Leave unset to use ArcGIS Online.
+
+**Deliberately excluded:** No redirect-based (non-popup) sign-in page/route exists — popup mode was chosen specifically so a full-page OAuth redirect never has to preserve/restore the rest of `ApplicationShell`'s state. There is also no UI to type a custom portal URL at runtime; switching portals is a `.env`/redeploy-time decision, consistent with `ArcGISConfiguration.js`'s existing role as the single point of change for endpoint configuration (see `knowledge/architecture.md`'s "Centralized configuration boundary").
+
+**How to trigger the sign-in flow:**
+
+1. **Register an OAuth 2.0 application** under the target ArcGIS organization to get a Client ID:
+   - ArcGIS Online: [developers.arcgis.com](https://developers.arcgis.com/) (signed in with the org account) → **OAuth 2.0 Application** → create one (or reuse an existing one).
+   - Enterprise: Portal → Content → **New Item** → **Application** → **OAuth 2.0 Application**.
+2. On that application's settings, add a **Redirect URI** matching wherever this app runs (e.g. `http://localhost:5173` for local Vite dev, or the deployed URL in staging/prod). The popup sign-in below is rejected by ArcGIS if the calling origin isn't registered here.
+3. Copy the **Client ID** and set it in `my-arcgis-app/.env` (the `.env` inside the Vite project root — Vite does not read one in a parent directory):
+   ```
+   VITE_ARCGIS_OAUTH_CLIENT_ID=your-client-id-here
+   ```
+   Optionally also set `VITE_ARCGIS_PORTAL_URL` if targeting an Enterprise portal instead of ArcGIS Online.
+4. **Restart the dev server** (`npm run dev`) — Vite only reads `.env` at startup, so an already-running server won't pick up the change.
+5. In the app's sidebar, expand **"ADD LAYER FROM PORTAL"** (click its title if collapsed). With a Client ID configured, a row now appears above the search box: *"Sign in to search your organization's shared content"* with a **Sign in** button.
+6. Click **Sign in** — a popup opens to the ArcGIS org's login page. After authenticating there, the popup closes automatically and the row updates to *"Signed in as `<name>`"* with a **Sign out** button.
+7. From then on (until sign-out, or the browser session's stored credential expires), portal searches in that panel include the signed-in user's org/private/group-shared items, not just public ones. A page reload does not require signing in again — `checkSignInStatus()` restores the session automatically on mount (see `ApplicationShell.jsx` above).
+
+With no Client ID configured (the default), step 5 never shows anything beyond the search box - this flow is entirely opt-in.
+
 ## Global Search System
 
 **Purpose:** Lets the user search by typing text into one search box in the sidebar, matching either map feature attributes or a street address, then jump the view to whichever result they pick.
@@ -132,7 +187,7 @@ See `knowledge/features/responsive-layout.md` for details.
 **Key Files:**
 - `my-arcgis-app/jest.config.cjs` – Jest configuration (jsdom environment for component tests).
 - `my-arcgis-app/babel.config.cjs` – Babel transform config so Jest can process JSX/ESM (Vite normally handles this at dev/build time; Jest needs its own transform pipeline).
-- `my-arcgis-app/src/**/*.test.{js,jsx}` – one test file per component/service/hook (`ApplicationShell`, `FeatureAttributesPanel`, `FloatingDrawTools`, `GISMapView`, `LayerControlPanel`, `RouteInput`, `RoutingControlPanel`, `GISMapEngine`, `useHeatmapAnalysis`, `useRoutingEngine`, `heatmapLayer`, `GeocodingService`, `RoutingService`). `HeatmapControlPanel`, `ViewControlPanel`, `RouteSearchPanel`, and `SidePanel` were removed as dead code — they duplicated logic already hand-rolled inline in `RoutingControlPanel`/`ApplicationShell` and were never imported by any app code.
+- `my-arcgis-app/src/**/*.test.{js,jsx}` – one test file per component/service/hook (`ApplicationShell`, `FeatureAttributesPanel`, `FloatingDrawTools`, `GISMapView`, `LayerControlPanel`, `PortalLayerPanel`, `RouteInput`, `RoutingControlPanel`, `GISMapEngine`, `useHeatmapAnalysis`, `useRoutingEngine`, `heatmapLayer`, `GeocodingService`, `RoutingService`, `PortalService`, `AuthService`). `HeatmapControlPanel`, `ViewControlPanel`, `RouteSearchPanel`, and `SidePanel` were removed as dead code — they duplicated logic already hand-rolled inline in `RoutingControlPanel`/`ApplicationShell` and were never imported by any app code.
 - `my-arcgis-app/test/mocks/arcgis-core/widgets/Sketch/SketchViewModel.js` – jsdom-safe stub of the real `SketchViewModel`; now includes `cancel`/`destroy` jest mocks (in addition to `create`/`on`/`emit`) since `GISMapEngine.attachToView` calls both on the outgoing instance before creating a new one.
 - `my-arcgis-app/sonar-project.properties` – SonarQube scanner config; consumes Jest's `test:coverage` output for static analysis/coverage reporting.
 

@@ -58,6 +58,16 @@ export default class GISMapEngine {
   mrtStationLayer = null;
   mrtLineLayer = null;
 
+  // User-added layers picked from an ArcGIS portal search (see
+  // addPortalLayer/removePortalLayer). portalLayers holds the live
+  // FeatureLayer instances (keyed by a synthetic "portal_<itemId>" id, same
+  // id space as layerOrder); portalLayerMeta holds the plain {title, url,
+  // visible} data needed to recreate those FeatureLayers on every
+  // attachToView call, the same way touristAttractionRenderer/etc. survive
+  // reattachment for the built-in FeatureLayers.
+  portalLayers = new Map();
+  portalLayerMeta = new Map();
+
   touristAttractionVisible = true;
   mrtStationVisible = true;
   mrtLineVisible = true;
@@ -144,6 +154,25 @@ export default class GISMapEngine {
   // old map's layers loses them for the rest of the session.
   detachFromView() {
     this.currentMap?.removeAll();
+  }
+
+  // Single source of truth for id -> layer resolution, used by every
+  // operation that looks a layer up by its layerOrder id (attachToView,
+  // toggleLayer, zoomToLayer, reorderLayers). Portal layers are spread in
+  // from the live portalLayers map so they're resolvable the same way as
+  // the built-in layers, without duplicating this literal at each call site.
+  buildLayerMap() {
+    return {
+      route: this.routeLayer,
+      stops: this.stopLayer,
+      touristAttractions: this.touristAttractionLayer,
+      heat: this.heatLayer,
+      mrtStations: this.mrtStationLayer,
+      mrtLines: this.mrtLineLayer,
+      drawings: this.drawLayer,
+      searchResult: this.searchLayer,
+      ...Object.fromEntries(this.portalLayers)
+    };
   }
 
   attachToView(view) {
@@ -254,16 +283,25 @@ export default class GISMapEngine {
       this.drawLayer.addMany(validDrawings);
     }
 
-    const layerMap = {
-      route: this.routeLayer,
-      stops: this.stopLayer,
-      touristAttractions: this.touristAttractionLayer,
-      heat: this.heatLayer,
-      mrtStations: this.mrtStationLayer,
-      mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer,
-      searchResult: this.searchLayer
-    };
+    // Portal-added FeatureLayers are, like touristAttractionLayer/mrtStation
+    // Layer/mrtLineLayer, fully reconstructed on every attachToView call
+    // rather than reused across it - portalLayerMeta (title/url/visible) is
+    // their real source of truth, so a stale/detached FeatureLayer instance
+    // is never relied on to survive a 2D/3D switch.
+    this.portalLayers = new Map();
+    this.portalLayerMeta.forEach((meta, id) => {
+      this.portalLayers.set(
+        id,
+        new FeatureLayer({
+          url: meta.url,
+          title: meta.title,
+          visible: meta.visible,
+          outFields: ["*"]
+        })
+      );
+    });
+
+    const layerMap = this.buildLayerMap();
 
     this.layerOrder.forEach((id) => {
       const layer = layerMap[id];
@@ -479,23 +517,80 @@ export default class GISMapEngine {
       searchResult: { id: "searchResult", name: "Search Result", visible: this.searchLayer?.visible }
     };
 
+    // Portal-added layers have no fixed slot in `lookup` above since their
+    // number and ids are dynamic (one per added portal item). They carry
+    // `removable: true` so LayerControlPanel can offer a remove control that
+    // the built-in layers don't get.
+    this.portalLayers.forEach((layer, id) => {
+      const meta = this.portalLayerMeta.get(id);
+      lookup[id] = {
+        id,
+        name: meta?.title || "Portal Layer",
+        visible: layer.visible,
+        removable: true
+      };
+    });
+
     return l.map((id) => lookup[id]);
   }
 
   toggleLayer(id) {
-    const map = {
-      route: this.routeLayer,
-      stops: this.stopLayer,
-      touristAttractions: this.touristAttractionLayer,
-      heat: this.heatLayer,
-      mrtStations: this.mrtStationLayer,
-      mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer,
-      searchResult: this.searchLayer
-    };
+    const layer = this.buildLayerMap()[id];
+    if (!layer) return;
 
-    const layer = map[id];
-    if (layer) layer.visible = !layer.visible;
+    layer.visible = !layer.visible;
+
+    // Portal layers have no dedicated engine visibility field (route/heat/
+    // etc. do); portalLayerMeta.visible IS that field for them, and must be
+    // kept in sync so the layer reattaches with the right visibility on the
+    // next 2D/3D switch (see attachToView's portal-layer reconstruction).
+    const meta = this.portalLayerMeta.get(id);
+    if (meta) meta.visible = layer.visible;
+  }
+
+  // Adds a layer picked from PortalService.searchPortalLayers as a live
+  // FeatureLayer, using the same toggle/reorder/zoom/style plumbing as every
+  // built-in layer (via buildLayerMap + layerOrder). `item` is one of the
+  // plain objects that service returns ({ id, title, url, ... }). Adding the
+  // same portal item twice is a no-op (returns the existing layer's id)
+  // rather than creating a duplicate layer.
+  addPortalLayer(item) {
+    if (!item?.url) throw new Error("This portal item has no queryable layer URL.");
+
+    const layerId = `portal_${item.id}`;
+    if (this.portalLayerMeta.has(layerId)) return layerId;
+
+    const meta = { title: item.title || "Portal Layer", url: item.url, visible: true };
+    this.portalLayerMeta.set(layerId, meta);
+    this.layerOrder = [...this.layerOrder, layerId];
+
+    const layer = new FeatureLayer({
+      url: meta.url,
+      title: meta.title,
+      visible: meta.visible,
+      outFields: ["*"]
+    });
+    this.portalLayers.set(layerId, layer);
+
+    if (this.currentMap) this.currentMap.add(layer);
+
+    return layerId;
+  }
+
+  // Removes a portal-added layer entirely (not just hides it), since unlike
+  // the fixed built-in layers, these were opted into by the user and should
+  // be droppable the same way. Only valid for ids this engine added itself
+  // (i.e. present in portalLayerMeta) - the built-in layers can't be removed
+  // this way.
+  removePortalLayer(id) {
+    if (!this.portalLayerMeta.has(id)) return;
+
+    const layer = this.portalLayers.get(id);
+    if (layer && this.currentMap) this.currentMap.remove(layer);
+
+    this.portalLayers.delete(id);
+    this.portalLayerMeta.delete(id);
+    this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
   // Zooms/pans the current view to the extent of one layer's content, so a
@@ -504,18 +599,7 @@ export default class GISMapEngine {
   async zoomToLayer(id, msg) {
     if (!this.currentView) return;
 
-    const map = {
-      route: this.routeLayer,
-      stops: this.stopLayer,
-      touristAttractions: this.touristAttractionLayer,
-      heat: this.heatLayer,
-      mrtStations: this.mrtStationLayer,
-      mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer,
-      searchResult: this.searchLayer
-    };
-
-    const layer = map[id];
+    const layer = this.buildLayerMap()[id];
     if (!layer) return;
 
     // A hidden layer would otherwise make "zoom to layer" look like it did
@@ -533,6 +617,9 @@ export default class GISMapEngine {
         searchResult: "searchVisible"
       }[id];
       if (visibilityField) this[visibilityField] = true;
+
+      const portalMeta = this.portalLayerMeta.get(id);
+      if (portalMeta) portalMeta.visible = true;
     }
 
     // A bare Layer instance is NOT a valid `view.goTo()` target (the ArcGIS
@@ -644,16 +731,7 @@ export default class GISMapEngine {
 
     if (!this.currentMap) return;
 
-    const map = {
-      route: this.routeLayer,
-      stops: this.stopLayer,
-      heat: this.heatLayer,
-      touristAttractions: this.touristAttractionLayer,
-      mrtStations: this.mrtStationLayer,
-      mrtLines: this.mrtLineLayer,
-      drawings: this.drawLayer,
-      searchResult: this.searchLayer
-    };
+    const map = this.buildLayerMap();
 
     order.forEach((id, i) => {
       const layer = map[id];

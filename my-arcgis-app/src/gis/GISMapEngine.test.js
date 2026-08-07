@@ -8,6 +8,7 @@ function makeView(hitTestResponse) {
   const map = {
     removeAll: jest.fn(),
     add: jest.fn(),
+    remove: jest.fn(),
     reorder: jest.fn()
   };
   return {
@@ -642,6 +643,102 @@ describe("GISMapEngine.reorderLayers", () => {
     const engine = new GISMapEngine();
     engine.reorderLayers(0, 2);
     expect(engine.layerOrder[2]).toBe("route");
+  });
+});
+
+describe("GISMapEngine portal layers", () => {
+  const portalItem = { id: "abc123", title: "Parks", url: "https://example.com/Parks/FeatureServer" };
+
+  test("addPortalLayer throws for an item with no url", () => {
+    const engine = new GISMapEngine();
+    expect(() => engine.addPortalLayer({ id: "x", title: "No URL" })).toThrow(
+      "This portal item has no queryable layer URL."
+    );
+  });
+
+  test("addPortalLayer registers the layer, appends it to layerOrder, and adds it to an attached map", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    const id = engine.addPortalLayer(portalItem);
+
+    expect(id).toBe("portal_abc123");
+    expect(engine.layerOrder).toContain(id);
+    expect(engine.portalLayers.get(id).url).toBe(portalItem.url);
+    expect(view.map.add).toHaveBeenCalledWith(engine.portalLayers.get(id));
+  });
+
+  test("addPortalLayer is a no-op (returns the existing id) when the same item is added twice", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+
+    const firstId = engine.addPortalLayer(portalItem);
+    const layerBefore = engine.portalLayers.get(firstId);
+    const secondId = engine.addPortalLayer(portalItem);
+
+    expect(secondId).toBe(firstId);
+    expect(engine.layerOrder.filter((x) => x === firstId)).toHaveLength(1);
+    expect(engine.portalLayers.get(firstId)).toBe(layerBefore);
+  });
+
+  test("addPortalLayer works before the engine is attached to a view", () => {
+    const engine = new GISMapEngine();
+    const id = engine.addPortalLayer(portalItem);
+    expect(engine.portalLayers.get(id)).toBeDefined();
+  });
+
+  test("portal layers appear in getLayers as removable and survive a 2D/3D reattachment", () => {
+    const engine = new GISMapEngine();
+    const view1 = makeView();
+    engine.attachToView(view1);
+    const id = engine.addPortalLayer(portalItem);
+
+    const entry = engine.getLayers().find((l) => l.id === id);
+    expect(entry).toEqual({ id, name: "Parks", visible: true, removable: true });
+
+    const view2 = makeView();
+    engine.attachToView(view2);
+
+    expect(engine.portalLayers.has(id)).toBe(true);
+    expect(engine.portalLayerMeta.has(id)).toBe(true);
+    expect(view2.map.add).toHaveBeenCalledWith(engine.portalLayers.get(id));
+  });
+
+  test("toggleLayer flips a portal layer's visibility and keeps portalLayerMeta in sync across reattachment", () => {
+    const engine = new GISMapEngine();
+    const view1 = makeView();
+    engine.attachToView(view1);
+    const id = engine.addPortalLayer(portalItem);
+
+    engine.toggleLayer(id);
+    expect(engine.portalLayers.get(id).visible).toBe(false);
+    expect(engine.portalLayerMeta.get(id).visible).toBe(false);
+
+    engine.attachToView(makeView());
+    expect(engine.portalLayers.get(id).visible).toBe(false);
+  });
+
+  test("removePortalLayer removes it from the map, layerOrder, and internal maps", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    const id = engine.addPortalLayer(portalItem);
+    const layer = engine.portalLayers.get(id);
+
+    engine.removePortalLayer(id);
+
+    expect(view.map.remove).toHaveBeenCalledWith(layer);
+    expect(engine.portalLayers.has(id)).toBe(false);
+    expect(engine.portalLayerMeta.has(id)).toBe(false);
+    expect(engine.layerOrder).not.toContain(id);
+  });
+
+  test("removePortalLayer is a no-op for an id it didn't add", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    expect(() => engine.removePortalLayer("touristAttractions")).not.toThrow();
+    expect(engine.touristAttractionLayer).toBeTruthy();
   });
 });
 

@@ -20,6 +20,7 @@ function setup(overrides = {}) {
     onReorder: jest.fn(),
     onStyleChange: jest.fn(),
     onZoomToLayer: jest.fn(),
+    onRemove: jest.fn(),
     heatIntensity: 40,
     updateIntensity: jest.fn(),
     ...overrides
@@ -231,5 +232,27 @@ describe("LayerControlPanel", () => {
 
     await user.click(screen.getByRole("button", { name: "Zoom to Tourist Attractions" }));
     expect(props.onZoomToLayer).toHaveBeenCalledWith("touristAttractions");
+  });
+
+  test("shows a remove button only for removable (portal-added) layers", () => {
+    setup({
+      layers: [
+        ...baseLayers,
+        { id: "portal_abc", name: "Parks", visible: true, styleGroups: [], removable: true }
+      ]
+    });
+
+    expect(screen.getByRole("button", { name: "Remove Parks" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove Route Layer" })).not.toBeInTheDocument();
+  });
+
+  test("clicking a layer's remove button calls onRemove with that layer's id", async () => {
+    const user = userEvent.setup();
+    const { props } = setup({
+      layers: [{ id: "portal_abc", name: "Parks", visible: true, styleGroups: [], removable: true }]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Remove Parks" }));
+    expect(props.onRemove).toHaveBeenCalledWith("portal_abc");
   });
 });

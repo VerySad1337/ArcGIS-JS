@@ -8,6 +8,7 @@ export default function LayerControlPanel({
   onReorder,
   onStyleChange,
   onZoomToLayer,
+  onRemove,
   heatIntensity,
   updateIntensity
 }) {
@@ -128,6 +129,17 @@ export default function LayerControlPanel({
               >
                 <Icon name={isExpanded ? "chevronUp" : "chevronDown"} />
               </button>
+
+              {layer.removable && (
+                <button
+                  type="button"
+                  className="layer-remove-btn"
+                  aria-label={`Remove ${layer.name}`}
+                  onClick={() => onRemove(layer.id)}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              )}
             </div>
           </fieldset>
 
@@ -204,13 +216,15 @@ LayerControlPanel.propTypes = {
       id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
       name: PropTypes.string,
       visible: PropTypes.bool,
-      styleGroups: PropTypes.array
+      styleGroups: PropTypes.array,
+      removable: PropTypes.bool
     })
   ).isRequired,
   onToggle: PropTypes.func.isRequired,
   onReorder: PropTypes.func.isRequired,
   onStyleChange: PropTypes.func.isRequired,
   onZoomToLayer: PropTypes.func.isRequired,
+  onRemove: PropTypes.func,
   heatIntensity: PropTypes.number,
   updateIntensity: PropTypes.func
 };

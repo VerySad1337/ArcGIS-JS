@@ -4,9 +4,12 @@ import GISMapView from "../components/GISMapView";
 import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
+import PortalLayerPanel from "../components/PortalLayerPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
+import { searchPortalLayers } from "../services/PortalService";
+import { isOAuthConfigured, checkSignInStatus, signIn, signOut } from "../services/AuthService";
 import { WEBMAP_ID, WEBSCENE_ID } from "../config/ArcGISConfiguration";
 import FloatingDrawTools from "../components/FloatingDrawTools";
 import FeatureAttributesPanel from "../components/FeatureAttributesPanel";
@@ -30,6 +33,16 @@ export default function ApplicationShell() {
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const sidebarToggleRef = useRef(null);
   const sidePanelRef = useRef(null);
+  const [signedInUser, setSignedInUser] = useState(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  useEffect(() => {
+    if (!isOAuthConfigured()) return;
+    // Restores a prior session (IdentityManager persists credentials across
+    // reloads) without prompting the user again; resolves to null when
+    // there's nothing to restore.
+    checkSignInStatus().then(setSignedInUser);
+  }, []);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -169,6 +182,53 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
+  // Portal layer search itself is a stateless service call (consistent with
+  // the existing rule that RoutingService/GeocodingService are invoked from
+  // the shell, not the engine); adding/removing the resulting FeatureLayer
+  // is engine-owned, same as every other layer mutation.
+  const searchPortal = async (query) => {
+    try {
+      return await searchPortalLayers(query);
+    } catch (err) {
+      showToast(err.message || "Portal search failed.", "error");
+      return [];
+    }
+  };
+
+  const addPortalLayer = (item) => {
+    try {
+      engineRef.current.addPortalLayer(item);
+      refreshLayers();
+      showToast(`Added "${item.title}" to layers.`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to add layer.", "error");
+    }
+  };
+
+  const removePortalLayer = (id) => {
+    engineRef.current.removePortalLayer(id);
+    refreshLayers();
+  };
+
+  const handleSignIn = async () => {
+    setSigningIn(true);
+    try {
+      const user = await signIn();
+      setSignedInUser(user);
+      if (user) showToast(`Signed in as ${user.fullName}.`, "success");
+    } catch (err) {
+      showToast(err.message || "Sign-in failed or was cancelled.", "error");
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignOut = () => {
+    signOut();
+    setSignedInUser(null);
+    showToast("Signed out.", "success");
+  };
+
   // Combines map-feature search (Tourist Attractions/MRT Stations/MRT
   // Lines/Drawings, via the engine) with address geocoding (via the
   // existing GeocodingService) into one result list. Geocoding is invoked
@@ -290,12 +350,23 @@ export default function ApplicationShell() {
           isRouting={isRouting}
         />
 
+        <PortalLayerPanel
+          onSearch={searchPortal}
+          onAddLayer={addPortalLayer}
+          oauthConfigured={isOAuthConfigured()}
+          signedInUser={signedInUser}
+          signingIn={signingIn}
+          onSignIn={handleSignIn}
+          onSignOut={handleSignOut}
+        />
+
         <LayerControlPanel
           layers={layers}
           onToggle={toggleLayer}
           onReorder={reorderLayer}
           onStyleChange={updateLayerStyle}
           onZoomToLayer={zoomToLayer}
+          onRemove={removePortalLayer}
           heatIntensity={heatIntensity}
           updateIntensity={updateIntensity}
         />

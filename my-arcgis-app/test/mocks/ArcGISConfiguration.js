@@ -5,5 +5,7 @@ module.exports = {
   HEATMAP_FEATURE_LAYER_URL: "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer",
   MRT_STATION_FEATURE_LAYER_URL: "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Rail_Stations/FeatureServer",
   MRT_LINE_FEATURE_LAYER_URL: "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Rail_Lines/FeatureServer",
-  GEOCODER_URL: "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer"
+  GEOCODER_URL: "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer",
+  PORTAL_URL: "https://www.arcgis.com",
+  OAUTH_APP_ID: null
 };

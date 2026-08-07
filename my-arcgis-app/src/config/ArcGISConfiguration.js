@@ -1,8 +1,23 @@
 import esriConfig from "@arcgis/core/config";
 
 esriConfig.apiKey = import.meta.env.VITE_ARCGIS_API_KEY;
-// ArcGIS Enterprise URL (IMPORTANT)
-//esriConfig.portalUrl = "https://your-enterprise-domain/portal"; 
+
+// Portal to search/sign in against. Defaults to ArcGIS Online when unset;
+// point this at an Enterprise portal's sharing root
+// (e.g. "https://your-enterprise-domain/portal") via .env instead of
+// hardcoding it here, so the same build can target different portals per
+// environment (dev/staging/prod) without a code change.
+export const PORTAL_URL = import.meta.env.VITE_ARCGIS_PORTAL_URL || "https://www.arcgis.com";
+if (import.meta.env.VITE_ARCGIS_PORTAL_URL) {
+  esriConfig.portalUrl = PORTAL_URL;
+}
+
+// OAuth 2.0 application (client) ID registered with the portal above (ArcGIS
+// Developer dashboard, or an Enterprise portal's own OAuth app registration).
+// Sign-in (see AuthService.js) is entirely optional and only activates when
+// this is set - an app with no client ID configured just stays anonymous,
+// same as before this feature existed.
+export const OAUTH_APP_ID = import.meta.env.VITE_ARCGIS_OAUTH_CLIENT_ID || null;
 
 // Web Map
 export const WEBMAP_ID ="e64141e618654205b8e4849c39f23212";
