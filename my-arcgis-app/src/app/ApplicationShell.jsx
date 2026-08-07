@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 const TOAST_DURATION_MS = 4000;
 import GISMapView from "../components/GISMapView";
+import ViewModeToggle from "../components/ViewModeToggle";
 import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
-import AnalysisPanel from "../components/AnalysisPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress } from "../services/GeocodingService";
@@ -184,7 +184,7 @@ export default function ApplicationShell() {
   };
 
   // Filter & Aggregate: schema lookups are read-only (no toast needed on
-  // failure - AnalysisPanel just gets an empty field list); apply/clear
+  // failure - LayerControlPanel just gets an empty field list); apply/clear
   // mutate engine state that getLayers() surfaces (filterDescription), so
   // both refresh the layer list the same way every other layer mutation
   // does. setLayerFilter throws on an invalid condition (bad field/operator/
@@ -391,11 +391,26 @@ export default function ApplicationShell() {
         className={`side-panel${sidebarOpen ? " open" : ""}`}
         tabIndex={-1}
       >
+        <ViewModeToggle is3D={is3D} setIs3D={toggleViewMode} />
+
         <GlobalSearchPanel onSearch={handleSearch} onSelectResult={handleSelectSearchResult} />
 
+        <LayerControlPanel
+          layers={layers}
+          onToggle={toggleLayer}
+          onReorder={reorderLayer}
+          onStyleChange={updateLayerStyle}
+          onZoomToLayer={zoomToLayer}
+          onRemove={removePortalLayer}
+          heatIntensity={heatIntensity}
+          updateIntensity={updateIntensity}
+          onGetLayerFields={getLayerFields}
+          onApplyFilter={applyLayerFilter}
+          onClearFilter={clearLayerFilter}
+          onRunAggregate={runAnalysis}
+        />
+
         <RoutingControlPanel
-          is3D={is3D}
-          setIs3D={toggleViewMode}
           routeOn={routeOn}
           toggleRoute={toggleRoute}
           onRoute={handleRoute}
@@ -410,25 +425,6 @@ export default function ApplicationShell() {
           signingIn={signingIn}
           onSignIn={handleSignIn}
           onSignOut={handleSignOut}
-        />
-
-        <LayerControlPanel
-          layers={layers}
-          onToggle={toggleLayer}
-          onReorder={reorderLayer}
-          onStyleChange={updateLayerStyle}
-          onZoomToLayer={zoomToLayer}
-          onRemove={removePortalLayer}
-          heatIntensity={heatIntensity}
-          updateIntensity={updateIntensity}
-        />
-
-        <AnalysisPanel
-          layers={layers}
-          onGetLayerFields={getLayerFields}
-          onApplyFilter={applyLayerFilter}
-          onClearFilter={clearLayerFilter}
-          onRunAnalysis={runAnalysis}
         />
       </div>
 

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import LayerControlPanel from "./LayerControlPanel";
 
@@ -13,6 +13,15 @@ const baseLayers = [
   { id: "heat", name: "Heatmap", visible: true, styleGroups: [] }
 ];
 
+const FIELDS = {
+  touristAttractions: {
+    fields: [
+      { name: "RATING", kind: "number" },
+      { name: "NAME", kind: "string" }
+    ]
+  }
+};
+
 function setup(overrides = {}) {
   const props = {
     layers: baseLayers,
@@ -23,6 +32,10 @@ function setup(overrides = {}) {
     onRemove: jest.fn(),
     heatIntensity: 40,
     updateIntensity: jest.fn(),
+    onGetLayerFields: jest.fn((id) => Promise.resolve(FIELDS[id] || { fields: [] })),
+    onApplyFilter: jest.fn().mockResolvedValue(undefined),
+    onClearFilter: jest.fn(),
+    onRunAggregate: jest.fn().mockResolvedValue({ total: { count: 3, sum: 12 } }),
     ...overrides
   };
   const utils = render(<LayerControlPanel {...props} />);
@@ -126,6 +139,7 @@ describe("LayerControlPanel", () => {
     const chevrons = document.querySelectorAll(".layer-chevron-btn");
 
     await user.click(chevrons[1]);
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
 
     expect(screen.getByText("Color")).toBeInTheDocument();
     expect(screen.getByText("Border Width")).toBeInTheDocument();
@@ -147,7 +161,8 @@ describe("LayerControlPanel", () => {
       ]
     });
 
-    await user.click(screen.getByRole("button", { name: "Toggle layer styling options" }));
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
 
     expect(screen.getByText("Fill Color")).toBeInTheDocument();
     expect(screen.getByText("Border Color")).toBeInTheDocument();
@@ -167,7 +182,9 @@ describe("LayerControlPanel", () => {
       ]
     });
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "Toggle layer styling options" }));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
 
     const [fillColorInput, borderColorInput] = document.querySelectorAll('input[type="color"]');
     const widthInput = document.querySelector('input[type="number"]');
@@ -201,7 +218,8 @@ describe("LayerControlPanel", () => {
       ]
     });
 
-    await user.click(screen.getByRole("button", { name: "Toggle layer styling options" }));
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
 
     expect(screen.getByText("Points")).toBeInTheDocument();
     expect(screen.getByText("Lines")).toBeInTheDocument();
@@ -254,5 +272,98 @@ describe("LayerControlPanel", () => {
 
     await user.click(screen.getByRole("button", { name: "Remove Parks" }));
     expect(props.onRemove).toHaveBeenCalledWith("portal_abc");
+  });
+
+  describe("inline filter & aggregate", () => {
+    const filterableLayers = [
+      { id: "touristAttractions", name: "Tourist Attractions", visible: true, styleGroups: [], filterable: true }
+    ];
+
+    test("the chevron is enabled for a filterable layer even with no styleGroups", () => {
+      setup({ layers: filterableLayers });
+      const chevron = screen.getByRole("button", { name: "Toggle layer styling and filter options" });
+      expect(chevron).toBeEnabled();
+      expect(chevron).toHaveStyle({ visibility: "visible" });
+    });
+
+    test("expanding a filterable layer loads its field schema, and opening Filter shows a filter builder", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({ layers: filterableLayers });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      expect(props.onGetLayerFields).toHaveBeenCalledWith("touristAttractions");
+
+      await user.click(screen.getByRole("button", { name: "Filter" }));
+      expect(await screen.findByLabelText("Field")).toBeInTheDocument();
+    });
+
+    test("builds a condition and applies the filter, scoped to that layer's id", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({ layers: filterableLayers });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Filter" }));
+      await screen.findByLabelText("Field");
+
+      await user.selectOptions(screen.getByLabelText("Field"), "RATING");
+      await user.selectOptions(screen.getByLabelText("Operator"), "at least");
+      await user.type(screen.getByLabelText("Value"), "4");
+      await user.click(screen.getByRole("button", { name: "Apply Filter" }));
+
+      expect(props.onApplyFilter).toHaveBeenCalledWith("touristAttractions", {
+        conditions: [{ field: "RATING", operator: ">=", value: "4" }],
+        logic: "AND"
+      });
+    });
+
+    test("shows the active filter description with a clear control when the layer is already filtered", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({
+        layers: [{ ...filterableLayers[0], filterDescription: "RATING at least 4" }]
+      });
+
+      expect(screen.getByText("filtered")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Filter" }));
+      expect(await screen.findByText("RATING at least 4")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Clear filter on Tourist Attractions" }));
+      expect(props.onClearFilter).toHaveBeenCalledWith("touristAttractions");
+    });
+
+    test("running an aggregate calls onRunAggregate scoped to the single layer id and shows its result", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({ layers: filterableLayers });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Aggregate" }));
+      await screen.findByPlaceholderText("e.g. RATING");
+
+      await user.type(screen.getByPlaceholderText("e.g. RATING"), "RATING");
+      await user.click(screen.getByRole("checkbox", { name: "Sum" }));
+      await user.click(screen.getByRole("button", { name: "Run Aggregate" }));
+
+      expect(props.onRunAggregate).toHaveBeenCalledWith(["touristAttractions"], {
+        field: "RATING",
+        statistics: ["sum"]
+      });
+
+      expect(await screen.findByText(/Count: 3/)).toBeInTheDocument();
+      expect(screen.getByText(/Sum: 12/)).toBeInTheDocument();
+    });
+
+    test("statistic checkboxes are disabled until a numeric field is entered", async () => {
+      const user = userEvent.setup();
+      setup({ layers: filterableLayers });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Aggregate" }));
+      await screen.findByPlaceholderText("e.g. RATING");
+
+      expect(screen.getByRole("checkbox", { name: "Sum" })).toBeDisabled();
+      await user.type(screen.getByPlaceholderText("e.g. RATING"), "RATING");
+      expect(screen.getByRole("checkbox", { name: "Sum" })).toBeEnabled();
+    });
   });
 });

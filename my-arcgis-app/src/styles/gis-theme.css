@@ -727,7 +727,6 @@ input[type="range"] {
 
   .gis-button,
   .gis-button-secondary,
-  .analysis-mode-btn,
   .view-mode-btn,
   .analysis-logic-btn {
     min-height: 40px;
@@ -843,6 +842,13 @@ input[type="range"] {
   font-size: var(--text-sm);
   padding: 10px 2px 4px;
   line-height: 1.5;
+}
+
+.layer-order-note {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: 0 2px 8px;
+  line-height: 1.4;
 }
 
 .layer-style-controls {
@@ -1347,75 +1353,52 @@ input[type="range"] {
    FILTER & AGGREGATE (AnalysisPanel)
 ========================= */
 
-.analysis-mode-bar {
-  display: flex;
-  gap: 6px;
-  margin-bottom: var(--space-3);
+.layer-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.analysis-mode-btn {
-  flex: 1;
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: 0.2s;
-}
-
-.analysis-mode-btn:hover {
-  border-color: rgba(56, 189, 248, 0.5);
-}
-
-.analysis-mode-btn.active {
-  background: linear-gradient(90deg, var(--accent-strong), var(--accent-stronger));
-  border-color: transparent;
-  color: white;
-}
-
-.analysis-layer-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: var(--space-3);
-}
-
-.analysis-layer-checkbox {
+.layer-section-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 2px;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
   cursor: pointer;
+  padding: 8px 10px;
 }
 
-.analysis-layer-checkbox:hover {
+.layer-section-toggle:hover {
   color: white;
+}
+
+.layer-filter-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 10px 10px 10px;
+}
+
+.layer-aggregate-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: white;
+  font-size: var(--text-sm);
+  margin-top: var(--space-1);
 }
 
 .analysis-filter-badge {
+  margin-left: 8px;
   font-size: var(--text-xs);
   color: var(--accent);
   border: 1px solid rgba(56, 189, 248, 0.35);
   border-radius: var(--radius-pill);
   padding: 1px 8px;
-}
-
-.analysis-filter-group {
-  border: 1px solid rgba(56, 189, 248, 0.15);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  margin: 0 0 var(--space-3);
-}
-
-.analysis-filter-group legend {
-  color: var(--accent);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  padding: 0 4px;
 }
 
 .analysis-active-filter {
@@ -1545,14 +1528,6 @@ input[type="range"] {
   margin-top: 0;
 }
 
-.analysis-aggregate-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  border-top: 1px solid rgba(56, 189, 248, 0.12);
-  padding-top: var(--space-3);
-}
-
 .analysis-aggregate-field {
   display: flex;
   flex-direction: column;
@@ -1588,39 +1563,6 @@ input[type="range"] {
   gap: 4px;
   color: var(--text-muted);
   font-size: var(--text-sm);
-}
-
-.analysis-results {
-  overflow-x: auto;
-  margin-top: var(--space-2);
-}
-
-.analysis-results-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-sm);
-}
-
-.analysis-results-table th,
-.analysis-results-table td {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.analysis-results-table th {
-  color: var(--accent);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-}
-
-.analysis-results-table tfoot td {
-  color: white;
-  font-weight: 600;
-  border-top: 1px solid rgba(56, 189, 248, 0.3);
-  border-bottom: none;
 }
 
 /* =========================

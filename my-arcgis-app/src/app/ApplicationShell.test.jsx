@@ -22,7 +22,6 @@ jest.mock("../components/GISMapView", () => (props) => (
 
 jest.mock("../components/RoutingControlPanel", () => (props) => (
   <div data-testid="routing-panel">
-    <button onClick={() => props.setIs3D(!props.is3D)}>toggle-3d</button>
     <button onClick={props.toggleRoute}>toggle-route</button>
     <button onClick={() => props.onRoute("Start", "End")}>submit-route</button>
   </div>
@@ -159,7 +158,7 @@ describe("ApplicationShell", () => {
     render(<ApplicationShell />);
     const engine = getEngineInstance();
 
-    await user.click(screen.getByText("toggle-3d"));
+    await user.click(screen.getByRole("button", { name: "3D" }));
 
     expect(engine.detachFromView).toHaveBeenCalled();
   });

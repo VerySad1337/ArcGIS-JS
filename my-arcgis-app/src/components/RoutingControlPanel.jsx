@@ -1,53 +1,46 @@
+import { useState } from "react";
 import PropTypes from "prop-types";
 import RouteInput from "./RouteInput";
+import Icon from "./Icon";
 
+// Route search is collapsed by default: most sessions are drawing/browsing,
+// not actively routing, so it shouldn't sit permanently expanded above the
+// always-relevant LAYERS panel. Mirrors PortalLayerPanel/AnalysisPanel's
+// collapsed-by-default pattern. The 2D/3D view-mode toggle lives separately
+// in ViewModeToggle, at the top of the sidebar - see ApplicationShell.
 export default function RoutingControlPanel({
-  is3D,
-  setIs3D,
   routeOn,
   toggleRoute,
   onRoute,
   isRouting
 }) {
+  const [isOpen, setIsOpen] = useState(false);
+
   return (
-    <>
-      <div className="view-mode-bar">
-        <span className="view-mode-bar-label">View</span>
-        <fieldset className="view-mode-toggle" aria-label="Map view mode">
-          <button
-            type="button"
-            className="view-mode-btn"
-            aria-pressed={!is3D}
-            onClick={() => setIs3D(false)}
-          >
-            2D
-          </button>
-          <button
-            type="button"
-            className="view-mode-btn"
-            aria-pressed={is3D}
-            onClick={() => setIs3D(true)}
-          >
-            3D
-          </button>
-        </fieldset>
-      </div>
+    <div className="panel-card">
+      <button
+        type="button"
+        className="panel-title panel-title-toggle"
+        onClick={() => setIsOpen((open) => !open)}
+        aria-expanded={isOpen}
+      >
+        <span>ROUTE SEARCH</span>
+        <Icon name={isOpen ? "chevronUp" : "chevronDown"} />
+      </button>
 
-      <div className="panel-card">
-        <div className="panel-title">ROUTE SEARCH</div>
-        <RouteInput onRoute={onRoute} isRouting={isRouting} />
-        <button type="button" className="gis-button gis-button-secondary" onClick={toggleRoute}>
-          {routeOn ? "Hide Route" : "Show Route"}
-        </button>
-      </div>
-
-    </>
+      {isOpen && (
+        <>
+          <RouteInput onRoute={onRoute} isRouting={isRouting} />
+          <button type="button" className="gis-button gis-button-secondary" onClick={toggleRoute}>
+            {routeOn ? "Hide Route" : "Show Route"}
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
 RoutingControlPanel.propTypes = {
-  is3D: PropTypes.bool,
-  setIs3D: PropTypes.func,
   routeOn: PropTypes.bool,
   toggleRoute: PropTypes.func,
   onRoute: PropTypes.func,
