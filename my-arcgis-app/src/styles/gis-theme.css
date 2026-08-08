@@ -1031,8 +1031,124 @@ input[type="range"] {
 .layer-style-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   padding: 6px 10px 10px 10px;
+}
+
+/* Renderer type toggle (Simple / Unique Values / Class Breaks) and the
+   classification-method/ramp-mode toggles inside the Class Breaks form -
+   same visual pattern as the existing AND/OR filter-logic toggle
+   (.analysis-logic-toggle/.analysis-logic-btn), reused here for consistency
+   rather than introducing a second segmented-control look. */
+.renderer-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.renderer-type-btn {
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.renderer-type-btn.active {
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent-stronger));
+  border-color: transparent;
+  color: white;
+}
+
+.layer-halo-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.layer-halo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+/* Field/class-count/method/ramp configuration form shown for the two
+   advanced renderer modes, and the legend of generated values/breaks below
+   it - each a full-width block of its own rather than competing for space
+   inline with the Simple-mode color/border controls above. */
+.renderer-generate-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  width: 100%;
+  padding-top: 8px;
+  border-top: 1px solid rgba(56, 189, 248, 0.1);
+}
+
+.renderer-generate-form .gis-button {
+  width: auto;
+  margin-top: 0;
+  padding: 6px 14px;
+  font-size: var(--text-sm);
+}
+
+.renderer-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding-top: 8px;
+}
+
+.renderer-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.renderer-legend-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.renderer-legend-row input[type="color"] {
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.renderer-legend-row input[type="number"] {
+  width: 56px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+  font-size: var(--text-sm);
 }
 
 .layer-style-group-label {

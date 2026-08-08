@@ -47,6 +47,9 @@ function setup(overrides = {}) {
     onRunAggregate: jest.fn().mockResolvedValue({ total: { count: 3, sum: 12 } }),
     onSetAnnotation: jest.fn().mockResolvedValue(undefined),
     onClearAnnotation: jest.fn(),
+    onSetRenderer: jest.fn().mockResolvedValue(undefined),
+    onClearRenderer: jest.fn(),
+    onUpdateRendererEntry: jest.fn(),
     ...overrides
   };
   const utils = render(<LayerControlPanel {...props} />);
@@ -656,5 +659,155 @@ describe("LayerControlPanel", () => {
 
       document.head.removeChild(style);
     });
+  });
+});
+
+describe("LayerControlPanel renderer controls (Symbology)", () => {
+  const markerLayer = {
+    id: "touristAttractions",
+    name: "Tourist Attractions",
+    visible: true,
+    filterable: true,
+    styleGroups: [
+      {
+        symbolType: "simple-marker",
+        label: "Tourist Attractions",
+        color: "#ff0000",
+        borderWidth: 1,
+        markerStyle: "circle",
+        size: 8,
+        opacity: 1,
+        rendererType: "simple",
+        rendererField: null,
+        rendererLegend: null,
+        haloEnabled: false,
+        haloColor: null,
+        haloSize: null
+      }
+    ]
+  };
+
+  async function openSymbology(user) {
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
+  }
+
+  test("Simple mode shows shape/size/opacity/halo controls for a marker style group", async () => {
+    const user = userEvent.setup();
+    setup({ layers: [markerLayer] });
+    await openSymbology(user);
+
+    expect(screen.getByText("Shape")).toBeInTheDocument();
+    expect(screen.getByText("Size")).toBeInTheDocument();
+    expect(screen.getByText("Opacity")).toBeInTheDocument();
+    expect(screen.getByText("Halo")).toBeInTheDocument();
+  });
+
+  test("does not show halo controls for drawings (deliberate scope exclusion)", async () => {
+    const user = userEvent.setup();
+    setup({
+      layers: [
+        {
+          id: "drawings",
+          name: "Drawings",
+          visible: true,
+          filterable: true,
+          styleGroups: [{ ...markerLayer.styleGroups[0], label: "Points" }]
+        }
+      ]
+    });
+    await openSymbology(user);
+
+    expect(screen.queryByText("Halo")).not.toBeInTheDocument();
+  });
+
+  test("checking Halo calls onStyleChange with halo:true scoped to the group's symbolType", async () => {
+    const user = userEvent.setup();
+    const { props } = setup({ layers: [markerLayer] });
+    await openSymbology(user);
+
+    await user.click(screen.getByRole("checkbox", { name: "Halo" }));
+
+    expect(props.onStyleChange).toHaveBeenCalledWith(
+      "touristAttractions",
+      expect.objectContaining({ halo: true, symbolType: "simple-marker" })
+    );
+  });
+
+  test("switching to Unique Values reveals the field selector and Generate button", async () => {
+    const user = userEvent.setup();
+    setup({ layers: [markerLayer] });
+    await openSymbology(user);
+
+    await user.click(screen.getByRole("button", { name: "Unique Values" }));
+
+    expect(screen.getByLabelText(/Renderer field/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeInTheDocument();
+  });
+
+  test("Generate calls onSetRenderer with the chosen renderer type and field", async () => {
+    const user = userEvent.setup();
+    const { props } = setup({ layers: [markerLayer] });
+    await openSymbology(user);
+
+    await user.click(screen.getByRole("button", { name: "Unique Values" }));
+    await user.selectOptions(screen.getByLabelText(/Renderer field/), "NAME");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+
+    expect(props.onSetRenderer).toHaveBeenCalledWith(
+      "touristAttractions",
+      expect.objectContaining({ type: "unique-value", field: "NAME", symbolType: "simple-marker" })
+    );
+  });
+
+  test("a legend row's swatch change calls onUpdateRendererEntry with that entry's key", async () => {
+    const user = userEvent.setup();
+    const styledLayer = {
+      ...markerLayer,
+      styleGroups: [
+        {
+          ...markerLayer.styleGroups[0],
+          rendererType: "unique-value",
+          rendererField: "NAME",
+          rendererLegend: [{ key: "Museum", label: "Museum", color: "#e6194b" }]
+        }
+      ]
+    };
+    const { props } = setup({ layers: [styledLayer] });
+    await openSymbology(user);
+
+    const swatch = document.querySelector(".renderer-legend input[type='color']");
+    fireEvent.change(swatch, { target: { value: "#123456" } });
+
+    expect(props.onUpdateRendererEntry).toHaveBeenCalledWith("touristAttractions", "Museum", { color: "#123456" });
+  });
+
+  test("clicking Simple on a group with an active advanced renderer calls onClearRenderer", async () => {
+    const user = userEvent.setup();
+    const styledLayer = {
+      ...markerLayer,
+      styleGroups: [
+        {
+          ...markerLayer.styleGroups[0],
+          rendererType: "unique-value",
+          rendererField: "NAME",
+          rendererLegend: [{ key: "Museum", label: "Museum", color: "#e6194b" }]
+        }
+      ]
+    };
+    const { props } = setup({ layers: [styledLayer] });
+    await openSymbology(user);
+
+    await user.click(screen.getByRole("button", { name: "Simple" }));
+
+    expect(props.onClearRenderer).toHaveBeenCalledWith("touristAttractions");
+  });
+
+  test("does not show a redundant group label for a layer with only one style group", async () => {
+    const user = userEvent.setup();
+    setup({ layers: [markerLayer] });
+    await openSymbology(user);
+
+    expect(screen.queryByText("Tourist Attractions", { selector: ".layer-style-group-label" })).not.toBeInTheDocument();
   });
 });

@@ -2,6 +2,375 @@ import { useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 import { FILTER_LOGIC, operatorsForKind } from "../gis/LayerFilterExpression";
+import { MARKER_STYLES, LINE_STYLES, FILL_STYLES } from "../gis/SymbolRenderers";
+
+const RENDERER_MODES = [
+  { value: "simple", label: "Simple" },
+  { value: "unique-value", label: "Unique Values" },
+  { value: "class-breaks", label: "Class Breaks" }
+];
+
+// Small segmented (aria-pressed button group) control, reused for renderer
+// type / classification method / ramp mode - the same visual/semantic
+// pattern the existing AND/OR filter-logic toggle already established.
+function SegmentedToggle({ options, value, onChange, ariaLabel }) {
+  return (
+    <div className="renderer-segmented" role="radiogroup" aria-label={ariaLabel}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          className={`renderer-type-btn${value === opt.value ? " active" : ""}`}
+          aria-pressed={value === opt.value}
+          onClick={() => onChange(opt.value)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+SegmentedToggle.propTypes = {
+  options: PropTypes.arrayOf(PropTypes.shape({ value: PropTypes.string, label: PropTypes.string })).isRequired,
+  value: PropTypes.string,
+  onChange: PropTypes.func.isRequired,
+  ariaLabel: PropTypes.string.isRequired
+};
+
+// Owns one style group's full Symbology controls: the Simple/Unique Values/
+// Class Breaks mode toggle, the Simple-mode symbol editor (color/border/
+// shape/dash/pattern/size/opacity/halo), and - for the two advanced modes -
+// the field/classification/ramp configuration form plus the generated
+// legend's per-entry color/size overrides. A real component (not inline JSX
+// in the parent's .map()) so its local form state (the field/classCount/...
+// the user is still configuring) is scoped per style group via React's
+// normal per-component state, rather than one more keyed map living in
+// LayerControlPanel's own state.
+function RendererControls({ layerId, layerName, group, showLabel, fields, onStyleChange, onSetRenderer, onClearRenderer, onUpdateRendererEntry }) {
+  const [mode, setMode] = useState(group.rendererType || "simple");
+  const [field, setField] = useState(group.rendererField || "");
+  const [classCount, setClassCount] = useState(5);
+  const [method, setMethod] = useState("equal-interval");
+  const [rampMode, setRampMode] = useState("color");
+  const [startColor, setStartColor] = useState("#fee5d9");
+  const [endColor, setEndColor] = useState("#a50f15");
+  const [minSize, setMinSize] = useState(6);
+  const [maxSize, setMaxSize] = useState(24);
+  const [generating, setGenerating] = useState(false);
+  const [haloOpen, setHaloOpen] = useState(Boolean(group.haloEnabled));
+
+  const isPolygon = group.symbolType === "simple-fill";
+  const isLine = group.symbolType === "simple-line";
+  const isMarker = group.symbolType === "simple-marker";
+  // Halo is deliberately excluded for drawings - see haloState's field
+  // comment in GISMapEngine.js: a CIM composite's `.type` is "cim", which
+  // would break the symbolType-keyed grouping drawings relies on throughout
+  // (style groups, filter scoping, this very panel's per-symbolType layout).
+  const isDrawings = layerId === "drawings";
+
+  const applyStyle = (change) => onStyleChange(layerId, { ...change, symbolType: group.symbolType });
+
+  // Only actually clears engine state when this group is the one the server
+  // reports as currently advanced - otherwise (the user poked the toggle
+  // while merely exploring the form, or this is drawings and a *different*
+  // style group is the one with the active renderer) there is nothing of
+  // this group's to clear, and clearing unconditionally would wipe out
+  // whichever OTHER group's renderer happens to be active (drawings' single
+  // layerRenderers entry is shared across its style groups).
+  const selectMode = (next) => {
+    setMode(next);
+    if (next === "simple" && group.rendererType !== "simple") onClearRenderer(layerId);
+  };
+
+  const numericFields = fields.filter((f) => f.kind === "number");
+  const fieldOptions = mode === "class-breaks" ? numericFields : fields;
+
+  const generate = async () => {
+    if (!field) return;
+    setGenerating(true);
+    try {
+      await onSetRenderer(layerId, {
+        type: mode,
+        field,
+        symbolType: group.symbolType,
+        classCount,
+        method,
+        rampMode,
+        startColor,
+        endColor,
+        minSize,
+        maxSize
+      });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return (
+    <div className="layer-style-controls">
+      {showLabel && group.label && <span className="layer-style-group-label">{group.label}</span>}
+
+      <SegmentedToggle
+        options={RENDERER_MODES}
+        value={mode}
+        onChange={selectMode}
+        ariaLabel={`Renderer type for ${layerName}`}
+      />
+
+      {mode === "simple" && (
+        <>
+          <label className="layer-style-field">
+            <span>{isPolygon ? "Fill Color" : "Color"}</span>
+            <input type="color" value={group.color} onChange={(e) => applyStyle({ color: e.target.value })} />
+          </label>
+
+          {isPolygon && (
+            <label className="layer-style-field">
+              <span>Border Color</span>
+              <input
+                type="color"
+                value={group.outlineColor ?? "#000000"}
+                onChange={(e) => applyStyle({ outlineColor: e.target.value })}
+              />
+            </label>
+          )}
+
+          <label className="layer-style-field">
+            <span>Border Width</span>
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={group.borderWidth ?? 0}
+              onChange={(e) => applyStyle({ borderWidth: Number(e.target.value) })}
+            />
+          </label>
+
+          {isMarker && (
+            <label className="layer-style-field">
+              <span>Shape</span>
+              <select value={group.markerStyle || "circle"} onChange={(e) => applyStyle({ markerStyle: e.target.value })}>
+                {MARKER_STYLES.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {isLine && (
+            <label className="layer-style-field">
+              <span>Line Style</span>
+              <select value={group.lineStyle || "solid"} onChange={(e) => applyStyle({ lineStyle: e.target.value })}>
+                {LINE_STYLES.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {isPolygon && (
+            <label className="layer-style-field">
+              <span>Fill Pattern</span>
+              <select value={group.fillStyle || "solid"} onChange={(e) => applyStyle({ fillStyle: e.target.value })}>
+                {FILL_STYLES.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {isMarker && (
+            <label className="layer-style-field">
+              <span>Size</span>
+              <input
+                type="number"
+                min="1"
+                value={group.size ?? 8}
+                onChange={(e) => applyStyle({ size: Number(e.target.value) })}
+              />
+            </label>
+          )}
+
+          <label className="layer-style-field">
+            <span>Opacity</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={group.opacity ?? 1}
+              onChange={(e) => applyStyle({ opacity: Number(e.target.value) })}
+            />
+          </label>
+
+          {isMarker && !isDrawings && (
+            <div className="layer-halo-controls">
+              <label className="layer-halo-toggle">
+                <input
+                  type="checkbox"
+                  checked={haloOpen}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setHaloOpen(enabled);
+                    applyStyle({
+                      halo: enabled,
+                      haloColor: group.haloColor ?? "#ffffff",
+                      haloSize: group.haloSize ?? undefined
+                    });
+                  }}
+                />
+                <span>Halo</span>
+              </label>
+
+              {haloOpen && (
+                <>
+                  <label className="layer-style-field">
+                    <span>Halo Color</span>
+                    <input
+                      type="color"
+                      value={group.haloColor ?? "#ffffff"}
+                      onChange={(e) =>
+                        applyStyle({ halo: true, haloColor: e.target.value, haloSize: group.haloSize ?? undefined })
+                      }
+                    />
+                  </label>
+                  <label className="layer-style-field">
+                    <span>Halo Size</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={group.haloSize ?? (group.size ?? 8) + 8}
+                      onChange={(e) =>
+                        applyStyle({ halo: true, haloColor: group.haloColor ?? "#ffffff", haloSize: Number(e.target.value) })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {mode !== "simple" && (
+        <>
+          <div className="renderer-generate-form">
+            <label className="layer-style-field">
+              <span>Field</span>
+              <select value={field} onChange={(e) => setField(e.target.value)} aria-label={`Renderer field for ${layerName}`}>
+                <option value="">Field…</option>
+                {fieldOptions.map((f) => (
+                  <option key={f.name} value={f.name}>{f.name}</option>
+                ))}
+              </select>
+            </label>
+
+            {mode === "class-breaks" && (
+              <>
+                <label className="layer-style-field">
+                  <span>Classes</span>
+                  <input
+                    type="number"
+                    min="3"
+                    max="7"
+                    value={classCount}
+                    onChange={(e) => setClassCount(Number(e.target.value))}
+                  />
+                </label>
+
+                <SegmentedToggle
+                  options={[
+                    { value: "equal-interval", label: "Equal Interval" },
+                    { value: "quantile", label: "Quantile" }
+                  ]}
+                  value={method}
+                  onChange={setMethod}
+                  ariaLabel="Classification method"
+                />
+
+                <SegmentedToggle
+                  options={[
+                    { value: "color", label: "Color" },
+                    { value: "size", label: "Size" }
+                  ]}
+                  value={rampMode}
+                  onChange={setRampMode}
+                  ariaLabel="Ramp mode"
+                />
+
+                {rampMode === "color" ? (
+                  <>
+                    <label className="layer-style-field">
+                      <span>Start Color</span>
+                      <input type="color" value={startColor} onChange={(e) => setStartColor(e.target.value)} />
+                    </label>
+                    <label className="layer-style-field">
+                      <span>End Color</span>
+                      <input type="color" value={endColor} onChange={(e) => setEndColor(e.target.value)} />
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <label className="layer-style-field">
+                      <span>Min Size</span>
+                      <input type="number" min="1" value={minSize} onChange={(e) => setMinSize(Number(e.target.value))} />
+                    </label>
+                    <label className="layer-style-field">
+                      <span>Max Size</span>
+                      <input type="number" min="1" value={maxSize} onChange={(e) => setMaxSize(Number(e.target.value))} />
+                    </label>
+                  </>
+                )}
+              </>
+            )}
+
+            <button type="button" className="gis-button" disabled={!field || generating} onClick={generate}>
+              {generating ? "Generating…" : "Generate"}
+            </button>
+          </div>
+
+          {group.rendererLegend?.length > 0 && (
+            <div className="renderer-legend">
+              {group.rendererLegend.map((entry) => (
+                <div key={entry.key} className="renderer-legend-row">
+                  <input
+                    type="color"
+                    value={entry.color}
+                    aria-label={`Color for ${entry.label}`}
+                    onChange={(e) => onUpdateRendererEntry(layerId, entry.key, { color: e.target.value })}
+                  />
+                  <span className="renderer-legend-label">{entry.label}</span>
+                  {typeof entry.size === "number" && (
+                    <input
+                      type="number"
+                      min="1"
+                      value={entry.size}
+                      aria-label={`Size for ${entry.label}`}
+                      onChange={(e) => onUpdateRendererEntry(layerId, entry.key, { size: Number(e.target.value) })}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+RendererControls.propTypes = {
+  layerId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+  layerName: PropTypes.string,
+  group: PropTypes.object.isRequired,
+  showLabel: PropTypes.bool,
+  fields: PropTypes.array,
+  onStyleChange: PropTypes.func.isRequired,
+  onSetRenderer: PropTypes.func.isRequired,
+  onClearRenderer: PropTypes.func.isRequired,
+  onUpdateRendererEntry: PropTypes.func.isRequired
+};
 
 const STATISTIC_OPTIONS = [
   { value: "sum", label: "Sum" },
@@ -100,7 +469,10 @@ export default function LayerControlPanel({
   onClearFilter,
   onRunAggregate,
   onSetAnnotation,
-  onClearAnnotation
+  onClearAnnotation,
+  onSetRenderer,
+  onClearRenderer,
+  onUpdateRendererEntry
 }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragBlockIndex, setDragBlockIndex] = useState(null);
@@ -487,7 +859,7 @@ export default function LayerControlPanel({
               className="layer-chevron-btn"
               style={{ visibility: isExpandable ? "visible" : "hidden" }}
               disabled={!isExpandable}
-              onClick={() => toggleExpanded(layer, isFilterable || isAnnotatable)}
+              onClick={() => toggleExpanded(layer, isFilterable || isAnnotatable || isStylable)}
               aria-label="Toggle layer styling and filter options"
             >
               <Icon name={isExpanded ? "chevronUp" : "chevronDown"} />
@@ -545,50 +917,20 @@ export default function LayerControlPanel({
               <span>Symbology</span>
             </button>
 
-            {isSectionOpen(layer.id, "symbology") && styleGroups.map((group) => {
-              const isPolygon = group.symbolType === "simple-fill";
-              const applyStyle = (change) =>
-                onStyleChange(layer.id, { ...change, symbolType: group.symbolType });
-
-              return (
-                <div key={group.symbolType} className="layer-style-controls">
-                  {styleGroups.length > 1 && (
-                    <span className="layer-style-group-label">{group.label}</span>
-                  )}
-
-                  <label className="layer-style-field">
-                    <span>{isPolygon ? "Fill Color" : "Color"}</span>
-                    <input
-                      type="color"
-                      value={group.color}
-                      onChange={(e) => applyStyle({ color: e.target.value })}
-                    />
-                  </label>
-
-                  {isPolygon && (
-                    <label className="layer-style-field">
-                      <span>Border Color</span>
-                      <input
-                        type="color"
-                        value={group.outlineColor ?? "#000000"}
-                        onChange={(e) => applyStyle({ outlineColor: e.target.value })}
-                      />
-                    </label>
-                  )}
-
-                  <label className="layer-style-field">
-                    <span>Border Width</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={group.borderWidth ?? 0}
-                      onChange={(e) => applyStyle({ borderWidth: Number(e.target.value) })}
-                    />
-                  </label>
-                </div>
-              );
-            })}
+            {isSectionOpen(layer.id, "symbology") && styleGroups.map((group) => (
+              <RendererControls
+                key={group.symbolType}
+                layerId={layer.id}
+                layerName={layer.name}
+                group={group}
+                showLabel={styleGroups.length > 1}
+                fields={fields}
+                onStyleChange={onStyleChange}
+                onSetRenderer={onSetRenderer}
+                onClearRenderer={onClearRenderer}
+                onUpdateRendererEntry={onUpdateRendererEntry}
+              />
+            ))}
           </div>
         )}
 
@@ -1009,5 +1351,8 @@ LayerControlPanel.propTypes = {
   onClearFilter: PropTypes.func.isRequired,
   onRunAggregate: PropTypes.func.isRequired,
   onSetAnnotation: PropTypes.func.isRequired,
-  onClearAnnotation: PropTypes.func.isRequired
+  onClearAnnotation: PropTypes.func.isRequired,
+  onSetRenderer: PropTypes.func.isRequired,
+  onClearRenderer: PropTypes.func.isRequired,
+  onUpdateRendererEntry: PropTypes.func.isRequired
 };

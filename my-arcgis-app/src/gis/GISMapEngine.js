@@ -18,9 +18,27 @@ import {
   matchesAttributes,
   describeFilter
 } from "./LayerFilterExpression";
+import {
+  applyExtendedSymbolStyle,
+  buildHaloSymbol,
+  buildUniqueValueRenderer,
+  buildClassBreaksRenderer,
+  toArcGISRenderer,
+  DEFAULT_UNIQUE_VALUE_LIMIT
+} from "./SymbolRenderers";
 
+// Handles both a real ArcGIS Color instance (has .toHex()) and the plain
+// [r, g, b]/[r, g, b, a] arrays this file's hardcoded renderer literals use
+// before they've ever been through a live layer's autocast/.clone() - without
+// this fallback, reading a symbol's color before any styling edit (e.g. for
+// the layer panel's initial swatch value) always came back "#000000".
 function colorToHex(color) {
-  return typeof color?.toHex === "function" ? color.toHex() : "#000000";
+  if (typeof color?.toHex === "function") return color.toHex();
+  if (typeof color === "string" && color.startsWith("#")) return color;
+  if (Array.isArray(color) && color.length >= 3) {
+    return `#${color.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+  }
+  return "#000000";
 }
 
 const UPLOAD_SYMBOL_TYPE_BY_GEOMETRY = {
@@ -163,6 +181,36 @@ export default class GISMapEngine {
   // layer's own `labelingInfo` can't be relied on to hold a runtime change.
   layerAnnotations = new Map();
 
+  // Advanced renderer override (Unique Values / Class Breaks), keyed by
+  // layerOrder/portal id - source of truth the same way layerFilters/
+  // layerAnnotations are: when present for an id, it (not
+  // touristAttractionRenderer/etc.) is what gets applied to the live layer.
+  // Absence means "simple mode". Unlike layerFilters/layerAnnotations this
+  // needs no fire-and-forget reapply step on attachToView: a generated
+  // renderer is already a complete, self-contained JSON object (no
+  // per-reattach requery), so resolveSeedRenderer just reads it synchronously
+  // at layer-construction time. See knowledge/index.md's Layer Styling System.
+  //
+  // For "drawings" the stored value is not a ready-to-assign ArcGIS renderer
+  // but the same unique-value/class-breaks JSON shape evaluated per graphic
+  // by applyDrawingsRendererToGraphic, since drawLayer has no single
+  // `.renderer` to assign to (each graphic owns its own `.symbol`, same
+  // constraint applyDrawingsFilterToGraphic already works around for
+  // filters). Only one style-group (symbolType) of drawings can have an
+  // active advanced renderer at a time - see the `symbolType` field on the
+  // stored descriptor.
+  layerRenderers = new Map();
+
+  // Multi-layer symbol support (see knowledge/index.md's Layer Styling
+  // System "multi-layer symbols" scope note): a halo is a two-layer CIM
+  // point symbol (an outer ring behind the base marker), the single most
+  // common ArcGIS Pro multi-layer use case. Scoped to FeatureLayer-backed/
+  // portal simple-marker renderers only - not drawings/route - because a CIM
+  // composite's `.type` is "cim" rather than "simple-marker", which would
+  // break the symbolType-keyed grouping drawings/filter/style rely on
+  // throughout the engine. Keyed by layerOrder/portal id -> { color, size }.
+  haloState = new Map();
+
   selectedGraphic = null;
   selectedLayerId = null;
 
@@ -231,6 +279,31 @@ export default class GISMapEngine {
     };
   }
 
+  // Resolves what renderer a freshly (re)constructed FeatureLayer should
+  // start with: an active advanced renderer (layerRenderers) takes priority
+  // over the persisted simple base, and an active halo (haloState) is
+  // composited on top of whichever simple-marker symbol results - the same
+  // precedence setLayerStyle applies live, kept in one place so attachToView
+  // and the portal-layer reconstruction below can't drift apart on it. Halo
+  // only applies on top of a *simple* renderer (guarded by the `.symbol`
+  // check), since a Unique Values/Class Breaks renderer has no single
+  // top-level symbol to wrap - see the haloState field comment.
+  resolveSeedRenderer(id, baseRenderer) {
+    const advanced = this.layerRenderers.get(id);
+    const rendererJson = advanced ? toArcGISRenderer(advanced) : baseRenderer;
+
+    const haloEntry = this.haloState.get(id);
+    if (!haloEntry || rendererJson?.symbol?.type !== "simple-marker") return rendererJson;
+
+    return {
+      ...rendererJson,
+      symbol: buildHaloSymbol(colorToHex(rendererJson.symbol.color), rendererJson.symbol.size, {
+        color: haloEntry.color ?? "#ffffff",
+        size: haloEntry.size
+      })
+    };
+  }
+
   attachToView(view) {
     if (!view) return;
 
@@ -252,7 +325,7 @@ export default class GISMapEngine {
       title: "Tourist Attractions",
       visible: this.touristAttractionVisible,
       outFields: ["*"],
-      renderer: this.touristAttractionRenderer
+      renderer: this.resolveSeedRenderer("touristAttractions", this.touristAttractionRenderer)
     });
 
     this.mrtStationLayer = new FeatureLayer({
@@ -260,7 +333,7 @@ export default class GISMapEngine {
       title: "MRT Stations",
       visible: this.mrtStationVisible,
       outFields: ["*"],
-      renderer: this.mrtStationRenderer
+      renderer: this.resolveSeedRenderer("mrtStations", this.mrtStationRenderer)
     });
 
     this.mrtLineLayer = new FeatureLayer({
@@ -268,7 +341,7 @@ export default class GISMapEngine {
       title: "MRT Lines",
       visible: this.mrtLineVisible,
       outFields: ["*"],
-      renderer: this.mrtLineRenderer
+      renderer: this.resolveSeedRenderer("mrtLines", this.mrtLineRenderer)
     });
 
     this.heatLayer = new FeatureLayer({
@@ -314,6 +387,7 @@ export default class GISMapEngine {
       } else if (event.state === "complete") {
         event.graphic.attributes = this.buildDrawingAttributes();
         this.applyDrawingsFilterToGraphic(event.graphic);
+        this.applyDrawingsRendererToGraphic(event.graphic);
         this.onDrawingsChanged?.();
         this.activeDrawType = null;
         this.onDrawStateChange?.(null);
@@ -356,10 +430,12 @@ export default class GISMapEngine {
       // A persisted style (see setLayerStyle's portal-layer branch) is not
       // carried by a fresh FeatureLayer instance, so it must be reapplied
       // once the layer loads and its own renderer is available to clone the
-      // geometry-appropriate shape from.
-      if (meta.renderer) {
+      // geometry-appropriate shape from. resolveSeedRenderer additionally
+      // layers in an active advanced renderer (layerRenderers) and/or halo
+      // (haloState), same precedence as the three fixed hosted layers above.
+      if (meta.renderer || this.layerRenderers.has(id) || this.haloState.has(id)) {
         rebuilt.load().then(() => {
-          rebuilt.renderer = meta.renderer;
+          rebuilt.renderer = this.resolveSeedRenderer(id, meta.renderer);
         }).catch(() => {});
       }
       this.portalLayers.set(id, rebuilt);
@@ -975,6 +1051,311 @@ export default class GISMapEngine {
     this.heatLayer.renderer = r;
   }
 
+  // ---------------------------------------------------------------------
+  // Advanced Renderer System (Unique Values / Class Breaks)
+  //
+  // Lets a user replace a layer's single Simple symbol with an ArcGIS Pro-
+  // style Unique Values or Class Breaks (Graduated Colors/Sizes) renderer,
+  // generated off one of the layer's own fields. Persisted in layerRenderers
+  // (see its field comment above) as the source of truth, the same
+  // architectural role layerFilters/layerAnnotations play for their systems.
+  // ---------------------------------------------------------------------
+
+  // Ensures the persisted Simple-mode base renderer for a layer is a real,
+  // clonable autocast instance, bootstrapping it from the *live* layer's own
+  // renderer - and, crucially, PERSISTING that bootstrap via `setBase`
+  // rather than only reading it - the first time this layer's symbol is
+  // needed as a template (a Simple-mode edit, or generating an advanced
+  // renderer/halo) if it hasn't been already.
+  //
+  // Persisting (not just reading) matters because the live layer's renderer
+  // can later be replaced by an advanced (Unique Values/Class Breaks)
+  // renderer or a halo CIM composite - neither a valid clone template - so a
+  // layer that goes straight to "Generate" without ever touching the Simple
+  // controls first would otherwise have no clonable renderer left anywhere
+  // once the live one is overwritten. Regression: a *second* "Generate" on
+  // such a layer read the live (already-advanced) renderer's nonexistent
+  // `.symbol` and threw "no symbol to base a renderer on yet".
+  ensureSimpleBase(base, live, setBase) {
+    if (typeof base?.symbol?.clone === "function") return base;
+    if (typeof live?.clone !== "function") return null;
+    const bootstrapped = live.clone();
+    setBase(bootstrapped);
+    return bootstrapped;
+  }
+
+  // The current Simple-mode symbol to use as the shape template for a newly
+  // generated advanced renderer - same symbols getLayers()/symbolToStyleGroup
+  // already treat as each layer's "one coherent symbol". For drawings,
+  // `symbolType` scopes which style group (point/line/polygon) is being
+  // replaced, mirroring how setLayerStyle already scopes drawings edits.
+  getBaseSymbolForLayer(id, symbolType) {
+    switch (id) {
+      case "touristAttractions": {
+        const renderer = this.ensureSimpleBase(
+          this.touristAttractionRenderer,
+          this.touristAttractionLayer?.renderer,
+          (r) => { this.touristAttractionRenderer = r; }
+        );
+        return renderer?.symbol || null;
+      }
+      case "mrtStations": {
+        const renderer = this.ensureSimpleBase(
+          this.mrtStationRenderer,
+          this.mrtStationLayer?.renderer,
+          (r) => { this.mrtStationRenderer = r; }
+        );
+        return renderer?.symbol || null;
+      }
+      case "mrtLines": {
+        const renderer = this.ensureSimpleBase(
+          this.mrtLineRenderer,
+          this.mrtLineLayer?.renderer,
+          (r) => { this.mrtLineRenderer = r; }
+        );
+        return renderer?.symbol || null;
+      }
+      case "route": return this.routeGraphic?.symbol || null;
+      case "drawings": {
+        const match = this.drawLayer.graphics.toArray().find((g) => !symbolType || g.symbol?.type === symbolType);
+        return match?.symbol || null;
+      }
+      default: {
+        const meta = this.portalLayerMeta.get(id);
+        const portalLayer = this.portalLayers.get(id);
+        const renderer = this.ensureSimpleBase(meta?.renderer, portalLayer?.renderer, (r) => {
+          if (meta) meta.renderer = r;
+        });
+        return renderer?.symbol || null;
+      }
+    }
+  }
+
+  // Up to `limit` distinct values of `field`. Hosted layers ask the service
+  // directly (returnDistinctValues); drawings dedupe client-side, the same
+  // hosted-vs-local split LayerFilterExpression.js documents for filter
+  // evaluation. Falls back to sampling ordinary features and deduping
+  // client-side when a service doesn't support distinct queries.
+  async getDistinctValues(id, field, { symbolType, limit = DEFAULT_UNIQUE_VALUE_LIMIT } = {}) {
+    if (id === "drawings") {
+      const seen = [];
+      this.drawLayer.graphics.forEach((g) => {
+        if (symbolType && g.symbol?.type !== symbolType) return;
+        const v = g.attributes?.[field];
+        if (v === undefined || v === null || seen.includes(v)) return;
+        seen.push(v);
+      });
+      return seen.slice(0, limit);
+    }
+
+    const layer = this.buildLayerMap()[id];
+    if (!layer || typeof layer.queryFeatures !== "function") return [];
+
+    try {
+      const result = await layer.queryFeatures({
+        where: "1=1",
+        outFields: [field],
+        returnDistinctValues: true,
+        orderByFields: [field],
+        returnGeometry: false,
+        num: limit
+      });
+      return result.features
+        .map((f) => f.attributes?.[field])
+        .filter((v) => v !== undefined && v !== null)
+        .slice(0, limit);
+    } catch {
+      // Raw (non-distinct) sampling needs to scan more records than `limit`
+      // to have a good chance of finding `limit` distinct values, since
+      // records aren't deduplicated server-side here - capped well above a
+      // typical hosted layer's own maxRecordCount rather than a small fixed
+      // number, which previously undersampled anything but a small dataset
+      // (a fixed 200-record sample cannot find 500 distinct values from a
+      // 500-feature layer).
+      const fallback = await layer.queryFeatures({
+        where: "1=1",
+        outFields: [field],
+        returnGeometry: false,
+        num: Math.min(2000, limit * 3)
+      });
+      const seen = [];
+      fallback.features.forEach((f) => {
+        const v = f.attributes?.[field];
+        if (v !== undefined && v !== null && !seen.includes(v)) seen.push(v);
+      });
+      return seen.slice(0, limit);
+    }
+  }
+
+  // All numeric values of `field`, for class-breaks classification.
+  async getFieldValues(id, field, { symbolType } = {}) {
+    if (id === "drawings") {
+      const values = [];
+      this.drawLayer.graphics.forEach((g) => {
+        if (symbolType && g.symbol?.type !== symbolType) return;
+        const n = Number(g.attributes?.[field]);
+        if (Number.isFinite(n)) values.push(n);
+      });
+      return values;
+    }
+
+    const layer = this.buildLayerMap()[id];
+    if (!layer || typeof layer.queryFeatures !== "function") return [];
+
+    const result = await layer.queryFeatures({ where: "1=1", outFields: [field], returnGeometry: false });
+    return result.features
+      .map((f) => Number(f.attributes?.[field]))
+      .filter((n) => Number.isFinite(n));
+  }
+
+  // Generates and applies a Unique Values or Class Breaks renderer. Throws on
+  // an unknown field (same throw-and-let-the-shell-toast convention as
+  // setLayerFilter/setLayerAnnotation) or renderer type. Returns a summary
+  // (rendererType/field/legend) so the panel can render the legend
+  // immediately without a follow-up getLayers() round trip.
+  async setLayerAdvancedRenderer(id, { type, field, symbolType, ...options } = {}) {
+    const { fields } = await this.getLayerFieldSchema(id);
+    if (!fields.some((f) => f.name === field)) {
+      throw new Error(`"${field}" is not a field on this layer.`);
+    }
+
+    const baseSymbol = this.getBaseSymbolForLayer(id, symbolType);
+    if (!baseSymbol) {
+      throw new Error("This layer has no symbol to base a renderer on yet.");
+    }
+
+    let built;
+    if (type === "unique-value") {
+      const values = await this.getDistinctValues(id, field, { symbolType });
+      built = buildUniqueValueRenderer(field, values, baseSymbol);
+    } else if (type === "class-breaks") {
+      const values = await this.getFieldValues(id, field, { symbolType });
+      built = buildClassBreaksRenderer(field, values, { ...options, baseSymbol });
+    } else {
+      throw new Error(`Unknown renderer type "${type}".`);
+    }
+
+    // symbolType only means anything for `drawings` (which style group this
+    // descriptor applies to) - every other id has exactly one implicit
+    // group and attachRendererInfo's callers always pass it `undefined` for
+    // those, so storing anything other than `undefined` here would make
+    // attachRendererInfo's `(descriptor.symbolType ?? null) === (symbolType
+    // ?? null)` comparison fail for a renderer that IS active, permanently
+    // reporting rendererType "simple" even with an advanced renderer live on
+    // the layer. Regression: the panel's Simple/Unique Values/Class Breaks
+    // toggle believed it was already in Simple mode, so clicking "Simple"
+    // flipped the toggle's own look (driven by local click state) but never
+    // called onClearRenderer - the map never actually reverted.
+    const descriptor = { ...built.renderer, symbolType: id === "drawings" ? symbolType : undefined, legend: built.legend };
+    this.layerRenderers.set(id, descriptor);
+    this.applyRendererToLayer(id, descriptor);
+
+    return { rendererType: type, field, legend: built.legend };
+  }
+
+  // Applies an already-computed renderer descriptor to the live layer:
+  // reassigns `.renderer` for FeatureLayer/portal layers, or - since drawings
+  // has no single renderer to assign - re-evaluates every graphic against the
+  // descriptor.
+  applyRendererToLayer(id, descriptor) {
+    if (id === "drawings") {
+      this.drawLayer.graphics.forEach((g) => this.applyDrawingsRendererToGraphic(g));
+      return;
+    }
+    const layer = this.buildLayerMap()[id];
+    if (layer) layer.renderer = toArcGISRenderer(descriptor);
+  }
+
+  // Evaluates the active drawings advanced renderer (if any) against one
+  // graphic's own attributes and assigns the matching symbol. No-ops when no
+  // advanced renderer is active (leaves the graphic's current symbol alone)
+  // or when it's scoped to a different symbolType - mirrors
+  // applyDrawingsFilterToGraphic's no-op-when-inactive behavior, and is
+  // called from the same three spots that method is: setLayerAdvancedRenderer
+  // (via applyRendererToLayer), the sketchVM "create" complete handler, and
+  // uploadGeoJSON.
+  applyDrawingsRendererToGraphic(graphic) {
+    const descriptor = this.layerRenderers.get("drawings");
+    if (!descriptor) return;
+    if (descriptor.symbolType && graphic.symbol?.type !== descriptor.symbolType) return;
+
+    const value = graphic.attributes?.[descriptor.field];
+
+    if (descriptor.type === "unique-value") {
+      const match = descriptor.uniqueValueInfos.find((info) => info.value === String(value));
+      const symbol = match?.symbol || descriptor.defaultSymbol;
+      if (symbol) graphic.symbol = symbol;
+      return;
+    }
+
+    if (descriptor.type === "class-breaks") {
+      const numeric = Number(value);
+      const match = descriptor.classBreakInfos.find((b) => numeric >= b.minValue && numeric <= b.maxValue);
+      if (match) graphic.symbol = match.symbol;
+    }
+  }
+
+  // Reverts a layer to Simple mode. FeatureLayer/portal layers revert to
+  // their persisted simple base renderer (touristAttractionRenderer/etc. /
+  // portalLayerMeta.renderer). Drawings has no snapshot to revert to - each
+  // graphic's symbol was computed from its attribute value, not remembered -
+  // so clearing here only stops future auto-recompute; each graphic keeps its
+  // last-computed symbol, editable afterward via the ordinary Simple controls
+  // for that symbolType group. This asymmetry is deliberate (see
+  // knowledge/index.md's Layer Styling System) rather than an oversight.
+  clearLayerAdvancedRenderer(id) {
+    this.layerRenderers.delete(id);
+    if (id === "drawings") return;
+
+    const layer = this.buildLayerMap()[id];
+    if (!layer) return;
+
+    const baseRenderer = {
+      touristAttractions: this.touristAttractionRenderer,
+      mrtStations: this.mrtStationRenderer,
+      mrtLines: this.mrtLineRenderer
+    }[id];
+
+    if (baseRenderer) {
+      layer.renderer = this.resolveSeedRenderer(id, baseRenderer);
+      return;
+    }
+
+    const meta = this.portalLayerMeta.get(id);
+    if (meta) layer.renderer = this.resolveSeedRenderer(id, meta.renderer);
+  }
+
+  // Hand-tweaks one already-generated value's (unique-value, `key` = the
+  // value) or break's (class-breaks, `key` = the break index) symbol, without
+  // regenerating the whole renderer - e.g. the user doesn't like the
+  // auto-assigned color for one category.
+  updateRendererEntrySymbol(id, key, changes) {
+    const descriptor = this.layerRenderers.get(id);
+    if (!descriptor) return;
+
+    const next = { ...descriptor };
+    if (descriptor.type === "unique-value") {
+      next.uniqueValueInfos = descriptor.uniqueValueInfos.map((info) =>
+        info.value === key ? { ...info, symbol: applyExtendedSymbolStyle(info.symbol, changes) } : info
+      );
+    } else if (descriptor.type === "class-breaks") {
+      next.classBreakInfos = descriptor.classBreakInfos.map((brk, i) =>
+        i === key ? { ...brk, symbol: applyExtendedSymbolStyle(brk.symbol, changes) } : brk
+      );
+    } else {
+      return;
+    }
+
+    next.legend = descriptor.legend.map((entry) =>
+      entry.key === key
+        ? { ...entry, color: changes.color ?? entry.color, size: changes.size ?? entry.size }
+        : entry
+    );
+
+    this.layerRenderers.set(id, next);
+    this.applyRendererToLayer(id, next);
+  }
+
   // Builds one style-group descriptor from a single symbol. A "style group"
   // is what the layer panel renders as one row of color/border controls.
   static symbolTypeLabels = {
@@ -985,12 +1366,47 @@ export default class GISMapEngine {
 
   symbolToStyleGroup(symbol, label) {
     const type = symbol?.type ?? null;
+    const colorObj = symbol?.color;
     return {
       symbolType: type,
       label: label ?? GISMapEngine.symbolTypeLabels[type] ?? "Style",
-      color: colorToHex(symbol?.color),
+      color: colorToHex(colorObj),
       borderWidth: type === "simple-line" ? symbol?.width ?? null : symbol?.outline?.width ?? null,
-      outlineColor: type === "simple-fill" ? colorToHex(symbol?.outline?.color) : undefined
+      outlineColor: type === "simple-fill" ? colorToHex(symbol?.outline?.color) : undefined,
+      markerStyle: type === "simple-marker" ? symbol?.style ?? "circle" : undefined,
+      lineStyle: type === "simple-line" ? symbol?.style ?? "solid" : undefined,
+      fillStyle: type === "simple-fill" ? symbol?.style ?? "solid" : undefined,
+      size: type === "simple-marker" ? symbol?.size ?? null : undefined,
+      opacity:
+        typeof colorObj?.a === "number"
+          ? colorObj.a
+          : Array.isArray(colorObj) && colorObj.length === 4
+          ? colorObj[3]
+          : 1
+    };
+  }
+
+  // Merges a style group with its current renderer-mode metadata: whether
+  // this group (a layer, or - for drawings - one symbolType within it) is in
+  // Simple mode or has an active Unique Values/Class Breaks renderer, plus
+  // (id !== "drawings" only - see haloState's field comment) its current
+  // halo state. `symbolType` is only meaningful for drawings, where each
+  // style group is independently in Simple or Advanced mode; single-symbol
+  // layers pass `undefined`, which matches how their layerRenderers/haloState
+  // entries (if any) are always stored with no symbolType.
+  attachRendererInfo(group, id, symbolType) {
+    const descriptor = this.layerRenderers.get(id);
+    const applies = Boolean(descriptor) && (descriptor.symbolType ?? null) === (symbolType ?? null);
+    const halo = id === "drawings" ? null : this.haloState.get(id);
+
+    return {
+      ...group,
+      rendererType: applies ? descriptor.type : "simple",
+      rendererField: applies ? descriptor.field : null,
+      rendererLegend: applies ? descriptor.legend : null,
+      haloEnabled: Boolean(halo),
+      haloColor: halo?.color ?? null,
+      haloSize: halo?.size ?? null
     };
   }
 
@@ -998,9 +1414,16 @@ export default class GISMapEngine {
     const l = this.layerOrder;
 
     const routeSymbol = this.routeGraphic?.symbol;
-    const touristAttractionSymbol = this.touristAttractionLayer?.renderer?.symbol;
-    const mrtStationSymbol = this.mrtStationLayer?.renderer?.symbol;
-    const mrtLineSymbol = this.mrtLineLayer?.renderer?.symbol;
+    // Read from the persisted simple-mode base fields, not the live layer's
+    // renderer - the live renderer can currently be a Unique Values/Class
+    // Breaks renderer (no top-level `.symbol`) or a halo CIM composite
+    // (`.symbol.type` "cim"), neither of which is a valid source for the
+    // Simple-mode color/border/shape controls. The base fields are never
+    // touched by setLayerAdvancedRenderer/halo application (see their
+    // comments), so they always hold the last genuine simple symbol.
+    const touristAttractionSymbol = this.touristAttractionRenderer?.symbol;
+    const mrtStationSymbol = this.mrtStationRenderer?.symbol;
+    const mrtLineSymbol = this.mrtLineRenderer?.symbol;
 
     // The drawings layer has no restriction on what geometry types coexist
     // in it, so it can hold any mix of points, lines, and polygons at once.
@@ -1014,7 +1437,9 @@ export default class GISMapEngine {
         const type = g.symbol?.type;
         if (type && !seenTypes.has(type)) seenTypes.set(type, g.symbol);
       });
-      seenTypes.forEach((symbol) => drawingsGroups.push(this.symbolToStyleGroup(symbol)));
+      seenTypes.forEach((symbol, type) => {
+        drawingsGroups.push(this.attachRendererInfo(this.symbolToStyleGroup(symbol), "drawings", type));
+      });
     }
 
     const lookup = {
@@ -1022,14 +1447,18 @@ export default class GISMapEngine {
         id: "route",
         name: "Route Layer",
         visible: this.routeLayer?.visible,
-        styleGroups: routeSymbol ? [this.symbolToStyleGroup(routeSymbol, "Route")] : []
+        styleGroups: routeSymbol
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(routeSymbol, "Route"), "route")]
+          : []
       },
       stops: { id: "stops", name: "Stop Layer", visible: this.stopLayer?.visible },
       touristAttractions: {
         id: "touristAttractions",
         name: "Tourist Attractions",
         visible: this.touristAttractionLayer?.visible,
-        styleGroups: touristAttractionSymbol ? [this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions")] : [],
+        styleGroups: touristAttractionSymbol
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions"), "touristAttractions")]
+          : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription("touristAttractions"),
         annotatable: true,
@@ -1040,7 +1469,9 @@ export default class GISMapEngine {
         id: "mrtStations",
         name: "MRT Stations",
         visible: this.mrtStationLayer?.visible,
-        styleGroups: mrtStationSymbol ? [this.symbolToStyleGroup(mrtStationSymbol, "Stations")] : [],
+        styleGroups: mrtStationSymbol
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(mrtStationSymbol, "Stations"), "mrtStations")]
+          : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription("mrtStations"),
         annotatable: true,
@@ -1050,7 +1481,9 @@ export default class GISMapEngine {
         id: "mrtLines",
         name: "MRT Lines",
         visible: this.mrtLineLayer?.visible,
-        styleGroups: mrtLineSymbol ? [this.symbolToStyleGroup(mrtLineSymbol, "Lines")] : [],
+        styleGroups: mrtLineSymbol
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(mrtLineSymbol, "Lines"), "mrtLines")]
+          : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription("mrtLines"),
         annotatable: true,
@@ -1076,16 +1509,25 @@ export default class GISMapEngine {
       const meta = this.portalLayerMeta.get(id);
       // A portal-supplied renderer can be anything (unique-value, class-
       // breaks, dictionary, ...), most of which have no single symbol to
-      // expose a color/border control for. A "simple" renderer is the one
-      // shape that, like touristAttractions/mrtStations/mrtLines, owns
-      // exactly one symbol - so only that shape is offered a style group.
-      const portalSymbol = layer.renderer?.type === "simple" ? layer.renderer.symbol : null;
+      // expose a color/border control for. Prefer the persisted simple base
+      // (meta.renderer - set the moment this layer is ever styled/haloed,
+      // see setLayerStyle) since, like the fixed hosted layers above, the
+      // live layer.renderer can currently be an advanced/halo renderer; an
+      // untouched portal layer has no meta.renderer yet, so fall back to the
+      // live service-supplied renderer only when it's still "simple".
+      const portalSymbol = meta?.renderer?.symbol
+        ? meta.renderer.symbol
+        : layer.renderer?.type === "simple"
+        ? layer.renderer.symbol
+        : null;
       lookup[id] = {
         id,
         name: meta?.title || "Portal Layer",
         visible: layer.visible,
         removable: true,
-        styleGroups: portalSymbol ? [this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer")] : [],
+        styleGroups: portalSymbol
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer"), id)]
+          : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription(id),
         annotatable: true,
@@ -1265,53 +1707,71 @@ export default class GISMapEngine {
     }
   }
 
-  // Applies a fill/line color and border (outline) thickness to a layer's
-  // symbology. Only layers backed by a single, well-defined symbol are
-  // supported: Tourist Attractions/MRT stations/lines (FeatureLayer simple
-  // renderers), the route graphic (single simple-line), and drawings. Since the drawings
-  // layer can hold any mix of point/line/polygon graphics at once,
-  // `symbolType` scopes the update to only the graphics of that geometry
-  // type, so each style group in the panel can be edited independently.
-  // `outlineColor` only applies to polygon (`simple-fill`) symbols, which
-  // have a fill color distinct from their outline/border color.
-  setLayerStyle(id, { color, borderWidth, outlineColor, symbolType } = {}) {
-    const applySymbolStyle = (symbol) => {
-      if (!symbol) return symbol;
-      const next = symbol.clone();
-      if (color) next.color = color;
-      if (borderWidth != null) {
-        if (next.type === "simple-line") next.width = borderWidth;
-        else if (next.outline) next.outline.width = borderWidth;
-      }
-      if (outlineColor && next.type === "simple-fill" && next.outline) {
-        next.outline.color = outlineColor;
-      }
-      return next;
-    };
+  // Applies Simple-mode symbology - fill/line color, border (outline)
+  // thickness/color, marker shape/line dash style/fill pattern, marker size,
+  // opacity, and (FeatureLayer-backed/portal simple-marker layers only) halo
+  // - to a layer's symbol. Only layers backed by a single, well-defined
+  // symbol are supported: Tourist Attractions/MRT stations/lines (FeatureLayer
+  // simple renderers), the route graphic (single simple-line), drawings, and
+  // stylable portal layers. Since the drawings layer can hold any mix of
+  // point/line/polygon graphics at once, `symbolType` scopes the update to
+  // only the graphics of that geometry type, so each style group in the
+  // panel can be edited independently. `outlineColor` only applies to
+  // polygon (`simple-fill`) symbols, which have a fill color distinct from
+  // their outline/border color. See SymbolRenderers.js's
+  // applyExtendedSymbolStyle for the full set of per-type properties.
+  setLayerStyle(id, { color, borderWidth, outlineColor, symbolType, markerStyle, lineStyle, fillStyle, size, opacity, halo, haloColor, haloSize } = {}) {
+    const applySymbolStyle = (symbol) =>
+      applyExtendedSymbolStyle(symbol, { color, borderWidth, outlineColor, markerStyle, lineStyle, fillStyle, size, opacity });
+
+    // Only ever sent by the UI for a simple-marker style group, but harmless
+    // (a no-op) for any other id/group since it's gated on `halo !== undefined`.
+    if (halo !== undefined) {
+      if (halo) this.haloState.set(id, { color: haloColor, size: haloSize });
+      else this.haloState.delete(id);
+    }
+
+    // Clones from the persisted simple base once it's a real autocast Symbol
+    // instance (true after this layer's first-ever style edit this session);
+    // before that, the field is still the plain object literal declared on
+    // the class and has no .clone(), so the live layer's own (freshly
+    // autocast by FeatureLayer construction, and necessarily still simple -
+    // halo/advanced can't exist yet on a layer that's never been styled) is
+    // used to bootstrap it instead.
+    const rendererTemplate = (base, live) => (typeof base?.symbol?.clone === "function" ? base : live);
 
     switch (id) {
       case "touristAttractions": {
-        if (!this.touristAttractionLayer?.renderer) return;
-        const renderer = this.touristAttractionLayer.renderer.clone();
+        const template = rendererTemplate(this.touristAttractionRenderer, this.touristAttractionLayer?.renderer);
+        if (!template) return;
+        const renderer = template.clone();
         renderer.symbol = applySymbolStyle(renderer.symbol);
-        this.touristAttractionLayer.renderer = renderer;
         this.touristAttractionRenderer = renderer;
+        if (this.touristAttractionLayer) {
+          this.touristAttractionLayer.renderer = this.resolveSeedRenderer("touristAttractions", renderer);
+        }
         break;
       }
       case "mrtStations": {
-        if (!this.mrtStationLayer?.renderer) return;
-        const renderer = this.mrtStationLayer.renderer.clone();
+        const template = rendererTemplate(this.mrtStationRenderer, this.mrtStationLayer?.renderer);
+        if (!template) return;
+        const renderer = template.clone();
         renderer.symbol = applySymbolStyle(renderer.symbol);
-        this.mrtStationLayer.renderer = renderer;
         this.mrtStationRenderer = renderer;
+        if (this.mrtStationLayer) {
+          this.mrtStationLayer.renderer = this.resolveSeedRenderer("mrtStations", renderer);
+        }
         break;
       }
       case "mrtLines": {
-        if (!this.mrtLineLayer?.renderer) return;
-        const renderer = this.mrtLineLayer.renderer.clone();
+        const template = rendererTemplate(this.mrtLineRenderer, this.mrtLineLayer?.renderer);
+        if (!template) return;
+        const renderer = template.clone();
         renderer.symbol = applySymbolStyle(renderer.symbol);
-        this.mrtLineLayer.renderer = renderer;
         this.mrtLineRenderer = renderer;
+        if (this.mrtLineLayer) {
+          this.mrtLineLayer.renderer = this.resolveSeedRenderer("mrtLines", renderer);
+        }
         break;
       }
       case "route": {
@@ -1329,17 +1789,26 @@ export default class GISMapEngine {
       }
       default: {
         // Portal-added layers (see getLayers()'s portal-layer branch above)
-        // are only stylable when their service-supplied renderer is a
-        // "simple" renderer with a single symbol - the one shape that maps
-        // cleanly onto a single color/border control, same as the fixed
-        // hosted layers above.
+        // are only stylable when a simple renderer is available to clone
+        // from: either the persisted base (meta.renderer, once this layer
+        // has ever been styled) or, for an as-yet-unstyled layer, the live
+        // service-supplied renderer, but only when that is itself "simple" -
+        // the one shape that maps cleanly onto a single color/border control,
+        // same as the fixed hosted layers above.
         const portalLayer = this.portalLayers.get(id);
-        if (portalLayer?.renderer?.type !== "simple") return;
-        const renderer = portalLayer.renderer.clone();
-        renderer.symbol = applySymbolStyle(renderer.symbol);
-        portalLayer.renderer = renderer;
         const meta = this.portalLayerMeta.get(id);
+        const hasBase = typeof meta?.renderer?.symbol?.clone === "function";
+        const template = hasBase
+          ? meta.renderer
+          : portalLayer?.renderer?.type === "simple"
+          ? portalLayer.renderer
+          : null;
+        if (!template) return;
+
+        const renderer = template.clone();
+        renderer.symbol = applySymbolStyle(renderer.symbol);
         if (meta) meta.renderer = renderer;
+        if (portalLayer) portalLayer.renderer = this.resolveSeedRenderer(id, renderer);
         break;
       }
     }
@@ -1486,7 +1955,10 @@ export default class GISMapEngine {
     // Respect any active drawings filter (see setLayerFilter) for newly
     // uploaded graphics too, so uploading into an already-filtered view
     // doesn't silently show features the user just asked to hide.
-    graphics.forEach((g) => this.applyDrawingsFilterToGraphic(g));
+    graphics.forEach((g) => {
+      this.applyDrawingsFilterToGraphic(g);
+      this.applyDrawingsRendererToGraphic(g);
+    });
 
     this.drawLayer.addMany(graphics);
 

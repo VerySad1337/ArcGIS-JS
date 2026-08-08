@@ -236,6 +236,31 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
+  // Advanced Renderer (Unique Values / Class Breaks): same throw-and-toast/
+  // refresh convention as applyLayerFilter/setLayerAnnotation above -
+  // setLayerAdvancedRenderer throws on a field that doesn't exist on the
+  // layer's schema or an unknown renderer type.
+  const setLayerRenderer = async (id, options) => {
+    try {
+      await engineRef.current.setLayerAdvancedRenderer(id, options);
+      refreshLayers();
+      const layerName = engineRef.current.getLayers().find((l) => l?.id === id)?.name || id;
+      showToast(`"${layerName}" is now styled by "${options.field}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Could not generate renderer.", "error");
+    }
+  };
+
+  const clearLayerRenderer = (id) => {
+    engineRef.current.clearLayerAdvancedRenderer(id);
+    refreshLayers();
+  };
+
+  const updateRendererEntry = (id, key, changes) => {
+    engineRef.current.updateRendererEntrySymbol(id, key, changes);
+    refreshLayers();
+  };
+
   const runAnalysis = async (ids, options) => {
     try {
       return await engineRef.current.runAnalysis(ids, options);
@@ -455,6 +480,9 @@ export default function ApplicationShell() {
           onRunAggregate={runAnalysis}
           onSetAnnotation={setLayerAnnotation}
           onClearAnnotation={clearLayerAnnotation}
+          onSetRenderer={setLayerRenderer}
+          onClearRenderer={clearLayerRenderer}
+          onUpdateRendererEntry={updateRendererEntry}
         />
 
         <RoutingControlPanel

@@ -369,7 +369,12 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
       label: "Lines",
       color: "#000000",
       borderWidth: 3,
-      outlineColor: undefined
+      outlineColor: undefined,
+      markerStyle: undefined,
+      lineStyle: "solid",
+      fillStyle: undefined,
+      size: undefined,
+      opacity: 1
     });
 
     expect(
@@ -379,7 +384,12 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
       label: "Polygons",
       color: "#000000",
       borderWidth: 2,
-      outlineColor: "#000000"
+      outlineColor: "#000000",
+      markerStyle: undefined,
+      lineStyle: undefined,
+      fillStyle: "solid",
+      size: undefined,
+      opacity: 1
     });
 
     expect(engine.symbolToStyleGroup(null)).toEqual({
@@ -387,7 +397,12 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
       label: "Style",
       color: "#000000",
       borderWidth: null,
-      outlineColor: undefined
+      outlineColor: undefined,
+      markerStyle: undefined,
+      lineStyle: undefined,
+      fillStyle: undefined,
+      size: undefined,
+      opacity: 1
     });
 
     expect(engine.symbolToStyleGroup({ type: "simple-marker" }, "Custom Label").label).toBe(
@@ -1593,6 +1608,240 @@ describe("GISMapEngine Filter & Aggregate System", () => {
       expect(total.count).toBe(12);
       expect(total.sum).toBe(48);
       expect(total.avg).toBe(4);
+    });
+  });
+});
+
+describe("GISMapEngine Advanced Renderer System", () => {
+  let engine;
+  beforeEach(() => {
+    engine = new GISMapEngine();
+    engine.attachToView(makeView());
+  });
+
+  describe("setLayerAdvancedRenderer", () => {
+    test("throws on a field that doesn't exist on the layer's schema", async () => {
+      engine.touristAttractionLayer.fields = [{ name: "NAME", type: "esriFieldTypeString" }];
+      await expect(
+        engine.setLayerAdvancedRenderer("touristAttractions", { type: "unique-value", field: "NOPE" })
+      ).rejects.toThrow('"NOPE" is not a field on this layer.');
+    });
+
+    test("throws on an unknown renderer type", async () => {
+      engine.touristAttractionLayer.fields = [{ name: "CATEGORY", type: "esriFieldTypeString" }];
+      await expect(
+        engine.setLayerAdvancedRenderer("touristAttractions", { type: "bogus", field: "CATEGORY" })
+      ).rejects.toThrow('Unknown renderer type "bogus".');
+    });
+
+    test("generates and applies a unique-value renderer for a hosted layer", async () => {
+      engine.touristAttractionLayer.fields = [{ name: "CATEGORY", type: "esriFieldTypeString" }];
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { CATEGORY: "Museum" } }, { attributes: { CATEGORY: "Park" } }]
+      });
+
+      const result = await engine.setLayerAdvancedRenderer("touristAttractions", {
+        type: "unique-value",
+        field: "CATEGORY"
+      });
+
+      expect(result.rendererType).toBe("unique-value");
+      expect(engine.touristAttractionLayer.renderer.type).toBe("unique-value");
+      expect(engine.touristAttractionLayer.renderer.uniqueValueInfos).toHaveLength(2);
+      // The persisted simple base must stay untouched, so Simple mode can be
+      // restored later without losing the last plain color/border edit.
+      expect(engine.touristAttractionRenderer.type).not.toBe("unique-value");
+    });
+
+    test("getLayers() reports the active renderer for a non-drawings layer, and clearing it actually reverts the live renderer", async () => {
+      // Regression: RendererControls always sends `symbolType: group.symbolType`
+      // to setLayerAdvancedRenderer, including for non-drawings layers, where
+      // it isn't meaningful. If that leaked into the stored descriptor,
+      // attachRendererInfo's "is this the active renderer" comparison against
+      // the (correctly undefined) symbolType getLayers() passes for
+      // non-drawings layers would fail, so getLayers() would report
+      // rendererType "simple" even with an advanced renderer live on the
+      // map - and the panel's "Simple" button would then skip calling
+      // clearLayerAdvancedRenderer entirely, believing it was already Simple.
+      engine.touristAttractionLayer.fields = [{ name: "CATEGORY", type: "esriFieldTypeString" }];
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { CATEGORY: "Museum" } }]
+      });
+
+      await engine.setLayerAdvancedRenderer("touristAttractions", {
+        type: "unique-value",
+        field: "CATEGORY",
+        symbolType: "simple-marker" // what the UI actually sends for every layer, not just drawings
+      });
+
+      const group = engine.getLayers().find((l) => l.id === "touristAttractions").styleGroups[0];
+      expect(group.rendererType).toBe("unique-value");
+      expect(group.rendererLegend).toHaveLength(1);
+
+      engine.clearLayerAdvancedRenderer("touristAttractions");
+
+      expect(engine.getLayers().find((l) => l.id === "touristAttractions").styleGroups[0].rendererType).toBe("simple");
+      expect(engine.touristAttractionLayer.renderer.type).not.toBe("unique-value");
+    });
+
+    test("regenerating a renderer a second time does not throw (base symbol must not be read off the now-advanced live renderer)", async () => {
+      engine.touristAttractionLayer.fields = [
+        { name: "CATEGORY", type: "esriFieldTypeString" },
+        { name: "TYPE", type: "esriFieldTypeString" }
+      ];
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { CATEGORY: "Museum", TYPE: "Indoor" } }]
+      });
+
+      await engine.setLayerAdvancedRenderer("touristAttractions", { type: "unique-value", field: "CATEGORY" });
+      // At this point the live layer's renderer is already a unique-value
+      // renderer with no top-level `.symbol` - getBaseSymbolForLayer must not
+      // read from it directly.
+      await expect(
+        engine.setLayerAdvancedRenderer("touristAttractions", { type: "unique-value", field: "TYPE" })
+      ).resolves.toBeDefined();
+
+      expect(engine.touristAttractionLayer.renderer.field).toBe("TYPE");
+    });
+
+    test("generates and applies a class-breaks renderer for a hosted layer", async () => {
+      engine.mrtStationLayer.fields = [{ name: "RIDERSHIP", type: "esriFieldTypeInteger" }];
+      engine.mrtStationLayer.queryFeatures.mockResolvedValue({
+        features: [
+          { attributes: { RIDERSHIP: 10 } },
+          { attributes: { RIDERSHIP: 20 } },
+          { attributes: { RIDERSHIP: 30 } }
+        ]
+      });
+
+      await engine.setLayerAdvancedRenderer("mrtStations", {
+        type: "class-breaks",
+        field: "RIDERSHIP",
+        classCount: 3
+      });
+
+      expect(engine.mrtStationLayer.renderer.type).toBe("class-breaks");
+      expect(engine.mrtStationLayer.renderer.classBreakInfos).toHaveLength(3);
+    });
+
+    test("generates a unique-value renderer for drawings scoped to one symbolType", async () => {
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "A" } }));
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "B" } }));
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-line", color: "blue" }, attributes: { KIND: "A" } }));
+
+      await engine.setLayerAdvancedRenderer("drawings", {
+        type: "unique-value",
+        field: "KIND",
+        symbolType: "simple-marker"
+      });
+
+      const [markerA, markerB, line] = engine.drawLayer.graphics.toArray();
+      expect(markerA.symbol.color).not.toBe(markerB.symbol.color);
+      // The line graphic is a different symbolType and must be untouched.
+      expect(line.symbol.type).toBe("simple-line");
+      expect(line.symbol.color).toBe("blue");
+    });
+
+    test("throws when the requested symbolType has no matching graphic to base a renderer on yet", async () => {
+      engine.drawingFields.push({ name: "KIND", type: "esriFieldTypeString" });
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-line", color: "blue" }, attributes: { KIND: "A" } }));
+
+      await expect(
+        engine.setLayerAdvancedRenderer("drawings", { type: "unique-value", field: "KIND", symbolType: "simple-marker" })
+      ).rejects.toThrow("This layer has no symbol to base a renderer on yet.");
+    });
+  });
+
+  describe("applyDrawingsRendererToGraphic", () => {
+    test("colors a graphic according to the active drawings renderer's matching value", async () => {
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "A" } }));
+      await engine.setLayerAdvancedRenderer("drawings", { type: "unique-value", field: "KIND", symbolType: "simple-marker" });
+
+      const graphic = new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "A" } });
+      engine.applyDrawingsRendererToGraphic(graphic);
+
+      expect(graphic.symbol.color).toBe(engine.layerRenderers.get("drawings").uniqueValueInfos[0].symbol.color);
+    });
+
+    test("does nothing when no drawings renderer is active", () => {
+      const graphic = new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "A" } });
+      expect(() => engine.applyDrawingsRendererToGraphic(graphic)).not.toThrow();
+      expect(graphic.symbol.color).toBe("red");
+    });
+
+    test("is invoked when a sketch completes, so a newly-drawn graphic respects an active drawings renderer", async () => {
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "A" } }));
+      await engine.setLayerAdvancedRenderer("drawings", { type: "unique-value", field: "KIND", symbolType: "simple-marker" });
+      const spy = jest.spyOn(engine, "applyDrawingsRendererToGraphic");
+
+      engine.sketchVM.emit("create", {
+        state: "complete",
+        graphic: new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: {} })
+      });
+
+      expect(spy).toHaveBeenCalled();
+    });
+  });
+
+  describe("clearLayerAdvancedRenderer", () => {
+    test("reverts a hosted layer to its persisted simple base renderer", async () => {
+      engine.setLayerStyle("touristAttractions", { color: "#ff0000" });
+      engine.touristAttractionLayer.fields = [{ name: "CATEGORY", type: "esriFieldTypeString" }];
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { CATEGORY: "Museum" } }]
+      });
+      await engine.setLayerAdvancedRenderer("touristAttractions", { type: "unique-value", field: "CATEGORY" });
+      expect(engine.touristAttractionLayer.renderer.type).toBe("unique-value");
+
+      engine.clearLayerAdvancedRenderer("touristAttractions");
+
+      expect(engine.touristAttractionLayer.renderer.symbol.color).toBe("#ff0000");
+    });
+
+    test("is a no-op revert for drawings (no snapshot to restore)", async () => {
+      engine.drawLayer.add(new Graphic({ symbol: { type: "simple-marker", color: "red" }, attributes: { KIND: "A" } }));
+      await engine.setLayerAdvancedRenderer("drawings", { type: "unique-value", field: "KIND", symbolType: "simple-marker" });
+      expect(() => engine.clearLayerAdvancedRenderer("drawings")).not.toThrow();
+      expect(engine.layerRenderers.has("drawings")).toBe(false);
+    });
+  });
+
+  describe("persistence across reattachment", () => {
+    test("an advanced renderer survives a 2D/3D reattachment without requerying", async () => {
+      engine.touristAttractionLayer.fields = [{ name: "CATEGORY", type: "esriFieldTypeString" }];
+      engine.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { CATEGORY: "Museum" } }]
+      });
+      await engine.setLayerAdvancedRenderer("touristAttractions", { type: "unique-value", field: "CATEGORY" });
+
+      engine.attachToView(makeView());
+
+      expect(engine.touristAttractionLayer.renderer.type).toBe("unique-value");
+      expect(engine.touristAttractionLayer.renderer.field).toBe("CATEGORY");
+    });
+  });
+
+  describe("halo (multi-layer symbol)", () => {
+    test("wraps a simple-marker renderer's live symbol in a two-layer CIM halo composite", () => {
+      engine.setLayerStyle("touristAttractions", { color: "#ff0000", halo: true, haloColor: "#ffffff", haloSize: 20 });
+
+      expect(engine.touristAttractionLayer.renderer.symbol.type).toBe("CIMSymbolReference");
+      // The persisted simple base stays a plain simple-marker so future edits
+      // (and reverting Simple mode) keep working off a clonable symbol.
+      expect(engine.touristAttractionRenderer.symbol.type).toBe("simple-marker");
+      expect(engine.touristAttractionRenderer.symbol.color).toBe("#ff0000");
+    });
+
+    test("halo survives reattachment", () => {
+      engine.setLayerStyle("touristAttractions", { halo: true, haloColor: "#ffffff", haloSize: 20 });
+      engine.attachToView(makeView());
+      expect(engine.touristAttractionLayer.renderer.symbol.type).toBe("CIMSymbolReference");
+    });
+
+    test("disabling halo reverts the live renderer to a plain simple-marker symbol", () => {
+      engine.setLayerStyle("touristAttractions", { halo: true, haloColor: "#ffffff" });
+      engine.setLayerStyle("touristAttractions", { halo: false });
+      expect(engine.touristAttractionLayer.renderer.symbol.type).toBe("simple-marker");
     });
   });
 });
