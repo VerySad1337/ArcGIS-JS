@@ -28,6 +28,17 @@ export default function ApplicationShell() {
   const [activeDrawType, setActiveDrawType] = useState(null);
   const [hasInteracted, setHasInteracted] = useState(false);
   const [isRouting, setIsRouting] = useState(false);
+  // Explicit state (rather than deriving Boolean(engineRef.current?.searchGraphic)
+  // inline at render time) because that derivation only reflects reality once
+  // something re-renders the component, and setHasInteracted(true) - the only
+  // side effect handleSelectSearchResult otherwise triggers - is a no-op once
+  // hasInteracted is already true (e.g. after any earlier interaction), so no
+  // re-render would ever happen: selecting an address result after any prior
+  // interaction silently left the "Add to Layers" form stuck hidden even
+  // though engine.searchGraphic was already set. Tracking it as its own state
+  // guarantees a re-render on every transition regardless of what else has
+  // already happened this session.
+  const [hasSearchResult, setHasSearchResult] = useState(false);
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const sidebarToggleRef = useRef(null);
   const sidePanelRef = useRef(null);
@@ -337,16 +348,41 @@ export default function ApplicationShell() {
     }
   };
 
+  // "Add to Layers" in the Search card's discoverable way to keep an
+  // address search result around: searchResult is excluded from the Layers
+  // card (see GISMapEngine.getLayers's comment) since it's just the live,
+  // always-overwritten-by-the-next-search marker - this snapshots the
+  // current marker into a brand-new, independently named/toggleable/
+  // removable layer instead. Same throw-and-toast convention as
+  // createRouteResultLayer (blank name / no search result yet).
+  // Once saved, the live marker is cleared (engine.clearSearchResult) so the
+  // Search card resets to its empty initial state rather than leaving a
+  // now-redundant marker (duplicating the one just saved) on the map -
+  // GlobalSearchPanel mirrors this by clearing its own query/results state.
+  const createSearchResultLayer = (name) => {
+    try {
+      const { name: savedName } = engineRef.current.createSearchResultLayer(name);
+      engineRef.current.clearSearchResult();
+      setHasSearchResult(false);
+      refreshLayers();
+      showToast(`Added search result layer "${savedName}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to add search result layer.", "error");
+    }
+  };
+
   // A single remove handler for every removable dynamic layer
   // (LayerControlPanel's remove button doesn't distinguish where a layer
   // came from) - dispatches on the synthetic id's prefix, the same
-  // "heatmap_<id>"/"portal_<itemId>"/"route_<id>" id-space convention all
-  // three engine methods already use.
+  // "heatmap_<id>"/"portal_<itemId>"/"route_<id>"/"search_<id>" id-space
+  // convention all four engine methods already use.
   const removeLayer = (id) => {
     if (id.startsWith("heatmap_")) {
       engineRef.current.removeHeatmapLayer(id);
     } else if (id.startsWith("route_")) {
       engineRef.current.removeRouteResultLayer(id);
+    } else if (id.startsWith("search_")) {
+      engineRef.current.removeSearchResultLayer(id);
     } else {
       engineRef.current.removePortalLayer(id);
     }
@@ -400,6 +436,7 @@ export default function ApplicationShell() {
     setHasInteracted(true);
     if (result.type === "address") {
       await engineRef.current.zoomToPoint(result.longitude, result.latitude);
+      setHasSearchResult(true);
     } else {
       await engineRef.current.zoomToSearchResult(result);
     }
@@ -451,6 +488,7 @@ export default function ApplicationShell() {
     if (!result) return;
 
     setRouteOn(result.routeVisible);
+    setHasSearchResult(result.hasSearchResult);
     if (result.is3D !== is3D) {
       toggleViewMode(result.is3D);
     }
@@ -543,7 +581,12 @@ export default function ApplicationShell() {
 
         <ViewModeToggle is3D={is3D} setIs3D={toggleViewMode} />
 
-        <GlobalSearchPanel onSearch={handleSearch} onSelectResult={handleSelectSearchResult} />
+        <GlobalSearchPanel
+          onSearch={handleSearch}
+          onSelectResult={handleSelectSearchResult}
+          hasSearchResult={hasSearchResult}
+          onCreateSearchResultLayer={createSearchResultLayer}
+        />
 
         <LayerControlPanel
           layers={layers}

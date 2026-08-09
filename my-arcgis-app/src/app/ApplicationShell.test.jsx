@@ -494,6 +494,113 @@ describe("ApplicationShell", () => {
     expect(await screen.findByText("Please give the route layer a name.")).toBeInTheDocument();
   });
 
+  test("saving an address search result calls engine.createSearchResultLayer, clears the live marker, refreshes layers, and resets the search box", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.searchFeatures.mockResolvedValue([]);
+    engine.zoomToPoint.mockImplementation(() => {
+      engine.searchGraphic = { geometry: { type: "point" } };
+    });
+    engine.createSearchResultLayer.mockReturnValue({ id: "search_new", name: "Client Site" });
+
+    const queryInput = screen.getByLabelText("Search features or an address");
+    await user.type(queryInput, "1 Some Street");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    const addressOption = await screen.findByRole("option", { name: /1 Some Street/ });
+    await user.click(addressOption);
+    expect(engine.zoomToPoint).toHaveBeenCalled();
+
+    const nameInput = await screen.findByLabelText("New search result layer name");
+    await user.type(nameInput, "Client Site");
+    await user.click(screen.getByRole("button", { name: "Add to Layers" }));
+
+    expect(engine.createSearchResultLayer).toHaveBeenCalledWith("Client Site");
+    expect(engine.clearSearchResult).toHaveBeenCalled();
+    expect(await screen.findByText('Added search result layer "Client Site".')).toBeInTheDocument();
+    expect(queryInput).toHaveValue("");
+  });
+
+  test("selecting a feature-class result only zooms - it never shows Add to Layers or touches the query/marker; only an address result does, and only Add to Layers resets it", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.searchFeatures.mockImplementation((query) =>
+      Promise.resolve(
+        query === "Zoo" ? [{ type: "feature", layerId: "touristAttractions", label: "Zoo" }] : []
+      )
+    );
+    // Only "1 Some Street" should geocode to an address in this test - "Zoo"
+    // must resolve as a feature-only result, or the two searches below would
+    // both surface an ambiguous "Zoo" *and* "1 Some Street" address option.
+    geocodeAddress.mockImplementation((addr) =>
+      addr === "1 Some Street" ? Promise.resolve({ longitude: 5, latitude: 6 }) : Promise.resolve(null)
+    );
+    engine.zoomToPoint.mockImplementation(() => {
+      engine.searchGraphic = { geometry: { type: "point" } };
+    });
+    engine.createSearchResultLayer.mockReturnValue({ id: "search_new", name: "Client Site" });
+
+    const queryInput = screen.getByLabelText("Search features or an address");
+    await user.type(queryInput, "Zoo");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    // Selecting the feature-class result only zooms to it (zoomToSearchResult) -
+    // no marker, no "Add to Layers" form, and the query box is untouched.
+    await user.click(await screen.findByRole("option", { name: /Zoo/ }));
+    expect(engine.zoomToSearchResult).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "feature", label: "Zoo" })
+    );
+    expect(engine.zoomToPoint).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("New search result layer name")).not.toBeInTheDocument();
+    expect(queryInput).toHaveValue("Zoo");
+
+    // Now search an address and select it - only now does the save form appear.
+    await user.clear(queryInput);
+    await user.type(queryInput, "1 Some Street");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("option", { name: /1 Some Street/ }));
+
+    expect(engine.zoomToPoint).toHaveBeenCalled();
+    const nameInput = await screen.findByLabelText("New search result layer name");
+
+    // Only clicking Add to Layers resets the query/marker - not any prior step.
+    await user.type(nameInput, "Client Site");
+    await user.click(screen.getByRole("button", { name: "Add to Layers" }));
+
+    expect(engine.createSearchResultLayer).toHaveBeenCalledWith("Client Site");
+    expect(engine.clearSearchResult).toHaveBeenCalled();
+    expect(queryInput).toHaveValue("");
+    expect(screen.queryByLabelText("New search result layer name")).not.toBeInTheDocument();
+  });
+
+  test("the Add to Layers form appears for an address result even after an earlier, unrelated interaction already flipped hasInteracted", async () => {
+    // Regression: handleSelectSearchResult used to rely on setHasInteracted(true)
+    // as its only re-render trigger, which is a no-op once hasInteracted is
+    // already true - so selecting an address result after any prior
+    // interaction (e.g. starting a draw, or selecting a map-feature result
+    // first) left the Search card's "Add to Layers" form stuck hidden even
+    // though engine.searchGraphic was already set correctly.
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.searchFeatures.mockResolvedValue([]);
+    engine.zoomToPoint.mockImplementation(() => {
+      engine.searchGraphic = { geometry: { type: "point" } };
+    });
+
+    // An earlier, unrelated interaction that already flips hasInteracted to true.
+    await user.click(screen.getByText("draw-point"));
+
+    const queryInput = screen.getByLabelText("Search features or an address");
+    await user.type(queryInput, "1 Some Street");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("option", { name: /1 Some Street/ }));
+
+    expect(await screen.findByLabelText("New search result layer name")).toBeInTheDocument();
+  });
+
   test("without OAuth configured, sign-in is never attempted and existing behavior is unaffected", () => {
     render(<ApplicationShell />);
 

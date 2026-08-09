@@ -10,12 +10,14 @@ const LAYER_LABELS = {
   address: "Address"
 };
 
-export default function GlobalSearchPanel({ onSearch, onSelectResult }) {
+export default function GlobalSearchPanel({ onSearch, onSelectResult, hasSearchResult, onCreateSearchResultLayer }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [searchLayerName, setSearchLayerName] = useState("");
+  const [creatingSearchLayer, setCreatingSearchLayer] = useState(false);
   const requestIdRef = useRef(0);
 
   const runSearch = async () => {
@@ -45,6 +47,32 @@ export default function GlobalSearchPanel({ onSearch, onSelectResult }) {
   const handleSelect = (result) => {
     onSelectResult(result);
     setOpen(false);
+  };
+
+  // "Add to Layers" for the marker zoomToPoint drops on the map after an
+  // address search - the address marker (searchResult) has no row of its
+  // own in the Layers card (it's just the live, always-overwritten-by-the-
+  // next-search marker - see GISMapEngine.getLayers's comment), so this is
+  // the only way to keep a particular search result around once a later
+  // search overwrites it. Once saved, ApplicationShell.createSearchResultLayer
+  // clears the live marker (engine.clearSearchResult) on its side; this
+  // resets every piece of local state back to what it was before any search
+  // ran (query, results, the results dropdown) so the whole card - not just
+  // the map - returns to its empty initial state instead of leaving a stale
+  // query/result list sitting above a now-cleared marker.
+  const handleCreateSearchLayer = async () => {
+    if (!searchLayerName.trim() || !onCreateSearchResultLayer) return;
+    setCreatingSearchLayer(true);
+    try {
+      await onCreateSearchResultLayer(searchLayerName.trim());
+      setSearchLayerName("");
+      setQuery("");
+      setResults([]);
+      setSearched(false);
+      setOpen(false);
+    } finally {
+      setCreatingSearchLayer(false);
+    }
   };
 
   return (
@@ -89,11 +117,34 @@ export default function GlobalSearchPanel({ onSearch, onSelectResult }) {
           ))}
         </div>
       )}
+
+      {onCreateSearchResultLayer && hasSearchResult && (
+        <label className="analysis-aggregate-field global-search-save-field">
+          <span>Save search result as layer</span>
+          <input
+            type="text"
+            value={searchLayerName}
+            onChange={(e) => setSearchLayerName(e.target.value)}
+            placeholder="e.g. Client Site"
+            aria-label="New search result layer name"
+          />
+          <button
+            type="button"
+            className="gis-button"
+            disabled={!searchLayerName.trim() || creatingSearchLayer}
+            onClick={handleCreateSearchLayer}
+          >
+            {creatingSearchLayer ? "Adding…" : "Add to Layers"}
+          </button>
+        </label>
+      )}
     </div>
   );
 }
 
 GlobalSearchPanel.propTypes = {
   onSearch: PropTypes.func.isRequired,
-  onSelectResult: PropTypes.func.isRequired
+  onSelectResult: PropTypes.func.isRequired,
+  hasSearchResult: PropTypes.bool,
+  onCreateSearchResultLayer: PropTypes.func
 };

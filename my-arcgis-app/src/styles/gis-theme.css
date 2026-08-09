@@ -1852,6 +1852,10 @@ input[type="range"] {
   font-size: var(--text-sm);
 }
 
+.global-search-save-field {
+  margin-top: 10px;
+}
+
 .analysis-aggregate-field input {
   padding: 6px;
   border-radius: var(--radius-sm);

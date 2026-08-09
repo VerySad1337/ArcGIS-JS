@@ -414,7 +414,7 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     );
   });
 
-  test("getLayers excludes route/stops (they have no Layers-card row) and returns the other 5 in layerOrder", () => {
+  test("getLayers excludes route/stops/searchResult (they have no Layers-card row) and returns the other 4 in layerOrder", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
 
@@ -423,10 +423,10 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
       "touristAttractions",
       "mrtStations",
       "mrtLines",
-      "drawings",
-      "searchResult"
+      "drawings"
     ]);
     expect(layers.find((l) => l.id === "route")).toBeUndefined();
+    expect(layers.find((l) => l.id === "searchResult")).toBeUndefined();
     expect(layers.find((l) => l.id === "touristAttractions").styleGroups).toHaveLength(1);
     expect(layers.find((l) => l.id === "drawings").styleGroups).toEqual([]);
   });
@@ -491,6 +491,79 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     expect(() => engine.createRouteResultLayer("My Commute")).toThrow(
       "Search a route first, then add it to the layers card."
     );
+  });
+
+  test("createSearchResultLayer snapshots the current search marker into a new, named Layers-card row", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await engine.zoomToPoint(103.8198, 1.3521);
+
+    const { id, name } = engine.createSearchResultLayer("Client Site");
+    expect(name).toBe("Client Site");
+
+    const saved = engine.getLayers().find((l) => l.id === id);
+    expect(saved.name).toBe("Client Site");
+    expect(saved.removable).toBe(true);
+    expect(saved.styleGroups).toHaveLength(1);
+    expect(saved.styleGroups[0].symbolType).toBe("simple-marker");
+  });
+
+  test("setLayerStyle restyles a named search-result layer's marker and persists it across a 2D/3D reattachment", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await engine.zoomToPoint(103.8198, 1.3521);
+    const { id } = engine.createSearchResultLayer("Client Site");
+
+    engine.setLayerStyle(id, { color: "#00ff00", borderWidth: 5 });
+
+    let group = engine.getLayers().find((l) => l.id === id).styleGroups[0];
+    expect(group.color).toBe("#00ff00");
+    expect(group.borderWidth).toBe(5);
+
+    engine.attachToView(makeView());
+    group = engine.getLayers().find((l) => l.id === id).styleGroups[0];
+    expect(group.color).toBe("#00ff00");
+    expect(group.borderWidth).toBe(5);
+  });
+
+  test("createSearchResultLayer throws on a blank name or when no search result is placed yet", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+
+    expect(() => engine.createSearchResultLayer("")).toThrow(
+      "Please give the search result layer a name."
+    );
+    expect(() => engine.createSearchResultLayer("Client Site")).toThrow(
+      "Search an address first, then add it to the layers card."
+    );
+  });
+
+  test("removeSearchResultLayer removes the layer from the map and layerOrder", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    await engine.zoomToPoint(103.8198, 1.3521);
+    const { id } = engine.createSearchResultLayer("Client Site");
+
+    engine.removeSearchResultLayer(id);
+
+    expect(engine.layerOrder).not.toContain(id);
+    expect(engine.getLayers().find((l) => l.id === id)).toBeUndefined();
+  });
+
+  test("clearSearchResult clears the live marker/graphic without touching a saved named layer", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await engine.zoomToPoint(103.8198, 1.3521);
+    const { id } = engine.createSearchResultLayer("Client Site");
+
+    engine.clearSearchResult();
+
+    expect(engine.searchGraphic).toBeNull();
+    expect(engine.searchLayer.graphics.length).toBe(0);
+    // The saved named layer is a snapshot, independent of the live marker.
+    expect(engine.getLayers().find((l) => l.id === id)).toBeDefined();
+    expect(engine.namedSearchLayers.get(id).graphics.length).toBe(1);
   });
 });
 

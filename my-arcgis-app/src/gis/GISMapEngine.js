@@ -123,6 +123,18 @@ export default class GISMapEngine {
   namedRouteLayers = new Map();
   namedRouteLayerMeta = new Map();
 
+  // User-saved named search-result layers (see createSearchResultLayer/
+  // removeSearchResultLayer) - the discoverable "add to the layers card" way
+  // to keep a geocoded address marker around, since the live searchLayer
+  // (see searchGraphic/searchVisible above) is excluded from that card and
+  // always reflects only the most recent address search. Structurally
+  // identical to namedRouteLayers/namedRouteLayerMeta above but snapshots a
+  // single point graphic instead of a route+stops trio. Keyed by a synthetic
+  // "search_<id>" id, same id space as layerOrder/portalLayers/heatmapLayers/
+  // namedRouteLayers.
+  namedSearchLayers = new Map();
+  namedSearchLayerMeta = new Map();
+
   touristAttractionVisible = true;
   mrtStationVisible = true;
   mrtLineVisible = true;
@@ -320,7 +332,8 @@ export default class GISMapEngine {
       searchResult: this.searchLayer,
       ...Object.fromEntries(this.portalLayers),
       ...Object.fromEntries(this.heatmapLayers),
-      ...Object.fromEntries(this.namedRouteLayers)
+      ...Object.fromEntries(this.namedRouteLayers),
+      ...Object.fromEntries(this.namedSearchLayers)
     };
   }
 
@@ -510,6 +523,19 @@ export default class GISMapEngine {
         .filter(Boolean);
       rebuilt.addMany(graphics);
       this.namedRouteLayers.set(id, rebuilt);
+    });
+
+    // Named search-result layers (see createSearchResultLayer) are
+    // reconstructed the same way and for the same reason as named
+    // route-result layers above: a fresh GraphicsLayer is cheap, and
+    // namedSearchLayerMeta (not the live layer object) is the real source of
+    // truth for its graphic/title/visibility across a 2D/3D reattachment.
+    this.namedSearchLayers = new Map();
+    this.namedSearchLayerMeta.forEach((meta, id) => {
+      const rebuilt = new GraphicsLayer({ title: meta.title, visible: meta.visible });
+      const graphic = this.graphicFromJSON(meta.marker);
+      if (graphic) rebuilt.add(graphic);
+      this.namedSearchLayers.set(id, rebuilt);
     });
 
     const layerMap = this.buildLayerMap();
@@ -1652,7 +1678,6 @@ export default class GISMapEngine {
         filterable: true,
         filterDescription: this.getLayerFilterDescription("drawings")
       },
-      searchResult: { id: "searchResult", name: "Search Result", visible: this.searchLayer?.visible }
     };
 
     // Portal-added layers have no fixed slot in `lookup` above since their
@@ -1745,14 +1770,37 @@ export default class GISMapEngine {
       };
     });
 
-    // route/stops are deliberately excluded from the Layers card: they're
-    // the live, always-overwritten-on-next-search working state (visibility
-    // is controlled by Route Search's own "Hide/Show Route" toggle, not a
-    // card row), not something a user browses/reorders/removes there. A
-    // user who wants a persistent, named entry for a route result uses
-    // "Add to Layers" in Route Search instead (createRouteResultLayer),
-    // which produces an ordinary card row like any other layer.
-    return l.filter((id) => id !== "route" && id !== "stops").map((id) => lookup[id]);
+    // Named search-result layers (see createSearchResultLayer) - removable
+    // like a portal/heatmap/route-result layer, no Filter/Annotate sections
+    // (a single geocoded point has no attribute schema worth filtering on),
+    // but DOES get a Symbology section: it's a GraphicsLayer holding one
+    // real symbol'd graphic (the marker), same reasoning as the named
+    // route-result layer's line style group above.
+    this.namedSearchLayers.forEach((layer, id) => {
+      const meta = this.namedSearchLayerMeta.get(id);
+      const markerGraphic = layer.graphics.toArray().find((g) => g.symbol?.type === "simple-marker");
+      lookup[id] = {
+        id,
+        name: meta?.title || "Search Result",
+        visible: layer.visible,
+        removable: true,
+        styleGroups: markerGraphic
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(markerGraphic.symbol, "Marker"), id)]
+          : []
+      };
+    });
+
+    // route/stops/searchResult are deliberately excluded from the Layers
+    // card: they're the live, always-overwritten-on-next-search working
+    // state (visibility is controlled by Route Search's own "Hide/Show
+    // Route" toggle, or the Search card's own marker, not a card row), not
+    // something a user browses/reorders/removes there. A user who wants a
+    // persistent, named entry uses "Add to Layers" in Route Search
+    // (createRouteResultLayer) or the Search card (createSearchResultLayer)
+    // instead, which each produce an ordinary card row like any other layer.
+    return l
+      .filter((id) => id !== "route" && id !== "stops" && id !== "searchResult")
+      .map((id) => lookup[id]);
   }
 
   toggleLayer(id) {
@@ -1786,6 +1834,11 @@ export default class GISMapEngine {
     // reason - see attachToView's route-result-layer reconstruction.
     const namedRouteMeta = this.namedRouteLayerMeta.get(id);
     if (namedRouteMeta) namedRouteMeta.visible = layer.visible;
+
+    // Named search-result layers need the same visible-sync, for the same
+    // reason - see attachToView's search-result-layer reconstruction.
+    const namedSearchMeta = this.namedSearchLayerMeta.get(id);
+    if (namedSearchMeta) namedSearchMeta.visible = layer.visible;
   }
 
   // Adds a layer picked from PortalService.searchPortalLayers as a live
@@ -2030,6 +2083,61 @@ export default class GISMapEngine {
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
+  // Snapshots the current geocoded search-result marker as a new,
+  // independently named/toggleable/removable layer in the Layers card - the
+  // discoverable "save this search result" entry point, since the live
+  // searchLayer (see searchGraphic/searchVisible) is excluded from that card
+  // and always gets overwritten by the next address search. Throws (same
+  // throw-and-let-the-shell-toast convention as createRouteResultLayer) on a
+  // blank name or when there is no search result currently placed.
+  createSearchResultLayer(name) {
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) throw new Error("Please give the search result layer a name.");
+    if (!this.searchGraphic) throw new Error("Search an address first, then add it to the layers card.");
+
+    const id = `search_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const meta = {
+      title: trimmedName,
+      marker: this.graphicToJSON(this.searchGraphic),
+      visible: true
+    };
+    this.namedSearchLayerMeta.set(id, meta);
+
+    const layer = new GraphicsLayer({ title: trimmedName, visible: true });
+    const graphic = this.graphicFromJSON(meta.marker);
+    if (graphic) layer.add(graphic);
+    this.namedSearchLayers.set(id, layer);
+    this.layerOrder = [...this.layerOrder, id];
+
+    if (this.currentMap) this.currentMap.add(layer);
+
+    return { id, name: trimmedName };
+  }
+
+  // Clears the live, transient search-result marker (searchGraphic/
+  // searchLayer) - called once its contents have been snapshotted into a
+  // named layer (see createSearchResultLayer/ApplicationShell), so the
+  // Search card returns to its empty initial state instead of leaving a
+  // now-redundant marker (duplicating the one just saved) on the map.
+  clearSearchResult() {
+    this.searchGraphic = null;
+    this.searchLayer?.removeAll();
+  }
+
+  // Removes a named search-result layer entirely, the same remove-not-hide
+  // behavior removeRouteResultLayer/removeHeatmapLayer/removePortalLayer
+  // give other user-created layers.
+  removeSearchResultLayer(id) {
+    if (!this.namedSearchLayerMeta.has(id)) return;
+
+    const layer = this.namedSearchLayers.get(id);
+    if (layer && this.currentMap) this.currentMap.remove(layer);
+
+    this.namedSearchLayers.delete(id);
+    this.namedSearchLayerMeta.delete(id);
+    this.layerOrder = this.layerOrder.filter((x) => x !== id);
+  }
+
   // Zooms/pans the current view to the extent of one layer's content, so a
   // user can jump to e.g. just their drawings or just the MRT lines instead
   // of hunting for them at the current zoom level.
@@ -2130,6 +2238,23 @@ export default class GISMapEngine {
       return;
     }
 
+    // Named search-result layers (see createSearchResultLayer) have a
+    // dynamic, per-instance id ("search_<id>"), so they can't be a `switch`
+    // case literal either - checked the same way namedRouteLayers is above.
+    // The edited symbol is written back into `namedSearchLayerMeta` (not
+    // just the live graphic) so it survives a 2D/3D reattachment, which
+    // rebuilds this layer's graphic from that meta snapshot - see
+    // attachToView.
+    if (this.namedSearchLayers.has(id)) {
+      const layer = this.namedSearchLayers.get(id);
+      const markerGraphic = layer?.graphics.toArray().find((g) => g.symbol?.type === "simple-marker");
+      if (!markerGraphic) return;
+      markerGraphic.symbol = applySymbolStyle(markerGraphic.symbol);
+      const meta = this.namedSearchLayerMeta.get(id);
+      if (meta) meta.marker = this.graphicToJSON(markerGraphic);
+      return;
+    }
+
     switch (id) {
       case "touristAttractions": {
         const template = this.ensureSimpleBase(
@@ -2220,18 +2345,18 @@ export default class GISMapEngine {
 
   // `from`/`to` are indices into what the Layers card actually displays
   // (LayerControlPanel's `layers` prop, i.e. getLayers()'s output), not raw
-  // positions in `this.layerOrder` - route/stops occupy layerOrder slots but
-  // are filtered out of getLayers() (see its comment), so a naive splice
-  // directly on layerOrder would be off by however many hidden ids precede
-  // the touched position. Reorder within the card-visible id subsequence
-  // instead, then reinsert each hidden id back at its own original absolute
-  // layerOrder position (never touched by this method, since nothing offers
-  // a way to move them from the UI).
+  // positions in `this.layerOrder` - route/stops/searchResult occupy
+  // layerOrder slots but are filtered out of getLayers() (see its comment),
+  // so a naive splice directly on layerOrder would be off by however many
+  // hidden ids precede the touched position. Reorder within the
+  // card-visible id subsequence instead, then reinsert each hidden id back
+  // at its own original absolute layerOrder position (never touched by this
+  // method, since nothing offers a way to move them from the UI).
   reorderLayers(from, to) {
     const hidden = [];
     const visible = [];
     this.layerOrder.forEach((id, i) => {
-      if (id === "route" || id === "stops") hidden.push({ id, i });
+      if (id === "route" || id === "stops" || id === "searchResult") hidden.push({ id, i });
       else visible.push(id);
     });
 
@@ -2893,6 +3018,7 @@ export default class GISMapEngine {
       ),
       heatmapLayers: Object.fromEntries(this.heatmapLayerMeta),
       namedRouteLayers: Object.fromEntries(this.namedRouteLayerMeta),
+      namedSearchLayers: Object.fromEntries(this.namedSearchLayerMeta),
       drawingFields: [...this.drawingFields],
       drawings: this.drawLayer.graphics.toArray().map((g) => this.graphicToJSON(g)),
       route: this.graphicToJSON(this.routeGraphic),
@@ -2975,6 +3101,7 @@ export default class GISMapEngine {
     this.portalLayerMeta = new Map(Object.entries(state.portalLayers || {}));
     this.heatmapLayerMeta = new Map(Object.entries(state.heatmapLayers || {}));
     this.namedRouteLayerMeta = new Map(Object.entries(state.namedRouteLayers || {}));
+    this.namedSearchLayerMeta = new Map(Object.entries(state.namedSearchLayers || {}));
 
     this.routeGraphic = this.graphicFromJSON(state.route);
     this.startGraphic = this.graphicFromJSON(state.stops?.start);
@@ -3000,7 +3127,8 @@ export default class GISMapEngine {
 
     return {
       is3D: Boolean(state.is3D),
-      routeVisible: this.routeVisible
+      routeVisible: this.routeVisible,
+      hasSearchResult: Boolean(this.searchGraphic)
     };
   }
 }
