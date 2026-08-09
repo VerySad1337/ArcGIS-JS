@@ -10,6 +10,41 @@ const BUFFER_UNITS = [
   { value: "miles", label: "Miles" }
 ];
 
+// "Add to Layers" for Route Search - route/stops have no row of their own
+// in the Layers card (see GISMapEngine.getLayers's comment), so this is the
+// only way to keep a particular route result around once a later search
+// overwrites the live route/stop graphics. Pulled out of AnalysisPanel as
+// its own component purely to keep the Route Search section's JSX flat.
+function SaveRouteLayerForm({ hasRoute, name, onNameChange, onSave, saving }) {
+  if (!hasRoute) {
+    return <p className="analysis-tool-hint">Search a route first, then add it to the layers card.</p>;
+  }
+
+  return (
+    <label className="analysis-aggregate-field">
+      <span>Save route as layer</span>
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => onNameChange(e.target.value)}
+        placeholder="e.g. Home to Office"
+        aria-label="New route layer name"
+      />
+      <button type="button" className="gis-button" disabled={!name.trim() || saving} onClick={onSave}>
+        {saving ? "Adding…" : "Add to Layers"}
+      </button>
+    </label>
+  );
+}
+
+SaveRouteLayerForm.propTypes = {
+  hasRoute: PropTypes.bool,
+  name: PropTypes.string.isRequired,
+  onNameChange: PropTypes.func.isRequired,
+  onSave: PropTypes.func.isRequired,
+  saving: PropTypes.bool
+};
+
 // Route Search, Buffer, and Slice are the three tools under this card.
 // Buffer works in both 2D and 3D (geodesicBuffer is pure geometry math,
 // independent of the current view). Slice wraps an ArcGIS widget that only
@@ -31,6 +66,8 @@ export default function AnalysisPanel({
   toggleRoute,
   onRoute,
   isRouting,
+  hasRoute,
+  onCreateRouteLayer,
   layers,
   onCreateHeatmapLayer
 }) {
@@ -38,6 +75,8 @@ export default function AnalysisPanel({
   const [openSections, setOpenSections] = useState({});
   const [distance, setDistance] = useState("100");
   const [unit, setUnit] = useState("meters");
+  const [routeLayerName, setRouteLayerName] = useState("");
+  const [creatingRouteLayer, setCreatingRouteLayer] = useState(false);
   const [heatmapSourceId, setHeatmapSourceId] = useState("");
   const [heatmapName, setHeatmapName] = useState("");
   const [creatingHeatmap, setCreatingHeatmap] = useState(false);
@@ -52,6 +91,22 @@ export default function AnalysisPanel({
 
   const handleBuffer = () => {
     onBuffer(distanceValue, unit);
+  };
+
+  // Saves the current route search result under a user-given name as a new
+  // Layers-card row (see GISMapEngine.createRouteResultLayer) - route/stops
+  // themselves have no card row of their own (they're just the live,
+  // always-overwritten-by-the-next-search working state), so this is the
+  // only way to keep a particular route result around after a later search.
+  const handleCreateRouteLayer = async () => {
+    if (!routeLayerName.trim() || !onCreateRouteLayer) return;
+    setCreatingRouteLayer(true);
+    try {
+      await onCreateRouteLayer(routeLayerName.trim());
+      setRouteLayerName("");
+    } finally {
+      setCreatingRouteLayer(false);
+    }
   };
 
   // A layer qualifies as a heatmap analysis source when it has at least one
@@ -118,6 +173,16 @@ export default function AnalysisPanel({
                 <button type="button" className="gis-button gis-button-secondary" onClick={toggleRoute}>
                   {routeOn ? "Hide Route" : "Show Route"}
                 </button>
+
+                {onCreateRouteLayer && (
+                  <SaveRouteLayerForm
+                    hasRoute={hasRoute}
+                    name={routeLayerName}
+                    onNameChange={setRouteLayerName}
+                    onSave={handleCreateRouteLayer}
+                    saving={creatingRouteLayer}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -277,6 +342,8 @@ AnalysisPanel.propTypes = {
   toggleRoute: PropTypes.func,
   onRoute: PropTypes.func,
   isRouting: PropTypes.bool,
+  hasRoute: PropTypes.bool,
+  onCreateRouteLayer: PropTypes.func,
   layers: PropTypes.array,
   onCreateHeatmapLayer: PropTypes.func
 };

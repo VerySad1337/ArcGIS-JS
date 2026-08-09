@@ -414,21 +414,19 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     );
   });
 
-  test("getLayers returns 7 layers in layerOrder with empty styleGroups before any styling exists", () => {
+  test("getLayers excludes route/stops (they have no Layers-card row) and returns the other 5 in layerOrder", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
 
     const layers = engine.getLayers();
     expect(layers.map((l) => l.id)).toEqual([
-      "route",
-      "stops",
       "touristAttractions",
       "mrtStations",
       "mrtLines",
       "drawings",
       "searchResult"
     ]);
-    expect(layers.find((l) => l.id === "route").styleGroups).toEqual([]);
+    expect(layers.find((l) => l.id === "route")).toBeUndefined();
     expect(layers.find((l) => l.id === "touristAttractions").styleGroups).toHaveLength(1);
     expect(layers.find((l) => l.id === "drawings").styleGroups).toEqual([]);
   });
@@ -447,14 +445,52 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     ]);
   });
 
-  test("getLayers includes a route style group once a route graphic exists", () => {
+  test("createRouteResultLayer snapshots the current route into a new, named Layers-card row", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
-    engine.drawRoute({ type: "polyline" });
+    engine.drawRoute({ type: "polyline", paths: [[[0, 0], [1, 1]]] });
+    engine.drawStops({ type: "point", x: 0, y: 0 }, { type: "point", x: 1, y: 1 });
 
-    const route = engine.getLayers().find((l) => l.id === "route");
-    expect(route.styleGroups).toHaveLength(1);
-    expect(route.styleGroups[0].label).toBe("Route");
+    const { id, name } = engine.createRouteResultLayer("My Commute");
+    expect(name).toBe("My Commute");
+
+    const saved = engine.getLayers().find((l) => l.id === id);
+    expect(saved.name).toBe("My Commute");
+    expect(saved.removable).toBe(true);
+    // Exposes a Symbology group for its route line, unlike a named heatmap
+    // layer (no editable renderer at all), same as any other stylable layer.
+    expect(saved.styleGroups).toHaveLength(1);
+    expect(saved.styleGroups[0].symbolType).toBe("simple-line");
+  });
+
+  test("setLayerStyle restyles a named route layer's line and persists it across a 2D/3D reattachment", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.drawRoute({ type: "polyline", paths: [[[0, 0], [1, 1]]] });
+    engine.drawStops({ type: "point", x: 0, y: 0 }, { type: "point", x: 1, y: 1 });
+    const { id } = engine.createRouteResultLayer("My Commute");
+
+    engine.setLayerStyle(id, { color: "#00ff00", borderWidth: 5 });
+
+    let group = engine.getLayers().find((l) => l.id === id).styleGroups[0];
+    expect(group.color).toBe("#00ff00");
+    expect(group.borderWidth).toBe(5);
+
+    engine.attachToView(makeView());
+    group = engine.getLayers().find((l) => l.id === id).styleGroups[0];
+    expect(group.color).toBe("#00ff00");
+    expect(group.borderWidth).toBe(5);
+  });
+
+  test("createRouteResultLayer throws on a blank name or when no route is drawn yet", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+
+    expect(() => engine.createRouteResultLayer("")).toThrow("Please give the route layer a name.");
+    expect(() => engine.createRouteResultLayer("My Commute")).toThrow(
+      "Search a route first, then add it to the layers card."
+    );
   });
 });
 
@@ -647,20 +683,29 @@ describe("GISMapEngine.setLayerStyle", () => {
 });
 
 describe("GISMapEngine.reorderLayers", () => {
-  test("updates layerOrder and reorders the underlying map layers when attached", () => {
+  // from/to are indices into the Layers card's own displayed order
+  // (getLayers()'s output: touristAttractions, mrtStations, mrtLines,
+  // drawings, searchResult), not raw this.layerOrder positions - route/stops
+  // are excluded from the card and are never touched by this method, but
+  // still occupy their original absolute layerOrder slots (0 and 1).
+  test("updates layerOrder and reorders the underlying map layers when attached, leaving route/stops pinned", () => {
     const engine = new GISMapEngine();
     const view = makeView();
     engine.attachToView(view);
 
-    engine.reorderLayers(0, 6);
-    expect(engine.layerOrder[6]).toBe("route");
+    engine.reorderLayers(0, 4);
+    expect(engine.layerOrder[0]).toBe("route");
+    expect(engine.layerOrder[1]).toBe("stops");
+    expect(engine.layerOrder[6]).toBe("touristAttractions");
     expect(view.map.reorder).toHaveBeenCalledTimes(7);
   });
 
   test("updates layerOrder without touching the map when not attached", () => {
     const engine = new GISMapEngine();
     engine.reorderLayers(0, 2);
-    expect(engine.layerOrder[2]).toBe("route");
+    expect(engine.layerOrder[0]).toBe("route");
+    expect(engine.layerOrder[1]).toBe("stops");
+    expect(engine.layerOrder[4]).toBe("touristAttractions");
   });
 });
 

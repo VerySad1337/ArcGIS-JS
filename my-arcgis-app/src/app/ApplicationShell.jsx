@@ -320,14 +320,33 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
+  // "Add to Layers" in Route Search's discoverable way to keep a route
+  // result around: route/stops are excluded from the Layers card (see
+  // GISMapEngine.getLayers's comment) since they're just the live, always-
+  // overwritten-by-the-next-search working state - this snapshots the
+  // current route+stops into a brand-new, independently named/toggleable/
+  // removable layer instead. Same throw-and-toast convention as
+  // createHeatmapLayer (blank name / no route drawn yet).
+  const createRouteResultLayer = (name) => {
+    try {
+      const { name: savedName } = engineRef.current.createRouteResultLayer(name);
+      refreshLayers();
+      showToast(`Added route layer "${savedName}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to add route layer.", "error");
+    }
+  };
+
   // A single remove handler for every removable dynamic layer
   // (LayerControlPanel's remove button doesn't distinguish where a layer
   // came from) - dispatches on the synthetic id's prefix, the same
-  // "heatmap_<id>"/"portal_<itemId>" id-space convention both engine
-  // methods already use.
+  // "heatmap_<id>"/"portal_<itemId>"/"route_<id>" id-space convention all
+  // three engine methods already use.
   const removeLayer = (id) => {
     if (id.startsWith("heatmap_")) {
       engineRef.current.removeHeatmapLayer(id);
+    } else if (id.startsWith("route_")) {
+      engineRef.current.removeRouteResultLayer(id);
     } else {
       engineRef.current.removePortalLayer(id);
     }
@@ -555,6 +574,8 @@ export default function ApplicationShell() {
           toggleRoute={toggleRoute}
           onRoute={handleRoute}
           isRouting={isRouting}
+          hasRoute={Boolean(engineRef.current?.routeGraphic)}
+          onCreateRouteLayer={createRouteResultLayer}
           layers={layers}
           onCreateHeatmapLayer={createHeatmapLayer}
         />

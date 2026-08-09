@@ -29,6 +29,7 @@ jest.mock("../components/AnalysisPanel", () => (props) => (
     >
       create-heatmap-layer
     </button>
+    <button onClick={() => props.onCreateRouteLayer("My Commute")}>create-route-layer</button>
   </div>
 ));
 
@@ -43,6 +44,7 @@ jest.mock("../components/LayerControlPanel", () => (props) => (
     <button onClick={() => props.onZoomToLayer("route")}>zoom-layer</button>
     <button onClick={() => props.onRemove("portal_abc")}>remove-layer</button>
     <button onClick={() => props.onRemove("heatmap_xyz")}>remove-heatmap-layer</button>
+    <button onClick={() => props.onRemove("route_xyz")}>remove-route-layer</button>
     <button onClick={() => props.onUpdateHeatmapLayerIntensity("heatmap_xyz", 42)}>
       update-heatmap-intensity
     </button>
@@ -456,6 +458,40 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("update-heatmap-intensity"));
     expect(engine.updateHeatmapLayerIntensity).toHaveBeenCalledWith("heatmap_xyz", 42);
+  });
+
+  test("removing a route_-prefixed layer calls engine.removeRouteResultLayer instead of removePortalLayer", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("remove-route-layer"));
+    expect(engine.removeRouteResultLayer).toHaveBeenCalledWith("route_xyz");
+    expect(engine.removePortalLayer).not.toHaveBeenCalled();
+  });
+
+  test("creating a route layer calls engine.createRouteResultLayer, refreshes layers, and toasts success", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.createRouteResultLayer.mockReturnValue({ id: "route_new", name: "My Commute" });
+
+    await user.click(screen.getByText("create-route-layer"));
+
+    expect(engine.createRouteResultLayer).toHaveBeenCalledWith("My Commute");
+    expect(await screen.findByText('Added route layer "My Commute".')).toBeInTheDocument();
+  });
+
+  test("a failed route layer creation toasts the engine's error instead of throwing", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.createRouteResultLayer.mockImplementation(() => {
+      throw new Error("Please give the route layer a name.");
+    });
+
+    await user.click(screen.getByText("create-route-layer"));
+    expect(await screen.findByText("Please give the route layer a name.")).toBeInTheDocument();
   });
 
   test("without OAuth configured, sign-in is never attempted and existing behavior is unaffected", () => {

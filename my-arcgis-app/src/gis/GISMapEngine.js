@@ -107,6 +107,22 @@ export default class GISMapEngine {
   heatmapLayers = new Map();
   heatmapLayerMeta = new Map();
 
+  // User-saved named route-result layers (see createRouteResultLayer/
+  // removeRouteResultLayer) - lets a user snapshot the current route (with
+  // its start/end stops) as an independently named/toggleable/removable
+  // layer in the Layers card, since the live routeLayer/stopLayer (see
+  // below) are excluded from that card and always reflect only the most
+  // recent route search. Structurally identical to heatmapLayers/
+  // heatmapLayerMeta above but GraphicsLayer-backed (a route result has no
+  // service `url` to duplicate, unlike a heatmap source) -
+  // namedRouteLayerMeta stores plain-JSON snapshots of the route/stop
+  // graphics (graphicToJSON/graphicFromJSON, the same shapes Project
+  // Persistence already uses) so they can be rebuilt on every attachToView
+  // call the same way portal/heatmap layers are. Keyed by a synthetic
+  // "route_<id>" id, same id space as layerOrder/portalLayers/heatmapLayers.
+  namedRouteLayers = new Map();
+  namedRouteLayerMeta = new Map();
+
   touristAttractionVisible = true;
   mrtStationVisible = true;
   mrtLineVisible = true;
@@ -303,7 +319,8 @@ export default class GISMapEngine {
       drawings: this.drawLayer,
       searchResult: this.searchLayer,
       ...Object.fromEntries(this.portalLayers),
-      ...Object.fromEntries(this.heatmapLayers)
+      ...Object.fromEntries(this.heatmapLayers),
+      ...Object.fromEntries(this.namedRouteLayers)
     };
   }
 
@@ -478,6 +495,21 @@ export default class GISMapEngine {
         renderer: buildHeatmapRenderer(meta.intensity, meta.radius).renderer
       });
       this.heatmapLayers.set(id, rebuilt);
+    });
+
+    // Named route-result layers (see createRouteResultLayer) are
+    // reconstructed the same way and for the same reason as heatmap layers
+    // above: a fresh GraphicsLayer is cheap, and namedRouteLayerMeta (not
+    // the live layer object) is the real source of truth for its graphics/
+    // title/visibility across a 2D/3D reattachment.
+    this.namedRouteLayers = new Map();
+    this.namedRouteLayerMeta.forEach((meta, id) => {
+      const rebuilt = new GraphicsLayer({ title: meta.title, visible: meta.visible });
+      const graphics = [meta.route, meta.start, meta.end]
+        .map((g) => this.graphicFromJSON(g))
+        .filter(Boolean);
+      rebuilt.addMany(graphics);
+      this.namedRouteLayers.set(id, rebuilt);
     });
 
     const layerMap = this.buildLayerMap();
@@ -1545,7 +1577,6 @@ export default class GISMapEngine {
     const touristAttractionsIsPoint = GISMapEngine.isPointGeometry(this.touristAttractionLayer?.geometryType);
     const mrtStationsIsPoint = GISMapEngine.isPointGeometry(this.mrtStationLayer?.geometryType);
 
-    const routeSymbol = this.routeGraphic?.symbol;
     // Read from the persisted simple-mode base fields, not the live layer's
     // renderer - the live renderer can currently be a Unique Values/Class
     // Breaks renderer (no top-level `.symbol`) or a halo CIM composite
@@ -1577,15 +1608,6 @@ export default class GISMapEngine {
     }
 
     const lookup = {
-      route: {
-        id: "route",
-        name: "Route Layer",
-        visible: this.routeLayer?.visible,
-        styleGroups: routeSymbol
-          ? [this.attachRendererInfo(this.symbolToStyleGroup(routeSymbol, "Route"), "route")]
-          : []
-      },
-      stops: { id: "stops", name: "Stop Layer", visible: this.stopLayer?.visible },
       touristAttractions: {
         id: "touristAttractions",
         name: "Tourist Attractions",
@@ -1697,7 +1719,40 @@ export default class GISMapEngine {
       };
     });
 
-    return l.map((id) => lookup[id]);
+    // Named route-result layers (see createRouteResultLayer) - removable
+    // like a portal/heatmap layer, no Filter/Annotate sections (no
+    // attribute schema worth filtering on), but - unlike heatmap layers -
+    // DOES get a Symbology section: it's a GraphicsLayer holding real
+    // symbol'd graphics (the route line plus its two stop markers), same as
+    // `drawings`, not a renderer-only layer with nothing to restyle. Only
+    // the route line (`simple-line`) is exposed as a style group, though -
+    // the two stop markers are deliberately left out, for the same reason
+    // the live `stops` layer itself is excluded from Simple styling
+    // (knowledge/index.md's Layer Styling System): they're intentionally
+    // green-circle/red-square, and a single shared "marker" group edit
+    // would overwrite that start/end distinction.
+    this.namedRouteLayers.forEach((layer, id) => {
+      const meta = this.namedRouteLayerMeta.get(id);
+      const lineGraphic = layer.graphics.toArray().find((g) => g.symbol?.type === "simple-line");
+      lookup[id] = {
+        id,
+        name: meta?.title || "Route",
+        visible: layer.visible,
+        removable: true,
+        styleGroups: lineGraphic
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(lineGraphic.symbol, "Route"), id)]
+          : []
+      };
+    });
+
+    // route/stops are deliberately excluded from the Layers card: they're
+    // the live, always-overwritten-on-next-search working state (visibility
+    // is controlled by Route Search's own "Hide/Show Route" toggle, not a
+    // card row), not something a user browses/reorders/removes there. A
+    // user who wants a persistent, named entry for a route result uses
+    // "Add to Layers" in Route Search instead (createRouteResultLayer),
+    // which produces an ordinary card row like any other layer.
+    return l.filter((id) => id !== "route" && id !== "stops").map((id) => lookup[id]);
   }
 
   toggleLayer(id) {
@@ -1726,6 +1781,11 @@ export default class GISMapEngine {
     // the same reason - see attachToView's heatmap-layer reconstruction.
     const heatmapMeta = this.heatmapLayerMeta.get(id);
     if (heatmapMeta) heatmapMeta.visible = layer.visible;
+
+    // Named route-result layers need the same visible-sync, for the same
+    // reason - see attachToView's route-result-layer reconstruction.
+    const namedRouteMeta = this.namedRouteLayerMeta.get(id);
+    if (namedRouteMeta) namedRouteMeta.visible = layer.visible;
   }
 
   // Adds a layer picked from PortalService.searchPortalLayers as a live
@@ -1922,6 +1982,54 @@ export default class GISMapEngine {
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
+  // Snapshots the current route search result (the route line plus its
+  // start/end stop markers) as a new, independently named/toggleable/
+  // removable layer in the Layers card - the discoverable "save this route"
+  // entry point, since the live routeLayer/stopLayer (see routeVisible/
+  // toggleRoute) are excluded from that card and always get overwritten by
+  // the next route search. Throws (same throw-and-let-the-shell-toast
+  // convention as createHeatmapLayer/addPortalLayer) on a blank name or when
+  // there is no route currently drawn, rather than silently no-opping.
+  createRouteResultLayer(name) {
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) throw new Error("Please give the route layer a name.");
+    if (!this.routeGraphic) throw new Error("Search a route first, then add it to the layers card.");
+
+    const id = `route_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const meta = {
+      title: trimmedName,
+      route: this.graphicToJSON(this.routeGraphic),
+      start: this.graphicToJSON(this.startGraphic),
+      end: this.graphicToJSON(this.endGraphic),
+      visible: true
+    };
+    this.namedRouteLayerMeta.set(id, meta);
+
+    const layer = new GraphicsLayer({ title: trimmedName, visible: true });
+    const graphics = [meta.route, meta.start, meta.end].map((g) => this.graphicFromJSON(g)).filter(Boolean);
+    layer.addMany(graphics);
+    this.namedRouteLayers.set(id, layer);
+    this.layerOrder = [...this.layerOrder, id];
+
+    if (this.currentMap) this.currentMap.add(layer);
+
+    return { id, name: trimmedName };
+  }
+
+  // Removes a named route-result layer entirely, the same remove-not-hide
+  // behavior removeHeatmapLayer/removePortalLayer give other user-created
+  // layers.
+  removeRouteResultLayer(id) {
+    if (!this.namedRouteLayerMeta.has(id)) return;
+
+    const layer = this.namedRouteLayers.get(id);
+    if (layer && this.currentMap) this.currentMap.remove(layer);
+
+    this.namedRouteLayers.delete(id);
+    this.namedRouteLayerMeta.delete(id);
+    this.layerOrder = this.layerOrder.filter((x) => x !== id);
+  }
+
   // Zooms/pans the current view to the extent of one layer's content, so a
   // user can jump to e.g. just their drawings or just the MRT lines instead
   // of hunting for them at the current zoom level.
@@ -2000,6 +2108,26 @@ export default class GISMapEngine {
     if (halo !== undefined) {
       if (halo) this.haloState.set(id, { color: haloColor, size: haloSize });
       else this.haloState.delete(id);
+    }
+
+    // Named route-result layers (see createRouteResultLayer) have a
+    // dynamic, per-instance id ("route_<id>"), so they can't be a `switch`
+    // case literal like the fixed layers below - checked first instead.
+    // Only the route line (`simple-line`) is a style group getLayers()
+    // exposes for this layer (see its comment - the two stop markers are
+    // deliberately excluded, same reason `stops` itself is), so this only
+    // ever touches that one graphic regardless of what `symbolType` is sent.
+    // The edited symbol is written back into `namedRouteLayerMeta` (not just
+    // the live graphic) so it survives a 2D/3D reattachment, which rebuilds
+    // this layer's graphics from that meta snapshot - see attachToView.
+    if (this.namedRouteLayers.has(id)) {
+      const layer = this.namedRouteLayers.get(id);
+      const lineGraphic = layer?.graphics.toArray().find((g) => g.symbol?.type === "simple-line");
+      if (!lineGraphic) return;
+      lineGraphic.symbol = applySymbolStyle(lineGraphic.symbol);
+      const meta = this.namedRouteLayerMeta.get(id);
+      if (meta) meta.route = this.graphicToJSON(lineGraphic);
+      return;
     }
 
     switch (id) {
@@ -2090,10 +2218,28 @@ export default class GISMapEngine {
     }
   }
 
+  // `from`/`to` are indices into what the Layers card actually displays
+  // (LayerControlPanel's `layers` prop, i.e. getLayers()'s output), not raw
+  // positions in `this.layerOrder` - route/stops occupy layerOrder slots but
+  // are filtered out of getLayers() (see its comment), so a naive splice
+  // directly on layerOrder would be off by however many hidden ids precede
+  // the touched position. Reorder within the card-visible id subsequence
+  // instead, then reinsert each hidden id back at its own original absolute
+  // layerOrder position (never touched by this method, since nothing offers
+  // a way to move them from the UI).
   reorderLayers(from, to) {
-    const order = [...this.layerOrder];
-    const [moved] = order.splice(from, 1);
-    order.splice(to, 0, moved);
+    const hidden = [];
+    const visible = [];
+    this.layerOrder.forEach((id, i) => {
+      if (id === "route" || id === "stops") hidden.push({ id, i });
+      else visible.push(id);
+    });
+
+    const [moved] = visible.splice(from, 1);
+    visible.splice(to, 0, moved);
+
+    const order = [...visible];
+    hidden.forEach(({ id, i }) => order.splice(i, 0, id));
     this.layerOrder = order;
 
     if (!this.currentMap) return;
@@ -2746,6 +2892,7 @@ export default class GISMapEngine {
         ])
       ),
       heatmapLayers: Object.fromEntries(this.heatmapLayerMeta),
+      namedRouteLayers: Object.fromEntries(this.namedRouteLayerMeta),
       drawingFields: [...this.drawingFields],
       drawings: this.drawLayer.graphics.toArray().map((g) => this.graphicToJSON(g)),
       route: this.graphicToJSON(this.routeGraphic),
@@ -2827,6 +2974,7 @@ export default class GISMapEngine {
 
     this.portalLayerMeta = new Map(Object.entries(state.portalLayers || {}));
     this.heatmapLayerMeta = new Map(Object.entries(state.heatmapLayers || {}));
+    this.namedRouteLayerMeta = new Map(Object.entries(state.namedRouteLayers || {}));
 
     this.routeGraphic = this.graphicFromJSON(state.route);
     this.startGraphic = this.graphicFromJSON(state.stops?.start);

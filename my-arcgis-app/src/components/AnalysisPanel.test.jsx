@@ -236,4 +236,74 @@ describe("AnalysisPanel", () => {
       expect(onCreateHeatmapLayer).toHaveBeenCalledWith("touristAttractions", { name: "Attraction Density" });
     });
   });
+
+  describe("Route Search — Add to Layers", () => {
+    test("is not rendered when onCreateRouteLayer is not provided", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          routeOn={true}
+          toggleRoute={jest.fn()}
+          onRoute={jest.fn()}
+          hasRoute={true}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Route Search" }));
+
+      expect(screen.queryByLabelText("New route layer name")).not.toBeInTheDocument();
+    });
+
+    test("shows a hint instead of the form when no route has been searched yet", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          routeOn={true}
+          toggleRoute={jest.fn()}
+          onRoute={jest.fn()}
+          hasRoute={false}
+          onCreateRouteLayer={jest.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Route Search" }));
+
+      expect(screen.getByText("Search a route first, then add it to the layers card.")).toBeInTheDocument();
+      expect(screen.queryByLabelText("New route layer name")).not.toBeInTheDocument();
+    });
+
+    test("Add to Layers button is disabled until a name is given, and submits the trimmed name", async () => {
+      const user = userEvent.setup();
+      const onCreateRouteLayer = jest.fn().mockResolvedValue(undefined);
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          routeOn={true}
+          toggleRoute={jest.fn()}
+          onRoute={jest.fn()}
+          hasRoute={true}
+          onCreateRouteLayer={onCreateRouteLayer}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Route Search" }));
+
+      const button = screen.getByRole("button", { name: "Add to Layers" });
+      expect(button).toBeDisabled();
+
+      await user.type(screen.getByLabelText("New route layer name"), "  Home to Office  ");
+      expect(button).toBeEnabled();
+
+      await user.click(button);
+      expect(onCreateRouteLayer).toHaveBeenCalledWith("Home to Office");
+    });
+  });
 });
