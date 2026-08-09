@@ -1077,8 +1077,47 @@ export default class GISMapEngine {
   // architectural role layerFilters/layerAnnotations play for their systems.
   // ---------------------------------------------------------------------
 
-  // Ensures the persisted Simple-mode base renderer for a layer is a real,
-  // clonable autocast instance, bootstrapping it from the *live* layer's own
+  // Clones a renderer whether it's a live autocast Renderer (has `.clone()`)
+  // or a plain JSON object - e.g. a portal layer's freshly-generated default
+  // base (see defaultSimpleRenderer below) or a renderer restored from a
+  // saved project (see Project Persistence) - deep enough to keep
+  // `symbol.outline` from being shared between the original and the
+  // "clone", the same class of fix SymbolRenderers.applyExtendedSymbolStyle
+  // needed for the same reason.
+  cloneRenderer(renderer) {
+    if (typeof renderer.clone === "function") return renderer.clone();
+    return {
+      ...renderer,
+      symbol: renderer.symbol
+        ? { ...renderer.symbol, outline: renderer.symbol.outline ? { ...renderer.symbol.outline } : undefined }
+        : renderer.symbol
+    };
+  }
+
+  // A last-resort Simple-mode base for a layer that has neither a persisted
+  // base nor a live renderer that's already Simple - i.e. a portal layer
+  // whose service's own default renderer is Unique Values/Class Breaks/
+  // heatmap/dictionary/etc. (an ordinary, common case - most real-world
+  // hosted feature services do NOT default to a plain Simple renderer).
+  // Without this, such a layer had no symbol anywhere to clone from:
+  // setLayerStyle silently no-opped (no error, the color picker just did
+  // nothing) and setLayerAdvancedRenderer threw "no symbol to base a
+  // renderer on yet" - together, "symbology can't be edited after adding
+  // from portal". Keyed by the layer's own `geometryType` (populated after
+  // `layer.load()`); an unrecognized/not-yet-loaded type returns null,
+  // preserving the previous no-controls fallback for that edge case only.
+  static defaultSimpleRenderer(geometryType) {
+    const symbol = {
+      esriGeometryPoint: { type: "simple-marker", color: [255, 165, 0], size: 8, outline: { color: [255, 255, 255], width: 1 } },
+      esriGeometryMultipoint: { type: "simple-marker", color: [255, 165, 0], size: 8, outline: { color: [255, 255, 255], width: 1 } },
+      esriGeometryPolyline: { type: "simple-line", color: [0, 0, 0], width: 1.5 },
+      esriGeometryPolygon: { type: "simple-fill", color: [0, 120, 255, 0.5], outline: { color: [0, 0, 0], width: 1.5 } }
+    }[geometryType];
+    return symbol ? { type: "simple", symbol } : null;
+  }
+
+  // Ensures the persisted Simple-mode base renderer for a layer is a real
+  // symbol to clone from, bootstrapping it from the *live* layer's own
   // renderer - and, crucially, PERSISTING that bootstrap via `setBase`
   // rather than only reading it - the first time this layer's symbol is
   // needed as a template (a Simple-mode edit, or generating an advanced
@@ -1092,12 +1131,26 @@ export default class GISMapEngine {
   // once the live one is overwritten. Regression: a *second* "Generate" on
   // such a layer read the live (already-advanced) renderer's nonexistent
   // `.symbol` and threw "no symbol to base a renderer on yet".
-  ensureSimpleBase(base, live, setBase) {
-    if (typeof base?.symbol?.clone === "function") return base;
-    if (typeof live?.clone !== "function") return null;
-    const bootstrapped = live.clone();
-    setBase(bootstrapped);
-    return bootstrapped;
+  //
+  // `live` must itself be a genuinely Simple renderer (i.e. have a `.symbol`)
+  // to be used as a bootstrap source - checking only `typeof live.clone ===
+  // "function"` (every renderer type has `.clone()`) previously let a portal
+  // layer's own Unique Values/Class Breaks/heatmap service renderer get
+  // "bootstrapped" as if it were a Simple base, producing a renderer with no
+  // top-level `.symbol` that then silently broke every future Simple-mode
+  // edit and Advanced-renderer generation for that layer. `geometryType`
+  // (only meaningful for the portal-layer call site) is the last-resort
+  // fallback once neither a persisted nor a live Simple base exists at all.
+  ensureSimpleBase(base, live, setBase, geometryType) {
+    if (base?.symbol) return base;
+    if (live?.symbol) {
+      const bootstrapped = this.cloneRenderer(live);
+      setBase(bootstrapped);
+      return bootstrapped;
+    }
+    const fallback = GISMapEngine.defaultSimpleRenderer(geometryType);
+    if (fallback) setBase(fallback);
+    return fallback;
   }
 
   // The current Simple-mode symbol to use as the shape template for a newly
@@ -1139,9 +1192,12 @@ export default class GISMapEngine {
       default: {
         const meta = this.portalLayerMeta.get(id);
         const portalLayer = this.portalLayers.get(id);
-        const renderer = this.ensureSimpleBase(meta?.renderer, portalLayer?.renderer, (r) => {
-          if (meta) meta.renderer = r;
-        });
+        const renderer = this.ensureSimpleBase(
+          meta?.renderer,
+          portalLayer?.renderer,
+          (r) => { if (meta) meta.renderer = r; },
+          portalLayer?.geometryType
+        );
         return renderer?.symbol || null;
       }
     }
@@ -1525,17 +1581,24 @@ export default class GISMapEngine {
       const meta = this.portalLayerMeta.get(id);
       // A portal-supplied renderer can be anything (unique-value, class-
       // breaks, dictionary, ...), most of which have no single symbol to
-      // expose a color/border control for. Prefer the persisted simple base
-      // (meta.renderer - set the moment this layer is ever styled/haloed,
-      // see setLayerStyle) since, like the fixed hosted layers above, the
-      // live layer.renderer can currently be an advanced/halo renderer; an
-      // untouched portal layer has no meta.renderer yet, so fall back to the
-      // live service-supplied renderer only when it's still "simple".
-      const portalSymbol = meta?.renderer?.symbol
-        ? meta.renderer.symbol
-        : layer.renderer?.type === "simple"
-        ? layer.renderer.symbol
-        : null;
+      // expose a color/border control for. ensureSimpleBase prefers the
+      // persisted simple base (meta.renderer - set the moment this layer is
+      // ever styled/haloed, see setLayerStyle) since, like the fixed hosted
+      // layers above, the live layer.renderer can currently be an advanced/
+      // halo renderer; falls back to the live service-supplied renderer only
+      // when it's still "simple"; and - for a layer whose service default
+      // was never Simple to begin with - synthesizes a generated default
+      // symbol (by geometryType) so this layer is never left with no
+      // Symbology controls at all. This is the same bootstrap
+      // setLayerStyle/getBaseSymbolForLayer use, so what the panel shows as
+      // "current style" always matches what a subsequent edit clones from.
+      const portalRenderer = this.ensureSimpleBase(
+        meta?.renderer,
+        layer.renderer,
+        (r) => { if (meta) meta.renderer = r; },
+        layer.geometryType
+      );
+      const portalSymbol = portalRenderer?.symbol || null;
       lookup[id] = {
         id,
         name: meta?.title || "Portal Layer",
@@ -1749,20 +1812,15 @@ export default class GISMapEngine {
       else this.haloState.delete(id);
     }
 
-    // Clones from the persisted simple base once it's a real autocast Symbol
-    // instance (true after this layer's first-ever style edit this session);
-    // before that, the field is still the plain object literal declared on
-    // the class and has no .clone(), so the live layer's own (freshly
-    // autocast by FeatureLayer construction, and necessarily still simple -
-    // halo/advanced can't exist yet on a layer that's never been styled) is
-    // used to bootstrap it instead.
-    const rendererTemplate = (base, live) => (typeof base?.symbol?.clone === "function" ? base : live);
-
     switch (id) {
       case "touristAttractions": {
-        const template = rendererTemplate(this.touristAttractionRenderer, this.touristAttractionLayer?.renderer);
+        const template = this.ensureSimpleBase(
+          this.touristAttractionRenderer,
+          this.touristAttractionLayer?.renderer,
+          (r) => { this.touristAttractionRenderer = r; }
+        );
         if (!template) return;
-        const renderer = template.clone();
+        const renderer = this.cloneRenderer(template);
         renderer.symbol = applySymbolStyle(renderer.symbol);
         this.touristAttractionRenderer = renderer;
         if (this.touristAttractionLayer) {
@@ -1771,9 +1829,13 @@ export default class GISMapEngine {
         break;
       }
       case "mrtStations": {
-        const template = rendererTemplate(this.mrtStationRenderer, this.mrtStationLayer?.renderer);
+        const template = this.ensureSimpleBase(
+          this.mrtStationRenderer,
+          this.mrtStationLayer?.renderer,
+          (r) => { this.mrtStationRenderer = r; }
+        );
         if (!template) return;
-        const renderer = template.clone();
+        const renderer = this.cloneRenderer(template);
         renderer.symbol = applySymbolStyle(renderer.symbol);
         this.mrtStationRenderer = renderer;
         if (this.mrtStationLayer) {
@@ -1782,9 +1844,13 @@ export default class GISMapEngine {
         break;
       }
       case "mrtLines": {
-        const template = rendererTemplate(this.mrtLineRenderer, this.mrtLineLayer?.renderer);
+        const template = this.ensureSimpleBase(
+          this.mrtLineRenderer,
+          this.mrtLineLayer?.renderer,
+          (r) => { this.mrtLineRenderer = r; }
+        );
         if (!template) return;
-        const renderer = template.clone();
+        const renderer = this.cloneRenderer(template);
         renderer.symbol = applySymbolStyle(renderer.symbol);
         this.mrtLineRenderer = renderer;
         if (this.mrtLineLayer) {
@@ -1807,23 +1873,25 @@ export default class GISMapEngine {
       }
       default: {
         // Portal-added layers (see getLayers()'s portal-layer branch above)
-        // are only stylable when a simple renderer is available to clone
-        // from: either the persisted base (meta.renderer, once this layer
-        // has ever been styled) or, for an as-yet-unstyled layer, the live
-        // service-supplied renderer, but only when that is itself "simple" -
-        // the one shape that maps cleanly onto a single color/border control,
-        // same as the fixed hosted layers above.
+        // go through the same ensureSimpleBase bootstrap as the three fixed
+        // hosted layers - including its fallback to a generated default
+        // symbol (keyed by the layer's own geometryType) when the portal
+        // service's own renderer isn't already Simple. Without that
+        // fallback, a portal layer added from a service whose default
+        // renderer was Unique Values/Class Breaks/heatmap/etc. (an ordinary,
+        // common case) had no symbol anywhere to clone from, and this branch
+        // silently did nothing - see ensureSimpleBase's comment.
         const portalLayer = this.portalLayers.get(id);
         const meta = this.portalLayerMeta.get(id);
-        const hasBase = typeof meta?.renderer?.symbol?.clone === "function";
-        const template = hasBase
-          ? meta.renderer
-          : portalLayer?.renderer?.type === "simple"
-          ? portalLayer.renderer
-          : null;
+        const template = this.ensureSimpleBase(
+          meta?.renderer,
+          portalLayer?.renderer,
+          (r) => { if (meta) meta.renderer = r; },
+          portalLayer?.geometryType
+        );
         if (!template) return;
 
-        const renderer = template.clone();
+        const renderer = this.cloneRenderer(template);
         renderer.symbol = applySymbolStyle(renderer.symbol);
         if (meta) meta.renderer = renderer;
         if (portalLayer) portalLayer.renderer = this.resolveSeedRenderer(id, renderer);

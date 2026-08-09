@@ -814,6 +814,76 @@ describe("GISMapEngine portal layers", () => {
     expect(engine.portalLayers.get(id).renderer).toBe(engine.portalLayerMeta.get(id).renderer);
   });
 
+  describe("a portal layer whose service default renderer isn't Simple (regression: symbology couldn't be edited)", () => {
+    // Simulates the common real-world case: the portal service's own
+    // metadata resolves to a Unique Values renderer (or Class Breaks,
+    // heatmap, dictionary, ...), which has no top-level `.symbol`. Before
+    // the fix, getLayers() reported an empty styleGroups (no Symbology
+    // section at all), setLayerStyle silently did nothing, and
+    // setLayerAdvancedRenderer threw "no symbol to base a renderer on yet".
+    function attachNonSimpleRenderer(engine, id) {
+      const layer = engine.portalLayers.get(id);
+      layer.geometryType = "esriGeometryPoint";
+      layer.renderer = { type: "unique-value", field: "KIND", uniqueValueInfos: [] };
+      return layer;
+    }
+
+    test("getLayers() still exposes a style group, generated from the layer's geometryType", async () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      const id = await engine.addPortalLayer(portalItem);
+      attachNonSimpleRenderer(engine, id);
+
+      const entry = engine.getLayers().find((l) => l.id === id);
+
+      expect(entry.styleGroups).toHaveLength(1);
+      expect(entry.styleGroups[0].symbolType).toBe("simple-marker");
+      // The live (Unique Values) renderer is left alone until the user
+      // actually edits something, so the portal's own authored symbology
+      // still displays on the map in the meantime.
+      expect(engine.portalLayers.get(id).renderer.type).toBe("unique-value");
+    });
+
+    test("setLayerStyle actually applies a color change instead of silently no-opping", async () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      const id = await engine.addPortalLayer(portalItem);
+      attachNonSimpleRenderer(engine, id);
+
+      engine.setLayerStyle(id, { color: "#00ff00" });
+
+      expect(engine.portalLayerMeta.get(id).renderer.symbol.color).toBe("#00ff00");
+      expect(engine.portalLayers.get(id).renderer.symbol.color).toBe("#00ff00");
+      expect(engine.portalLayers.get(id).renderer.type).toBe("simple");
+    });
+
+    test("setLayerAdvancedRenderer no longer throws 'no symbol to base a renderer on yet'", async () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      const id = await engine.addPortalLayer(portalItem);
+      const layer = attachNonSimpleRenderer(engine, id);
+      layer.fields = [{ name: "KIND", type: "esriFieldTypeString" }];
+      layer.queryFeatures.mockResolvedValue({ features: [{ attributes: { KIND: "A" } }] });
+
+      await expect(
+        engine.setLayerAdvancedRenderer(id, { type: "unique-value", field: "KIND" })
+      ).resolves.toEqual(expect.objectContaining({ rendererType: "unique-value", field: "KIND" }));
+    });
+
+    test("a layer with no recognizable geometryType still falls back to no style controls, not a crash", async () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      const id = await engine.addPortalLayer(portalItem);
+      engine.portalLayers.get(id).renderer = { type: "unique-value", field: "KIND", uniqueValueInfos: [] };
+      // geometryType left unset - simulates a layer whose load() hasn't
+      // resolved that field yet.
+
+      const entry = engine.getLayers().find((l) => l.id === id);
+      expect(entry.styleGroups).toEqual([]);
+      expect(() => engine.setLayerStyle(id, { color: "#00ff00" })).not.toThrow();
+    });
+  });
+
   test("toggleLayer flips a portal layer's visibility and keeps portalLayerMeta in sync across reattachment", async () => {
     const engine = new GISMapEngine();
     const view1 = makeView();
