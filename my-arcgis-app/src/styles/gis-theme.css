@@ -371,6 +371,24 @@ arcgis-scene {
 }
 
 /* =========================
+   PROJECT PERSISTENCE (Save/Load Project)
+========================= */
+
+.project-persistence-row {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.project-persistence-row .gis-button-secondary {
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+/* =========================
    VIEW MODE SEGMENTED CONTROL
    A slim bar rather than a full panel-card: 2D/3D is the least-frequently
    used control in the sidebar and doesn't need top-of-sidebar prime space.

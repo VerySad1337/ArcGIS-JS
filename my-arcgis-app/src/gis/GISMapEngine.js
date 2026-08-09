@@ -174,6 +174,22 @@ export default class GISMapEngine {
   // searchResult is a transient single marker replaced on every search.
   static ANALYSIS_EXCLUDED_LAYER_IDS = new Set(["route", "stops", "heat", "searchResult"]);
 
+  // Single source of truth for "which engine field mirrors this layer's
+  // visibility", shared by toggleLayer and zoomToLayer's reveal-if-hidden
+  // step (previously two independent copies of the same lookup - see each
+  // call site). This is also what Project Persistence (below) reads/writes,
+  // so a layer hidden via the ordinary eye-icon toggle is what a saved
+  // project actually remembers, not just a layer hidden via zoomToLayer's
+  // reveal path.
+  static VISIBILITY_FIELD_BY_LAYER_ID = {
+    route: "routeVisible",
+    touristAttractions: "touristAttractionVisible",
+    heat: "heatVisible",
+    mrtStations: "mrtStationVisible",
+    mrtLines: "mrtLineVisible",
+    searchResult: "searchVisible"
+  };
+
   // Active per-layer annotation (map-label) field, keyed by layerOrder/portal
   // id - same source-of-truth role as layerFilters above, and the same
   // reason it needs to survive attachToView: the FeatureLayer-backed layers
@@ -1544,6 +1560,15 @@ export default class GISMapEngine {
 
     layer.visible = !layer.visible;
 
+    // Fixed layers (route/touristAttractions/heat/mrtStations/mrtLines/
+    // searchResult) have a dedicated engine visibility field that seeds
+    // their reconstruction in attachToView (a 2D/3D switch rebuilds these
+    // as fresh layer instances - see the field comments above `layerOrder`)
+    // and that Project Persistence reads/writes - see
+    // VISIBILITY_FIELD_BY_LAYER_ID's comment.
+    const visibilityField = GISMapEngine.VISIBILITY_FIELD_BY_LAYER_ID[id];
+    if (visibilityField) this[visibilityField] = layer.visible;
+
     // Portal layers have no dedicated engine visibility field (route/heat/
     // etc. do); portalLayerMeta.visible IS that field for them, and must be
     // kept in sync so the layer reattaches with the right visibility on the
@@ -1659,14 +1684,7 @@ export default class GISMapEngine {
     // doesn't reset to hidden on the next 2D/3D reattachment.
     if (layer.visible === false) {
       layer.visible = true;
-      const visibilityField = {
-        route: "routeVisible",
-        touristAttractions: "touristAttractionVisible",
-        heat: "heatVisible",
-        mrtStations: "mrtStationVisible",
-        mrtLines: "mrtLineVisible",
-        searchResult: "searchVisible"
-      }[id];
+      const visibilityField = GISMapEngine.VISIBILITY_FIELD_BY_LAYER_ID[id];
       if (visibilityField) this[visibilityField] = true;
 
       const portalMeta = this.portalLayerMeta.get(id);
@@ -2281,5 +2299,302 @@ export default class GISMapEngine {
 
     await layer.refresh();
     return { success: true };
+  }
+
+  // ---------------------------------------------------------------------
+  // Project Persistence (Save/Load Project)
+  //
+  // The ArcGIS Pro ".aprx" analog: a single downloadable JSON snapshot of
+  // every piece of engine-owned session state, re-uploadable later (a new
+  // browser session, a different machine) to pick up exactly where the user
+  // left off, the same way saveDrawings/uploadGeoJSON round-trip drawings
+  // alone but for the whole map - layer order/visibility, Simple/Advanced
+  // symbology, halo, filters, annotations, portal layers, drawings (with
+  // attributes, unlike saveDrawings), route/stops, the search marker, and
+  // the current camera extent/2D-3D mode.
+  //
+  // Every field this reads already documents itself elsewhere as the actual
+  // source of truth for its concern (touristAttractionRenderer/layerFilters/
+  // layerAnnotations/layerRenderers/haloState/portalLayerMeta - see each
+  // field's own comment above), so this is a plain aggregation, not a new
+  // parallel state mechanism.
+  //
+  // Geometries/symbols/renderers are hand-serialized to plain JSON (not via
+  // each object's own ArcGIS-provided `.toJSON()`) because that method
+  // returns Esri REST-dialect `type` strings (e.g. "esriSMS"), whereas this
+  // file's own symbol/renderer comparisons throughout (symbolToStyleGroup,
+  // resolveSeedRenderer's halo gate, getBaseSymbolForLayer's switch, ...)
+  // all key off the JS API dialect ("simple-marker"). Round-tripping through
+  // the REST dialect would silently break every one of those comparisons on
+  // reload. The shapes built here intentionally match the plain literals
+  // already used for touristAttractionRenderer/mrtStationRenderer/etc., so a
+  // reloaded value bootstraps through the exact same "plain base, cloned
+  // from the live layer on first edit" path (ensureSimpleBase/
+  // rendererTemplate) as a layer that was never touched this session.
+  // ---------------------------------------------------------------------
+
+  static PROJECT_STATE_VERSION = 1;
+
+  // Reads a Color instance/hex string/[r,g,b]/[r,g,b,a] array down to a
+  // plain [r,g,b,a] array (alpha 0-1, matching this file's own literals,
+  // e.g. mrtStationRenderer's `[0, 120, 255, 0.5]`) - unlike colorToHex
+  // (used for UI swatches), this deliberately keeps alpha rather than
+  // discarding it, since a dropped alpha would visibly change a
+  // semi-transparent fill on reload.
+  colorToJSON(color) {
+    if (!color) return null;
+    if (typeof color === "string") return color;
+    if (Array.isArray(color)) return color;
+    if (typeof color.r === "number") return [color.r, color.g, color.b, color.a ?? 1];
+    return null;
+  }
+
+  // Plain-JSON snapshot of a symbol, covering only the symbol shapes this
+  // app itself ever constructs (simple-marker/simple-line/simple-fill - see
+  // setLayerStyle/applyExtendedSymbolStyle). Anything else (a portal
+  // service's own untouched default symbol, or a live "cim" halo composite -
+  // haloState's plain {color,size} is what's persisted for halo, and
+  // resolveSeedRenderer recomposites it from that on reload, so the CIM
+  // symbol itself never needs to round-trip) is dropped rather than
+  // guessed at.
+  symbolToPlainJSON(symbol) {
+    if (!symbol) return null;
+    const outline = symbol.outline
+      ? { color: this.colorToJSON(symbol.outline.color), width: symbol.outline.width }
+      : undefined;
+    switch (symbol.type) {
+      case "simple-marker":
+        return { type: "simple-marker", style: symbol.style, color: this.colorToJSON(symbol.color), size: symbol.size, outline };
+      case "simple-line":
+        return { type: "simple-line", style: symbol.style, color: this.colorToJSON(symbol.color), width: symbol.width };
+      case "simple-fill":
+        return { type: "simple-fill", style: symbol.style, color: this.colorToJSON(symbol.color), outline };
+      default:
+        return null;
+    }
+  }
+
+  // touristAttractionRenderer/mrtStationRenderer/mrtLineRenderer/portal
+  // meta.renderer are always plain "simple" renderers (setLayerStyle keeps
+  // them that way deliberately, per haloState's field comment), so there is
+  // exactly one shape to serialize here.
+  rendererToPlainJSON(renderer) {
+    const symbol = this.symbolToPlainJSON(renderer?.symbol);
+    return symbol ? { type: "simple", symbol } : null;
+  }
+
+  // layerRenderers descriptors (Unique Values / Class Breaks) carry live,
+  // cloned Symbol instances inside uniqueValueInfos/classBreakInfos (see
+  // buildUniqueValueRenderer/buildClassBreaksRenderer's use of
+  // applyExtendedSymbolStyle) - the rest of the descriptor (field,
+  // min/maxValue, legend) is already plain per SymbolRenderers.js's own
+  // "ArcGIS-import-free" contract.
+  layerRendererDescriptorToPlainJSON(descriptor) {
+    if (!descriptor) return null;
+    const plain = { ...descriptor };
+    if (descriptor.type === "unique-value") {
+      plain.uniqueValueInfos = descriptor.uniqueValueInfos.map((info) => ({
+        ...info,
+        symbol: this.symbolToPlainJSON(info.symbol)
+      }));
+      if (descriptor.defaultSymbol) plain.defaultSymbol = this.symbolToPlainJSON(descriptor.defaultSymbol);
+    } else if (descriptor.type === "class-breaks") {
+      plain.classBreakInfos = descriptor.classBreakInfos.map((brk) => ({
+        ...brk,
+        symbol: this.symbolToPlainJSON(brk.symbol)
+      }));
+    }
+    return plain;
+  }
+
+  // Plain-JSON snapshot of a geometry, covering the same point/polyline/
+  // polygon/extent shapes uploadGeoJSON already hand-builds - kept
+  // consistent with that existing pattern (an explicit JS-API-dialect
+  // `type` tag) rather than each geometry's own `.toJSON()`, for the same
+  // dialect reason as symbols above.
+  geometryToPlainJSON(geometry) {
+    if (!geometry) return null;
+    const spatialReference = geometry.spatialReference
+      ? { wkid: geometry.spatialReference.wkid, wkt: geometry.spatialReference.wkt }
+      : undefined;
+    switch (geometry.type) {
+      case "point":
+        return { type: "point", x: geometry.x, y: geometry.y, spatialReference };
+      case "polyline":
+        return { type: "polyline", paths: geometry.paths, spatialReference };
+      case "polygon":
+        return { type: "polygon", rings: geometry.rings, spatialReference };
+      case "extent":
+        return {
+          type: "extent",
+          xmin: geometry.xmin,
+          ymin: geometry.ymin,
+          xmax: geometry.xmax,
+          ymax: geometry.ymax,
+          spatialReference
+        };
+      default:
+        return null;
+    }
+  }
+
+  graphicToJSON(graphic) {
+    if (!graphic) return null;
+    return {
+      geometry: this.geometryToPlainJSON(graphic.geometry),
+      symbol: this.symbolToPlainJSON(graphic.symbol),
+      attributes: { ...(graphic.attributes || {}) }
+    };
+  }
+
+  graphicFromJSON(entry) {
+    if (!entry?.geometry) return null;
+    return new Graphic({
+      geometry: entry.geometry,
+      symbol: entry.symbol || undefined,
+      attributes: entry.attributes || {}
+    });
+  }
+
+  buildProjectState() {
+    return {
+      version: GISMapEngine.PROJECT_STATE_VERSION,
+      savedAt: new Date().toISOString(),
+      is3D: this.isSceneView(),
+      extent: this.currentView ? this.geometryToPlainJSON(this.currentView.extent) : null,
+      layerOrder: [...this.layerOrder],
+      visibility: {
+        route: this.routeVisible,
+        heat: this.heatVisible,
+        heatIntensity: this.heatIntensity,
+        touristAttractions: this.touristAttractionVisible,
+        mrtStations: this.mrtStationVisible,
+        mrtLines: this.mrtLineVisible,
+        search: this.searchVisible
+      },
+      renderers: {
+        touristAttractions: this.rendererToPlainJSON(this.touristAttractionRenderer),
+        mrtStations: this.rendererToPlainJSON(this.mrtStationRenderer),
+        mrtLines: this.rendererToPlainJSON(this.mrtLineRenderer)
+      },
+      layerFilters: Object.fromEntries(this.layerFilters),
+      layerAnnotations: Object.fromEntries(this.layerAnnotations),
+      layerRenderers: Object.fromEntries(
+        Array.from(this.layerRenderers, ([id, d]) => [id, this.layerRendererDescriptorToPlainJSON(d)])
+      ),
+      haloState: Object.fromEntries(this.haloState),
+      portalLayers: Object.fromEntries(
+        Array.from(this.portalLayerMeta, ([id, meta]) => [
+          id,
+          { title: meta.title, url: meta.url, visible: meta.visible, renderer: this.rendererToPlainJSON(meta.renderer) }
+        ])
+      ),
+      drawingFields: [...this.drawingFields],
+      drawings: this.drawLayer.graphics.toArray().map((g) => this.graphicToJSON(g)),
+      route: this.graphicToJSON(this.routeGraphic),
+      stops: { start: this.graphicToJSON(this.startGraphic), end: this.graphicToJSON(this.endGraphic) },
+      searchMarker: this.graphicToJSON(this.searchGraphic)
+    };
+  }
+
+  // Downloads the current session as a project file, mirroring
+  // saveDrawings's msg-callback/anchor-download convention.
+  saveProjectState(msg) {
+    let state;
+    try {
+      state = this.buildProjectState();
+    } catch (err) {
+      console.error("Save project failed:", err);
+      msg?.("Could not save the project.", "error");
+      return;
+    }
+
+    const url = URL.createObjectURL(new Blob([JSON.stringify(state)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "project.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    msg?.("Project saved.", "success");
+  }
+
+  // Restores a previously saved project. Rebuilds every persisted field
+  // first, then - if a view is already attached - calls attachToView again
+  // so the change is reflected immediately against whatever view type
+  // (2D/3D) is currently mounted; the caller (ApplicationShell) compares
+  // the returned `is3D` against its own state and switches view mode if
+  // they differ, which triggers a second, ordinary attachToView through the
+  // usual handleViewReady path. That second rebuild re-reads the exact same
+  // (already-updated) persisted fields, so it converges on the correct
+  // result rather than reverting anything - a deliberately accepted minor
+  // redundancy in exchange for not needing a view-ready promise/callback
+  // threaded through this method.
+  async loadProjectState(file, msg) {
+    if (!file) return null;
+
+    let state;
+    try {
+      state = JSON.parse(await file.text());
+      if (!state || typeof state !== "object" || !Array.isArray(state.layerOrder)) {
+        throw new Error("Not a recognized project file.");
+      }
+    } catch (err) {
+      console.error("Load project failed:", err);
+      msg?.("Load failed: the file could not be read as a valid project.", "error");
+      return null;
+    }
+
+    this.layerOrder = [...state.layerOrder];
+
+    const visibility = state.visibility || {};
+    this.routeVisible = visibility.route ?? this.routeVisible;
+    this.heatVisible = visibility.heat ?? this.heatVisible;
+    this.heatIntensity = visibility.heatIntensity ?? this.heatIntensity;
+    this.touristAttractionVisible = visibility.touristAttractions ?? this.touristAttractionVisible;
+    this.mrtStationVisible = visibility.mrtStations ?? this.mrtStationVisible;
+    this.mrtLineVisible = visibility.mrtLines ?? this.mrtLineVisible;
+    this.searchVisible = visibility.search ?? this.searchVisible;
+
+    const renderers = state.renderers || {};
+    if (renderers.touristAttractions) this.touristAttractionRenderer = renderers.touristAttractions;
+    if (renderers.mrtStations) this.mrtStationRenderer = renderers.mrtStations;
+    if (renderers.mrtLines) this.mrtLineRenderer = renderers.mrtLines;
+
+    this.layerFilters = new Map(Object.entries(state.layerFilters || {}));
+    this.layerAnnotations = new Map(Object.entries(state.layerAnnotations || {}));
+    this.layerRenderers = new Map(Object.entries(state.layerRenderers || {}));
+    this.haloState = new Map(Object.entries(state.haloState || {}));
+    this.drawingFields = Array.isArray(state.drawingFields) ? [...state.drawingFields] : [];
+
+    this.portalLayerMeta = new Map(Object.entries(state.portalLayers || {}));
+
+    this.routeGraphic = this.graphicFromJSON(state.route);
+    this.startGraphic = this.graphicFromJSON(state.stops?.start);
+    this.endGraphic = this.graphicFromJSON(state.stops?.end);
+    this.searchGraphic = this.graphicFromJSON(state.searchMarker);
+
+    this.drawLayer.removeAll();
+    const drawings = (state.drawings || []).map((entry) => this.graphicFromJSON(entry)).filter(Boolean);
+    if (drawings.length) this.drawLayer.addMany(drawings);
+
+    if (this.currentView) {
+      this.attachToView(this.currentView);
+      if (state.extent) {
+        try {
+          await this.currentView.goTo(state.extent);
+        } catch {
+          // Ignore navigation failures (e.g. an interrupted animation).
+        }
+      }
+    }
+
+    msg?.("Project loaded.", "success");
+
+    return {
+      is3D: Boolean(state.is3D),
+      routeVisible: this.routeVisible,
+      heatVisible: this.heatVisible,
+      heatIntensity: this.heatIntensity
+    };
   }
 }

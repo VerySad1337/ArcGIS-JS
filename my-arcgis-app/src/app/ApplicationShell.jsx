@@ -35,6 +35,7 @@ export default function ApplicationShell() {
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const sidebarToggleRef = useRef(null);
   const sidePanelRef = useRef(null);
+  const loadProjectInputRef = useRef(null);
   const [signedInUser, setSignedInUser] = useState(null);
   const [signingIn, setSigningIn] = useState(false);
   const [sliceActive, setSliceActive] = useState(false);
@@ -403,6 +404,32 @@ export default function ApplicationShell() {
 
   const saveGeoJSON = () => {engineRef.current.saveDrawings(showToast);};
 
+  // Project Persistence (Save/Load Project) - the ArcGIS Pro ".aprx" analog.
+  // saveProjectState/loadProjectState do the actual serialization (see
+  // GISMapEngine's "Project Persistence" section); this wrapper's job is
+  // syncing the shell's own useState mirrors (is3D/routeOn/heatOn/
+  // heatIntensity) to whatever the loaded project restored, the same way
+  // toggleHeatmap/toggleRoute/toggleViewMode keep those mirrors in sync with
+  // engine state elsewhere in this file.
+  const saveProject = () => {
+    engineRef.current.saveProjectState(showToast);
+  };
+
+  const loadProject = async (file) => {
+    if (!file) return;
+    setHasInteracted(true);
+    const result = await engineRef.current.loadProjectState(file, showToast);
+    if (!result) return;
+
+    setRouteOn(result.routeVisible);
+    setHeatOn(result.heatVisible);
+    setHeatIntensity(result.heatIntensity);
+    if (result.is3D !== is3D) {
+      toggleViewMode(result.is3D);
+    }
+    refreshLayers();
+  };
+
   const handleSaveAttributes = async (updates) => {
     try {
       const result = await engineRef.current.updateSelectedFeatureAttributes(updates);
@@ -461,6 +488,32 @@ export default function ApplicationShell() {
         className={`side-panel${sidebarOpen ? " open" : ""}`}
         tabIndex={-1}
       >
+        <div className="project-persistence-row">
+          <button type="button" className="gis-button-secondary" onClick={saveProject}>
+            <Icon name="folder" size={16} />
+            Save Project
+          </button>
+          <button
+            type="button"
+            className="gis-button-secondary"
+            onClick={() => loadProjectInputRef.current?.click()}
+          >
+            <Icon name="folder" size={16} />
+            Load Project
+          </button>
+          <input
+            ref={loadProjectInputRef}
+            hidden
+            type="file"
+            accept=".json"
+            onChange={({ target }) => {
+              const file = target.files?.[0];
+              target.value = "";
+              if (file) loadProject(file);
+            }}
+          />
+        </div>
+
         <ViewModeToggle is3D={is3D} setIs3D={toggleViewMode} />
 
         <GlobalSearchPanel onSearch={handleSearch} onSelectResult={handleSelectSearchResult} />

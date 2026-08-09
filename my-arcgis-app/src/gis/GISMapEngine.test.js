@@ -1845,3 +1845,247 @@ describe("GISMapEngine Advanced Renderer System", () => {
     });
   });
 });
+
+describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
+  function makeFile(text) {
+    return { name: "project.json", text: jest.fn().mockResolvedValue(text) };
+  }
+
+  describe("buildProjectState", () => {
+    test("captures layer order, visibility, and 2D/3D mode", () => {
+      const engine = new GISMapEngine();
+      const view = makeView();
+      view.type = "3d";
+      engine.attachToView(view);
+      engine.toggleLayer("mrtStations");
+
+      const state = engine.buildProjectState();
+
+      expect(state.version).toBe(1);
+      expect(state.is3D).toBe(true);
+      expect(state.layerOrder).toEqual(engine.layerOrder);
+      expect(state.visibility.mrtStations).toBe(false);
+    });
+
+    test("serializes drawings with attributes (unlike saveDrawings' empty properties)", () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      engine.drawLayer.add(
+        new Graphic({
+          geometry: { type: "point", x: 1, y: 2 },
+          symbol: { type: "simple-marker", color: "red", size: 8, outline: { color: "white", width: 1 } },
+          attributes: { name: "Kiosk" }
+        })
+      );
+
+      const state = engine.buildProjectState();
+
+      expect(state.drawings).toHaveLength(1);
+      expect(state.drawings[0]).toEqual({
+        geometry: { type: "point", x: 1, y: 2, spatialReference: undefined },
+        symbol: {
+          type: "simple-marker",
+          style: undefined,
+          color: "red",
+          size: 8,
+          outline: { color: "white", width: 1 }
+        },
+        attributes: { name: "Kiosk" }
+      });
+    });
+
+    test("serializes Simple-mode layer styling in JS-API dialect (not the type field .toJSON() would produce)", () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      engine.setLayerStyle("touristAttractions", { color: "#ff0000", borderWidth: 2 });
+
+      const state = engine.buildProjectState();
+
+      expect(state.renderers.touristAttractions).toEqual({
+        type: "simple",
+        symbol: {
+          type: "simple-marker",
+          style: undefined,
+          color: "#ff0000",
+          size: 8,
+          outline: { color: [255, 255, 255], width: 2 }
+        }
+      });
+    });
+
+    test("serializes an active filter, annotation, and halo state", async () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+      engine.touristAttractionLayer.fields = [{ name: "NAME", type: "esriFieldTypeString" }];
+      await engine.setLayerFilter("touristAttractions", {
+        logic: "AND",
+        conditions: [{ field: "NAME", operator: "=", value: "Zoo" }]
+      });
+      await engine.setLayerAnnotation("touristAttractions", "NAME");
+      engine.setLayerStyle("touristAttractions", { halo: true, haloColor: "#ffffff", haloSize: 20 });
+
+      const state = engine.buildProjectState();
+
+      expect(state.layerFilters.touristAttractions).toBeDefined();
+      expect(state.layerAnnotations.touristAttractions).toBe("NAME");
+      expect(state.haloState.touristAttractions).toEqual({ color: "#ffffff", size: 20 });
+    });
+  });
+
+  describe("saveProjectState", () => {
+    const originalCreateObjectURL = globalThis.URL.createObjectURL;
+    const originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
+
+    beforeEach(() => {
+      globalThis.URL.createObjectURL = jest.fn(() => "blob:mock-url");
+      globalThis.URL.revokeObjectURL = jest.fn();
+    });
+
+    afterEach(() => {
+      globalThis.URL.createObjectURL = originalCreateObjectURL;
+      globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
+    });
+
+    test("downloads a project.json file and reports success", () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+
+      const clickSpy = jest.fn();
+      const anchor = { click: clickSpy, href: "", download: "" };
+      const createElementSpy = jest.spyOn(document, "createElement").mockReturnValue(anchor);
+
+      const msg = jest.fn();
+      engine.saveProjectState(msg);
+
+      expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
+      expect(anchor.download).toBe("project.json");
+      expect(clickSpy).toHaveBeenCalled();
+      expect(msg).toHaveBeenCalledWith("Project saved.", "success");
+
+      createElementSpy.mockRestore();
+    });
+  });
+
+  describe("loadProjectState", () => {
+    test("returns null and reports a message for an unparseable file", async () => {
+      const engine = new GISMapEngine();
+      const msg = jest.fn();
+
+      const result = await engine.loadProjectState(makeFile("not json"), msg);
+
+      expect(result).toBeNull();
+      expect(msg).toHaveBeenCalledWith(
+        "Load failed: the file could not be read as a valid project.",
+        "error"
+      );
+    });
+
+    test("returns null for a file that isn't a recognized project (no layerOrder)", async () => {
+      const engine = new GISMapEngine();
+      const result = await engine.loadProjectState(makeFile(JSON.stringify({ foo: "bar" })));
+      expect(result).toBeNull();
+    });
+
+    test("restores layer order, visibility, filters, annotations, and halo state", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      saver.toggleLayer("mrtStations");
+      saver.touristAttractionLayer.fields = [{ name: "NAME", type: "esriFieldTypeString" }];
+      await saver.setLayerFilter("touristAttractions", {
+        logic: "AND",
+        conditions: [{ field: "NAME", operator: "=", value: "Zoo" }]
+      });
+      await saver.setLayerAnnotation("touristAttractions", "NAME");
+      saver.setLayerStyle("touristAttractions", { color: "#00ff00", halo: true, haloColor: "#ffffff", haloSize: 15 });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      const msg = jest.fn();
+
+      const result = await loader.loadProjectState(makeFile(savedJson), msg);
+
+      expect(result.is3D).toBe(false);
+      expect(loader.mrtStationVisible).toBe(false);
+      expect(loader.mrtStationLayer.visible).toBe(false);
+      expect(loader.layerFilters.get("touristAttractions")).toBeDefined();
+      expect(loader.layerAnnotations.get("touristAttractions")).toBe("NAME");
+      expect(loader.haloState.get("touristAttractions")).toEqual({ color: "#ffffff", size: 15 });
+      expect(loader.touristAttractionLayer.renderer.symbol.type).toBe("CIMSymbolReference");
+      expect(msg).toHaveBeenCalledWith("Project loaded.", "success");
+    });
+
+    test("restores drawings with their attributes intact", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      saver.drawLayer.add(
+        new Graphic({
+          geometry: { type: "point", x: 10, y: 20 },
+          symbol: { type: "simple-marker", color: "blue", size: 9 },
+          attributes: { name: "Bench", count: 3 }
+        })
+      );
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      await loader.loadProjectState(makeFile(savedJson));
+
+      expect(loader.drawLayer.graphics).toHaveLength(1);
+      const restored = loader.drawLayer.graphics.toArray()[0];
+      expect(restored.geometry).toEqual({ type: "point", x: 10, y: 20, spatialReference: undefined });
+      expect(restored.attributes).toEqual({ name: "Bench", count: 3 });
+    });
+
+    test("restores route/stop graphics", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      saver.drawRoute({ type: "polyline", paths: [[[0, 0], [1, 1]]] });
+      saver.drawStops({ type: "point", x: 0, y: 0 }, { type: "point", x: 1, y: 1 });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      await loader.loadProjectState(makeFile(savedJson));
+
+      expect(loader.routeLayer.graphics).toHaveLength(1);
+      expect(loader.stopLayer.graphics).toHaveLength(2);
+    });
+
+    test("navigates to the saved extent when a view is attached", async () => {
+      const saver = new GISMapEngine();
+      const savedView = makeView();
+      savedView.extent = { type: "extent", xmin: 0, ymin: 0, xmax: 10, ymax: 10 };
+      saver.attachToView(savedView);
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      const view = makeView();
+      loader.attachToView(view);
+
+      await loader.loadProjectState(makeFile(savedJson));
+
+      expect(view.goTo).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "extent", xmin: 0, ymin: 0, xmax: 10, ymax: 10 })
+      );
+    });
+
+    test("round-trips a generated Unique Values renderer so it re-applies without requerying", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      saver.touristAttractionLayer.fields = [{ name: "CATEGORY", type: "esriFieldTypeString" }];
+      saver.touristAttractionLayer.queryFeatures.mockResolvedValue({
+        features: [{ attributes: { CATEGORY: "Museum" } }]
+      });
+      await saver.setLayerAdvancedRenderer("touristAttractions", { type: "unique-value", field: "CATEGORY" });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      await loader.loadProjectState(makeFile(savedJson));
+
+      expect(loader.touristAttractionLayer.renderer.type).toBe("unique-value");
+      expect(loader.touristAttractionLayer.renderer.field).toBe("CATEGORY");
+    });
+  });
+});

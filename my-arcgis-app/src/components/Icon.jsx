@@ -68,7 +68,8 @@ const PATHS = {
   arrowUp: <path d="M12 19V6m0 0-5 5m5-5 5 5" />,
   arrowDown: <path d="M12 5v13m0 0 5-5m-5 5-5-5" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
-  menu: <path d="M4 7h16M4 12h16M4 17h16" />
+  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  folder: <path d="M3 7a1 1 0 0 1 1-1h4.5l2 2H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z" />
 };
 
 export default function Icon({ name, size = 18, className }) {

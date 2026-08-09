@@ -128,7 +128,17 @@ function colorWithOpacity(hex, opacity) {
 export function applyExtendedSymbolStyle(symbol, changes = {}) {
   if (!symbol) return symbol;
   const { color, borderWidth, outlineColor, markerStyle, lineStyle, fillStyle, size, opacity } = changes;
-  const next = symbol.clone();
+  // A symbol reconstructed from a saved project (see GISMapEngine's Project
+  // Persistence section) is a plain JSON object until something ArcGIS
+  // autocasts it (a Graphic/FeatureLayer construction) - which hasn't
+  // necessarily happened yet for a symbol sitting inside a stored
+  // layerRenderers descriptor's uniqueValueInfos/classBreakInfos. Falling
+  // back to a shallow copy (deep enough to keep `outline` from being shared
+  // between the original and the "clone") keeps this function working the
+  // same either way instead of throwing "symbol.clone is not a function".
+  const next = typeof symbol.clone === "function"
+    ? symbol.clone()
+    : { ...symbol, outline: symbol.outline ? { ...symbol.outline } : undefined };
 
   if (color) {
     next.color = opacity != null ? colorWithOpacity(color, opacity) : color;
