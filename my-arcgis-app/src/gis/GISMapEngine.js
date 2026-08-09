@@ -78,6 +78,20 @@ export default class GISMapEngine {
     "searchResult"
   ];
 
+  // Same seven ids as the initial layerOrder above - used by
+  // loadProjectState to tell a built-in layer id apart from a dynamic
+  // (portal/heatmap/route-result/search-result) one when validating a
+  // restored layerOrder against what actually still exists.
+  static FIXED_LAYER_IDS = new Set([
+    "route",
+    "stops",
+    "touristAttractions",
+    "mrtStations",
+    "mrtLines",
+    "drawings",
+    "searchResult"
+  ]);
+
   touristAttractionLayer = null;
   mrtStationLayer = null;
   mrtLineLayer = null;
@@ -3074,12 +3088,6 @@ export default class GISMapEngine {
       return null;
     }
 
-    // Filters out a stale "heat" id from a project file saved before heatmap
-    // became a per-layer renderer mode (see the Heatmap System section) -
-    // that id no longer resolves to anything in getLayers()'s lookup, which
-    // would otherwise leave a hole in the restored layer list.
-    this.layerOrder = state.layerOrder.filter((id) => id !== "heat");
-
     const visibility = state.visibility || {};
     this.routeVisible = visibility.route ?? this.routeVisible;
     this.touristAttractionVisible = visibility.touristAttractions ?? this.touristAttractionVisible;
@@ -3102,6 +3110,28 @@ export default class GISMapEngine {
     this.heatmapLayerMeta = new Map(Object.entries(state.heatmapLayers || {}));
     this.namedRouteLayerMeta = new Map(Object.entries(state.namedRouteLayers || {}));
     this.namedSearchLayerMeta = new Map(Object.entries(state.namedSearchLayers || {}));
+
+    // Drop any layerOrder id that no longer resolves to a real layer -
+    // "heat" from a project saved before heatmap became a per-layer renderer
+    // mode (see the Heatmap System section), or a dynamic (portal/heatmap/
+    // route-result/search-result) id whose meta entry is missing, e.g. from
+    // a file saved by a build with the reorderLayers off-by-one bug (fixed
+    // 2026-08 - see that method's comment), which could shuffle the wrong
+    // id into/out of position. getLayers() maps every layerOrder id through
+    // a lookup without filtering unresolved ones out (so it can surface a
+    // `undefined` hole), and the panel's own `layers.filter(Boolean)` then
+    // silently drops that hole - permanently desyncing the card's displayed
+    // row count from what reorderLayers indexes into, so every drag/arrow
+    // reorder after that point lands on the wrong row. Validating here means
+    // a stale save self-heals on load instead of staying silently broken.
+    const knownDynamicId = (id) =>
+      this.portalLayerMeta.has(id) ||
+      this.heatmapLayerMeta.has(id) ||
+      this.namedRouteLayerMeta.has(id) ||
+      this.namedSearchLayerMeta.has(id);
+    this.layerOrder = state.layerOrder.filter(
+      (id) => GISMapEngine.FIXED_LAYER_IDS.has(id) || knownDynamicId(id)
+    );
 
     this.routeGraphic = this.graphicFromJSON(state.route);
     this.startGraphic = this.graphicFromJSON(state.stops?.start);

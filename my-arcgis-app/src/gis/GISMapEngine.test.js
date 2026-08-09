@@ -758,18 +758,19 @@ describe("GISMapEngine.setLayerStyle", () => {
 describe("GISMapEngine.reorderLayers", () => {
   // from/to are indices into the Layers card's own displayed order
   // (getLayers()'s output: touristAttractions, mrtStations, mrtLines,
-  // drawings, searchResult), not raw this.layerOrder positions - route/stops
+  // drawings), not raw this.layerOrder positions - route/stops/searchResult
   // are excluded from the card and are never touched by this method, but
-  // still occupy their original absolute layerOrder slots (0 and 1).
-  test("updates layerOrder and reorders the underlying map layers when attached, leaving route/stops pinned", () => {
+  // still occupy their original absolute layerOrder slots (0, 1, and 6).
+  test("updates layerOrder and reorders the underlying map layers when attached, leaving route/stops/searchResult pinned", () => {
     const engine = new GISMapEngine();
     const view = makeView();
     engine.attachToView(view);
 
-    engine.reorderLayers(0, 4);
+    engine.reorderLayers(0, 3);
     expect(engine.layerOrder[0]).toBe("route");
     expect(engine.layerOrder[1]).toBe("stops");
-    expect(engine.layerOrder[6]).toBe("touristAttractions");
+    expect(engine.layerOrder[5]).toBe("touristAttractions");
+    expect(engine.layerOrder[6]).toBe("searchResult");
     expect(view.map.reorder).toHaveBeenCalledTimes(7);
   });
 
@@ -2366,6 +2367,40 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
       expect(loader.haloState.get("touristAttractions")).toEqual({ color: "#ffffff", size: 15 });
       expect(loader.touristAttractionLayer.renderer.symbol.type).toBe("CIMSymbolReference");
       expect(msg).toHaveBeenCalledWith("Project loaded.", "success");
+    });
+
+    // A stale/orphaned dynamic-layer id in a saved layerOrder (e.g. a
+    // heatmap/route-result/search-result/portal layer whose meta entry is
+    // missing - the exact shape a file saved under the pre-fix
+    // reorderLayers off-by-one bug could produce) must not survive into the
+    // restored layerOrder: getLayers() would otherwise map it to `undefined`,
+    // which the panel's `layers.filter(Boolean)` silently drops, permanently
+    // desyncing the card's row count from what reorderLayers indexes into.
+    test("drops a layerOrder id with no matching restored layer, so a stale save can't desync the card from reorderLayers", async () => {
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+
+      const staleState = {
+        version: 1,
+        is3D: false,
+        layerOrder: [
+          "route",
+          "stops",
+          "touristAttractions",
+          "mrtStations",
+          "mrtLines",
+          "drawings",
+          "searchResult",
+          "heatmap_orphan"
+        ],
+        heatmapLayers: {}
+      };
+
+      const result = await loader.loadProjectState(makeFile(JSON.stringify(staleState)), jest.fn());
+
+      expect(result).not.toBeNull();
+      expect(loader.layerOrder).not.toContain("heatmap_orphan");
+      expect(loader.getLayers().every(Boolean)).toBe(true);
     });
 
     test("restores drawings with their attributes intact", async () => {
