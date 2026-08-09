@@ -96,4 +96,144 @@ describe("AnalysisPanel", () => {
     expect(screen.getByText("Switch to 3D view to use Slice.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start Slice" })).not.toBeInTheDocument();
   });
+
+  describe("Heatmap section", () => {
+    const eligibleLayers = [
+      {
+        id: "touristAttractions",
+        name: "Tourist Attractions",
+        styleGroups: [
+          { symbolType: "simple-marker", label: "Tourist Attractions", color: "#ff0000", borderWidth: 1, heatmapEligible: true }
+        ]
+      },
+      {
+        id: "mrtLines",
+        name: "MRT Lines",
+        styleGroups: [
+          { symbolType: "simple-line", label: "Lines", color: "#000000", borderWidth: 1, heatmapEligible: false }
+        ]
+      }
+    ];
+
+    test("is not rendered when onCreateHeatmapLayer is not provided", async () => {
+      const user = userEvent.setup();
+      render(<AnalysisPanel onBuffer={jest.fn()} onToggleSlice={jest.fn()} layers={eligibleLayers} />);
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      expect(screen.queryByRole("button", { name: "Heatmap" })).not.toBeInTheDocument();
+    });
+
+    test("shows a hint instead of the form when no layer has a heatmap-eligible style group", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          layers={[eligibleLayers[1]]}
+          onCreateHeatmapLayer={jest.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Heatmap" }));
+
+      expect(screen.getByText(/Add a point layer/)).toBeInTheDocument();
+      expect(screen.queryByLabelText("Heatmap source layer")).not.toBeInTheDocument();
+    });
+
+    test("only lists heatmap-eligible layers as source options", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          layers={eligibleLayers}
+          onCreateHeatmapLayer={jest.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Heatmap" }));
+
+      const select = screen.getByLabelText("Heatmap source layer");
+      const optionLabels = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+      expect(optionLabels).toEqual(["Choose a layer…", "Tourist Attractions"]);
+    });
+
+    test("excludes drawings even when it has a heatmap-eligible (point) style group, since it has no url to duplicate into a new layer", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          layers={[
+            eligibleLayers[0],
+            {
+              id: "drawings",
+              name: "Drawings",
+              styleGroups: [
+                { symbolType: "simple-marker", label: "Points", color: "#ff0000", borderWidth: 1, heatmapEligible: true }
+              ]
+            }
+          ]}
+          onCreateHeatmapLayer={jest.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Heatmap" }));
+
+      const select = screen.getByLabelText("Heatmap source layer");
+      const optionLabels = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+      expect(optionLabels).toEqual(["Choose a layer…", "Tourist Attractions"]);
+    });
+
+    test("Add Heatmap Layer button is disabled until a source and a name are given", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          layers={eligibleLayers}
+          onCreateHeatmapLayer={jest.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Heatmap" }));
+
+      const button = screen.getByRole("button", { name: "Add Heatmap Layer" });
+      expect(button).toBeDisabled();
+
+      await user.selectOptions(screen.getByLabelText("Heatmap source layer"), "touristAttractions");
+      expect(button).toBeDisabled();
+
+      await user.type(screen.getByLabelText("New heatmap layer name"), "Attraction Density");
+      expect(button).toBeEnabled();
+    });
+
+    test("submitting calls onCreateHeatmapLayer with the source id and trimmed name, with no intensity control on this form", async () => {
+      const user = userEvent.setup();
+      const onCreateHeatmapLayer = jest.fn().mockResolvedValue(undefined);
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          layers={eligibleLayers}
+          onCreateHeatmapLayer={onCreateHeatmapLayer}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Heatmap" }));
+
+      expect(screen.queryByLabelText(/intensity/i)).not.toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText("Heatmap source layer"), "touristAttractions");
+      await user.type(screen.getByLabelText("New heatmap layer name"), "  Attraction Density  ");
+      await user.click(screen.getByRole("button", { name: "Add Heatmap Layer" }));
+
+      expect(onCreateHeatmapLayer).toHaveBeenCalledWith("touristAttractions", { name: "Attraction Density" });
+    });
+  });
 });

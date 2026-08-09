@@ -39,8 +39,6 @@ function setup(overrides = {}) {
     onStyleChange: jest.fn(),
     onZoomToLayer: jest.fn(),
     onRemove: jest.fn(),
-    heatIntensity: 40,
-    updateIntensity: jest.fn(),
     onGetLayerFields: jest.fn((id) => Promise.resolve(FIELDS[id] || { fields: [] })),
     onApplyFilter: jest.fn().mockResolvedValue(undefined),
     onClearFilter: jest.fn(),
@@ -50,6 +48,7 @@ function setup(overrides = {}) {
     onSetRenderer: jest.fn().mockResolvedValue(undefined),
     onClearRenderer: jest.fn(),
     onUpdateRendererEntry: jest.fn(),
+    onUpdateHeatmapLayerIntensity: jest.fn(),
     ...overrides
   };
   const utils = render(<LayerControlPanel {...props} />);
@@ -239,23 +238,125 @@ describe("LayerControlPanel", () => {
     expect(screen.getByText("Lines")).toBeInTheDocument();
   });
 
-  test("shows the heat intensity slider only for the visible heat layer", () => {
-    setup();
-    expect(screen.getByText("Heat Intensity: 40")).toBeInTheDocument();
-  });
-
-  test("does not show the heat intensity slider when the heat layer is hidden", () => {
+  test("offers a Heatmap renderer mode for a heatmap-eligible style group", async () => {
+    const user = userEvent.setup();
     setup({
-      layers: [{ id: "heat", name: "Heatmap", visible: false, styleGroups: [] }]
+      layers: [
+        {
+          id: "touristAttractions",
+          name: "Tourist Attractions",
+          visible: true,
+          styleGroups: [
+            {
+              symbolType: "simple-marker",
+              label: "Tourist Attractions",
+              color: "#ff0000",
+              borderWidth: 1,
+              heatmapEligible: true
+            }
+          ]
+        }
+      ]
     });
-    expect(screen.queryByText(/Heat Intensity/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
+    expect(screen.getByRole("button", { name: "Heatmap" })).toBeInTheDocument();
   });
 
-  test("moving the heat intensity slider calls updateIntensity with a number", () => {
-    const { props } = setup();
-    const slider = document.querySelector(".heat-slider-container input[type='range']");
+  test("does not offer Heatmap for a non-eligible (line) style group", async () => {
+    const user = userEvent.setup();
+    setup({
+      layers: [
+        {
+          id: "mrtLines",
+          name: "MRT Lines",
+          visible: true,
+          styleGroups: [
+            { symbolType: "simple-line", label: "Lines", color: "#000000", borderWidth: 1, heatmapEligible: false }
+          ]
+        }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
+    expect(screen.queryByRole("button", { name: "Heatmap" })).not.toBeInTheDocument();
+  });
+
+  describe("named heatmap layer rows", () => {
+    test("shows an intensity slider only while the heatmap layer is visible", () => {
+      const { rerender, props } = setup({
+        layers: [{ id: "heatmap_abc", name: "Attraction Density", visible: true, styleGroups: [], heatmap: true, heatmapIntensity: 65 }]
+      });
+      expect(screen.getByText("Heat Intensity: 65")).toBeInTheDocument();
+
+      rerender(
+        <LayerControlPanel
+          {...props}
+          layers={[{ id: "heatmap_abc", name: "Attraction Density", visible: false, styleGroups: [], heatmap: true, heatmapIntensity: 65 }]}
+        />
+      );
+      expect(screen.queryByText(/Heat Intensity/)).not.toBeInTheDocument();
+    });
+
+    test("moving the slider calls onUpdateHeatmapLayerIntensity with that layer's id and a number", () => {
+      const { props } = setup({
+        layers: [{ id: "heatmap_abc", name: "Attraction Density", visible: true, styleGroups: [], heatmap: true, heatmapIntensity: 65 }]
+      });
+
+      const slider = screen.getByLabelText("Heatmap intensity for Attraction Density");
+      fireEvent.change(slider, { target: { value: "40" } });
+
+      expect(props.onUpdateHeatmapLayerIntensity).toHaveBeenCalledWith("heatmap_abc", 40);
+    });
+
+    test("shows a remove button, same as a portal layer", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({
+        layers: [{ id: "heatmap_abc", name: "Attraction Density", visible: true, removable: true, styleGroups: [], heatmap: true, heatmapIntensity: 65 }]
+      });
+
+      await user.click(screen.getByRole("button", { name: "Remove Attraction Density" }));
+      expect(props.onRemove).toHaveBeenCalledWith("heatmap_abc");
+    });
+  });
+
+  test("selecting Heatmap mode and applying calls onSetRenderer with the chosen intensity", async () => {
+    const user = userEvent.setup();
+    const { props } = setup({
+      layers: [
+        {
+          id: "touristAttractions",
+          name: "Tourist Attractions",
+          visible: true,
+          styleGroups: [
+            {
+              symbolType: "simple-marker",
+              label: "Tourist Attractions",
+              color: "#ff0000",
+              borderWidth: 1,
+              heatmapEligible: true
+            }
+          ]
+        }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
+    await user.click(screen.getByRole("button", { name: "Heatmap" }));
+
+    const slider = screen.getByLabelText("Heatmap intensity for Tourist Attractions");
     fireEvent.change(slider, { target: { value: "77" } });
-    expect(props.updateIntensity).toHaveBeenCalledWith(77);
+    expect(screen.getByText("Heat Intensity: 77")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Apply Heatmap" }));
+    expect(props.onSetRenderer).toHaveBeenCalledWith("touristAttractions", {
+      type: "heatmap",
+      symbolType: "simple-marker",
+      intensity: 77
+    });
   });
 
   test("clicking a layer's zoom button calls onZoomToLayer with that layer's id", async () => {

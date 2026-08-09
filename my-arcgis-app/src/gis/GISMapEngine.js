@@ -2,7 +2,7 @@ import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import {
-  HEATMAP_FEATURE_LAYER_URL,
+  TOURIST_ATTRACTIONS_FEATURE_LAYER_URL,
   MRT_STATION_FEATURE_LAYER_URL,
   MRT_LINE_FEATURE_LAYER_URL,
   PORTAL_URL
@@ -23,6 +23,7 @@ import {
   buildHaloSymbol,
   buildUniqueValueRenderer,
   buildClassBreaksRenderer,
+  buildHeatmapRenderer,
   toArcGISRenderer,
   DEFAULT_UNIQUE_VALUE_LIMIT
 } from "./SymbolRenderers";
@@ -57,7 +58,6 @@ export default class GISMapEngine {
 
   routeLayer = null;
   stopLayer = null;
-  heatLayer = null;
   searchLayer = null;
 
   routeGraphic = null;
@@ -66,15 +66,12 @@ export default class GISMapEngine {
   searchGraphic = null;
 
   routeVisible = true;
-  heatVisible = false;
-  heatIntensity = 50;
   searchVisible = true;
 
   layerOrder = [
     "route",
     "stops",
     "touristAttractions",
-    "heat",
     "mrtStations",
     "mrtLines",
     "drawings",
@@ -94,6 +91,21 @@ export default class GISMapEngine {
   // reattachment for the built-in FeatureLayers.
   portalLayers = new Map();
   portalLayerMeta = new Map();
+
+  // User-created named heatmap layers (see createHeatmapLayer/
+  // removeHeatmapLayer) - the discoverable, "add to the layers card" way to
+  // run heatmap analysis on a hosted/portal point layer, alongside the
+  // in-place Heatmap renderer mode any eligible layer's own Symbology
+  // section already offers (see knowledge/index.md's Heatmap System).
+  // Structurally identical to portalLayers/portalLayerMeta above (live
+  // FeatureLayer instances vs. the plain {title, url, sourceId, intensity,
+  // radius, visible} data needed to recreate them on every attachToView
+  // call) - kept as a separate pair of Maps, not merged into portalLayers,
+  // because these layers didn't come from a portal search and conflating
+  // the two would misdescribe where they came from. Keyed by a synthetic
+  // "heatmap_<id>" id, same id space as layerOrder/portalLayers.
+  heatmapLayers = new Map();
+  heatmapLayerMeta = new Map();
 
   touristAttractionVisible = true;
   mrtStationVisible = true;
@@ -167,12 +179,13 @@ export default class GISMapEngine {
   layerFilters = new Map();
 
   // Layers with a real attribute schema worth filtering/aggregating over.
-  // route/stops/heat/searchResult are excluded for the same reasons they're
+  // route/stops/searchResult are excluded for the same reasons they're
   // excluded from the Layer Styling System (knowledge/index.md): route is one
-  // unattributed line, stops are two fixed markers, heat has no queryable
-  // schema of its own (it renders touristAttractions' geometry), and
-  // searchResult is a transient single marker replaced on every search.
-  static ANALYSIS_EXCLUDED_LAYER_IDS = new Set(["route", "stops", "heat", "searchResult"]);
+  // unattributed line, stops are two fixed markers, and searchResult is a
+  // transient single marker replaced on every search. Heatmap is no longer a
+  // distinct layer id (see the Heatmap System section) - it's a renderer mode
+  // any of the remaining, still-filterable point layers can be switched into.
+  static ANALYSIS_EXCLUDED_LAYER_IDS = new Set(["route", "stops", "searchResult"]);
 
   // Single source of truth for "which engine field mirrors this layer's
   // visibility", shared by toggleLayer and zoomToLayer's reveal-if-hidden
@@ -184,7 +197,6 @@ export default class GISMapEngine {
   static VISIBILITY_FIELD_BY_LAYER_ID = {
     route: "routeVisible",
     touristAttractions: "touristAttractionVisible",
-    heat: "heatVisible",
     mrtStations: "mrtStationVisible",
     mrtLines: "mrtLineVisible",
     searchResult: "searchVisible"
@@ -286,12 +298,12 @@ export default class GISMapEngine {
       route: this.routeLayer,
       stops: this.stopLayer,
       touristAttractions: this.touristAttractionLayer,
-      heat: this.heatLayer,
       mrtStations: this.mrtStationLayer,
       mrtLines: this.mrtLineLayer,
       drawings: this.drawLayer,
       searchResult: this.searchLayer,
-      ...Object.fromEntries(this.portalLayers)
+      ...Object.fromEntries(this.portalLayers),
+      ...Object.fromEntries(this.heatmapLayers)
     };
   }
 
@@ -337,7 +349,7 @@ export default class GISMapEngine {
     this.searchLayer = new GraphicsLayer({ title: "Search Result", visible: this.searchVisible });
 
     this.touristAttractionLayer = new FeatureLayer({
-      url: HEATMAP_FEATURE_LAYER_URL,
+      url: TOURIST_ATTRACTIONS_FEATURE_LAYER_URL,
       title: "Tourist Attractions",
       visible: this.touristAttractionVisible,
       outFields: ["*"],
@@ -360,26 +372,19 @@ export default class GISMapEngine {
       renderer: this.resolveSeedRenderer("mrtLines", this.mrtLineRenderer)
     });
 
-    this.heatLayer = new FeatureLayer({
-      url: HEATMAP_FEATURE_LAYER_URL,
-      title: "Heat Layer",
-      visible: this.heatVisible,
-      opacity: 0.8,
-      renderer: {
-        type: "heatmap",
-        radius: 25,
-        colorStops: [
-          { ratio: 0, color: "rgba(0,0,255,0)" },
-          { ratio: 0.2, color: "blue" },
-          { ratio: 0.4, color: "cyan" },
-          { ratio: 0.6, color: "lime" },
-          { ratio: 0.8, color: "yellow" },
-          { ratio: 1, color: "red" }
-        ],
-        maxPixelIntensity: this.heatIntensity,
-        minPixelIntensity: 1
-      }
-    });
+    // `geometryType` (used by getLayers()'s heatmapEligible computation - see
+    // isPointGeometry's comment) is only populated once each service's own
+    // metadata has loaded, not synchronously off a freshly constructed
+    // FeatureLayer - same timing constraint documented for `.renderer`
+    // elsewhere in this file. Without this, the very first getLayers() call
+    // after a fresh attachToView (which ApplicationShell makes immediately,
+    // before either service could plausibly have finished loading) would
+    // always report both fixed layers as heatmap-ineligible, even when
+    // they're genuinely point data - onDrawingsChanged is reused here purely
+    // as the existing "please refresh the layer list" signal, not because
+    // this has anything to do with drawings.
+    this.touristAttractionLayer.load().then(() => this.onDrawingsChanged?.()).catch(() => {});
+    this.mrtStationLayer.load().then(() => this.onDrawingsChanged?.()).catch(() => {});
 
     // The previous SketchViewModel (if any) is still bound to the outgoing
     // view, which is about to be torn down by React unmounting the old
@@ -455,6 +460,24 @@ export default class GISMapEngine {
         }).catch(() => {});
       }
       this.portalLayers.set(id, rebuilt);
+    });
+
+    // Named heatmap layers (see createHeatmapLayer) are reconstructed the
+    // same way and for the same reason as portal layers above: a fresh
+    // FeatureLayer instance is cheap, and heatmapLayerMeta (not the live
+    // layer object) is the real source of truth for url/title/intensity/
+    // radius/visibility across a 2D/3D reattachment.
+    this.heatmapLayers = new Map();
+    this.heatmapLayerMeta.forEach((meta, id) => {
+      const rebuilt = new FeatureLayer({
+        url: meta.url,
+        title: meta.title,
+        visible: meta.visible,
+        outFields: ["*"],
+        opacity: 0.8,
+        renderer: buildHeatmapRenderer(meta.intensity, meta.radius).renderer
+      });
+      this.heatmapLayers.set(id, rebuilt);
     });
 
     const layerMap = this.buildLayerMap();
@@ -660,7 +683,7 @@ export default class GISMapEngine {
   // are only known at runtime, same pattern as getLayers()/searchFeatures()).
   filterableLayerIds() {
     const fixed = this.layerOrder.filter(
-      (id) => !GISMapEngine.ANALYSIS_EXCLUDED_LAYER_IDS.has(id)
+      (id) => !GISMapEngine.ANALYSIS_EXCLUDED_LAYER_IDS.has(id) && !id.startsWith("heatmap_")
     );
     return fixed;
   }
@@ -809,9 +832,7 @@ export default class GISMapEngine {
   // portal layers): a GraphicsLayer (`drawings`, `route`, `stops`, ...) has
   // no `labelingInfo`/`labelsVisible` support in the ArcGIS JS API, so
   // "drawings" is deliberately excluded even though it is otherwise
-  // filterable. `heat` has no queryable schema of its own (see
-  // ANALYSIS_EXCLUDED_LAYER_IDS), so it's already excluded via
-  // filterableLayerIds().
+  // filterable.
   // ---------------------------------------------------------------------
 
   annotatableLayerIds() {
@@ -1041,32 +1062,6 @@ export default class GISMapEngine {
     if (this.stopLayer) this.stopLayer.visible = v;
   }
 
-  enableHeatmap(_, intensity) {
-    this.heatVisible = true;
-    this.heatIntensity = intensity;
-
-    if (!this.heatLayer) return;
-    this.heatLayer.visible = true;
-
-    const r = this.heatLayer.renderer.clone();
-    r.maxPixelIntensity = intensity;
-    this.heatLayer.renderer = r;
-  }
-
-  disableHeatmap() {
-    this.heatVisible = false;
-    if (this.heatLayer) this.heatLayer.visible = false;
-  }
-
-  updateHeatmapIntensity(v) {
-    this.heatIntensity = v;
-    if (!this.heatLayer) return;
-
-    const r = this.heatLayer.renderer.clone();
-    r.maxPixelIntensity = v;
-    this.heatLayer.renderer = r;
-  }
-
   // ---------------------------------------------------------------------
   // Advanced Renderer System (Unique Values / Class Breaks)
   //
@@ -1106,12 +1101,24 @@ export default class GISMapEngine {
   // from portal". Keyed by the layer's own `geometryType` (populated after
   // `layer.load()`); an unrecognized/not-yet-loaded type returns null,
   // preserving the previous no-controls fallback for that edge case only.
+  //
+  // Keys are the ArcGIS JS API's own normalized geometryType values
+  // ("point"/"polygon"/"polyline"/"multipoint"/"multipatch"/"mesh" - see
+  // @arcgis/core/layers/mixins/FeatureLayerBase's `geometryType` property),
+  // NOT the REST API's "esriGeometryPoint"-style constants. A live,
+  // service-loaded FeatureLayer's `.geometryType` is already translated to
+  // this shorthand form by the SDK itself (via its own service-JSON reader),
+  // so keying this switch off the REST-style strings meant it silently
+  // never matched anything against a real layer - this method (and every
+  // geometryType comparison below that copied the same wrong format) always
+  // returned null/false against live data, even though it worked in tests
+  // whose mocks were set up with the (also wrong) REST-style strings.
   static defaultSimpleRenderer(geometryType) {
     const symbol = {
-      esriGeometryPoint: { type: "simple-marker", color: [255, 165, 0], size: 8, outline: { color: [255, 255, 255], width: 1 } },
-      esriGeometryMultipoint: { type: "simple-marker", color: [255, 165, 0], size: 8, outline: { color: [255, 255, 255], width: 1 } },
-      esriGeometryPolyline: { type: "simple-line", color: [0, 0, 0], width: 1.5 },
-      esriGeometryPolygon: { type: "simple-fill", color: [0, 120, 255, 0.5], outline: { color: [0, 0, 0], width: 1.5 } }
+      point: { type: "simple-marker", color: [255, 165, 0], size: 8, outline: { color: [255, 255, 255], width: 1 } },
+      multipoint: { type: "simple-marker", color: [255, 165, 0], size: 8, outline: { color: [255, 255, 255], width: 1 } },
+      polyline: { type: "simple-line", color: [0, 0, 0], width: 1.5 },
+      polygon: { type: "simple-fill", color: [0, 120, 255, 0.5], outline: { color: [0, 0, 0], width: 1.5 } }
     }[geometryType];
     return symbol ? { type: "simple", symbol } : null;
   }
@@ -1280,12 +1287,27 @@ export default class GISMapEngine {
       .filter((n) => Number.isFinite(n));
   }
 
-  // Generates and applies a Unique Values or Class Breaks renderer. Throws on
-  // an unknown field (same throw-and-let-the-shell-toast convention as
-  // setLayerFilter/setLayerAnnotation) or renderer type. Returns a summary
+  // Generates and applies a Unique Values, Class Breaks, or Heatmap renderer.
+  // Throws on an unknown field (same throw-and-let-the-shell-toast convention
+  // as setLayerFilter/setLayerAnnotation) or renderer type. Returns a summary
   // (rendererType/field/legend) so the panel can render the legend
   // immediately without a follow-up getLayers() round trip.
-  async setLayerAdvancedRenderer(id, { type, field, symbolType, ...options } = {}) {
+  //
+  // Heatmap is a density visualization, not a per-value symbol mapping, so it
+  // skips the field-schema/baseSymbol requirements the other two modes need -
+  // it works on whatever point geometry the layer already has. This is what
+  // lets heatmap analysis run against any point layer shown in the layers
+  // card (touristAttractions, mrtStations, a portal point layer, or a
+  // drawings point group) rather than being wired to one hardcoded layer/URL.
+  async setLayerAdvancedRenderer(id, { type, field, symbolType, intensity, radius, ...options } = {}) {
+    if (type === "heatmap") {
+      const built = buildHeatmapRenderer(intensity, radius);
+      const descriptor = { ...built.renderer, symbolType: id === "drawings" ? symbolType : undefined, legend: built.legend };
+      this.layerRenderers.set(id, descriptor);
+      this.applyRendererToLayer(id, descriptor);
+      return { rendererType: type, field: null, legend: built.legend };
+    }
+
     const { fields } = await this.getLayerFieldSchema(id);
     if (!fields.some((f) => f.name === field)) {
       throw new Error(`"${field}" is not a field on this layer.`);
@@ -1328,9 +1350,13 @@ export default class GISMapEngine {
   // Applies an already-computed renderer descriptor to the live layer:
   // reassigns `.renderer` for FeatureLayer/portal layers, or - since drawings
   // has no single renderer to assign - re-evaluates every graphic against the
-  // descriptor.
+  // descriptor. Heatmap is the one exception for drawings: it's a
+  // whole-layer density visualization (like FeatureLayer/portal heatmaps),
+  // not a per-value symbol lookup, so it's assigned straight to drawLayer's
+  // own `.renderer` (a GraphicsLayer supports a heatmap renderer the same way
+  // a FeatureLayer does) instead of being evaluated per graphic.
   applyRendererToLayer(id, descriptor) {
-    if (id === "drawings") {
+    if (id === "drawings" && descriptor?.type !== "heatmap") {
       this.drawLayer.graphics.forEach((g) => this.applyDrawingsRendererToGraphic(g));
       return;
     }
@@ -1376,8 +1402,16 @@ export default class GISMapEngine {
   // for that symbolType group. This asymmetry is deliberate (see
   // knowledge/index.md's Layer Styling System) rather than an oversight.
   clearLayerAdvancedRenderer(id) {
+    const wasHeatmap = this.layerRenderers.get(id)?.type === "heatmap";
     this.layerRenderers.delete(id);
-    if (id === "drawings") return;
+    if (id === "drawings") {
+      // A heatmap was assigned straight to drawLayer.renderer (see
+      // applyRendererToLayer) rather than evaluated per graphic, so clearing
+      // it must undo that directly - nulling it out lets each graphic's own
+      // `.symbol` show through again, same as before the heatmap was applied.
+      if (wasHeatmap) this.drawLayer.renderer = null;
+      return;
+    }
 
     const layer = this.buildLayerMap()[id];
     if (!layer) return;
@@ -1466,7 +1500,11 @@ export default class GISMapEngine {
   // style group is independently in Simple or Advanced mode; single-symbol
   // layers pass `undefined`, which matches how their layerRenderers/haloState
   // entries (if any) are always stored with no symbolType.
-  attachRendererInfo(group, id, symbolType) {
+  // `heatmapEligible` scopes the Heatmap renderer mode to point geometry -
+  // see getLayers()'s call sites for how each layer kind decides it (a fixed
+  // hosted layer's own known geometry, or a portal/drawings layer's runtime
+  // geometryType/symbolType). A line/polygon layer never gets the option.
+  attachRendererInfo(group, id, symbolType, heatmapEligible = false) {
     const descriptor = this.layerRenderers.get(id);
     const applies = Boolean(descriptor) && (descriptor.symbolType ?? null) === (symbolType ?? null);
     const halo = id === "drawings" ? null : this.haloState.get(id);
@@ -1476,14 +1514,36 @@ export default class GISMapEngine {
       rendererType: applies ? descriptor.type : "simple",
       rendererField: applies ? descriptor.field : null,
       rendererLegend: applies ? descriptor.legend : null,
+      rendererIntensity: applies && descriptor.type === "heatmap" ? descriptor.maxPixelIntensity : null,
+      heatmapEligible,
       haloEnabled: Boolean(halo),
       haloColor: halo?.color ?? null,
       haloSize: halo?.size ?? null
     };
   }
 
+  // Whether a layer's own (SDK-normalized, lowercase - see
+  // defaultSimpleRenderer's comment) geometryType is point-like, i.e. a
+  // real candidate for heatmap density analysis. Used uniformly for every
+  // FeatureLayer-backed layer's heatmapEligible computation - the fixed
+  // hosted layers (touristAttractions/mrtStations) included. These two used
+  // to be hardcoded `true` on the assumption that they're "known point
+  // layers" by construction/config; that assumption doesn't actually hold
+  // if the configured feature service's real data isn't point geometry
+  // (e.g. a station represented as a small polygon footprint rather than a
+  // single coordinate) - the layer's own rendering as a marker symbol says
+  // nothing about its underlying geometry type. Checking the live layer's
+  // geometryType instead means eligibility reflects what the service
+  // actually contains, the same way it already does for portal layers.
+  static isPointGeometry(geometryType) {
+    return geometryType === "point" || geometryType === "multipoint";
+  }
+
   getLayers() {
     const l = this.layerOrder;
+
+    const touristAttractionsIsPoint = GISMapEngine.isPointGeometry(this.touristAttractionLayer?.geometryType);
+    const mrtStationsIsPoint = GISMapEngine.isPointGeometry(this.mrtStationLayer?.geometryType);
 
     const routeSymbol = this.routeGraphic?.symbol;
     // Read from the persisted simple-mode base fields, not the live layer's
@@ -1510,7 +1570,9 @@ export default class GISMapEngine {
         if (type && !seenTypes.has(type)) seenTypes.set(type, g.symbol);
       });
       seenTypes.forEach((symbol, type) => {
-        drawingsGroups.push(this.attachRendererInfo(this.symbolToStyleGroup(symbol), "drawings", type));
+        drawingsGroups.push(
+          this.attachRendererInfo(this.symbolToStyleGroup(symbol), "drawings", type, type === "simple-marker")
+        );
       });
     }
 
@@ -1529,20 +1591,19 @@ export default class GISMapEngine {
         name: "Tourist Attractions",
         visible: this.touristAttractionLayer?.visible,
         styleGroups: touristAttractionSymbol
-          ? [this.attachRendererInfo(this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions"), "touristAttractions")]
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions"), "touristAttractions", undefined, touristAttractionsIsPoint)]
           : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription("touristAttractions"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("touristAttractions")
       },
-      heat: { id: "heat", name: "Heatmap", visible: this.heatLayer?.visible },
       mrtStations: {
         id: "mrtStations",
         name: "MRT Stations",
         visible: this.mrtStationLayer?.visible,
         styleGroups: mrtStationSymbol
-          ? [this.attachRendererInfo(this.symbolToStyleGroup(mrtStationSymbol, "Stations"), "mrtStations")]
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(mrtStationSymbol, "Stations"), "mrtStations", undefined, mrtStationsIsPoint)]
           : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription("mrtStations"),
@@ -1599,18 +1660,40 @@ export default class GISMapEngine {
         layer.geometryType
       );
       const portalSymbol = portalRenderer?.symbol || null;
+      // Heatmap is only offered for point/multipoint services - see
+      // isPointGeometry's comment.
+      const portalIsPoint = GISMapEngine.isPointGeometry(layer.geometryType);
       lookup[id] = {
         id,
         name: meta?.title || "Portal Layer",
         visible: layer.visible,
         removable: true,
         styleGroups: portalSymbol
-          ? [this.attachRendererInfo(this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer"), id)]
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer"), id, undefined, portalIsPoint)]
           : [],
         filterable: true,
         filterDescription: this.getLayerFilterDescription(id),
         annotatable: true,
         annotationField: this.getLayerAnnotationField(id)
+      };
+    });
+
+    // Named heatmap layers (see createHeatmapLayer) - removable like a
+    // portal layer, but with no Symbology/Filter/Annotate sections (there's
+    // nothing to edit beyond the intensity it was created with) and
+    // `heatmap: true` plus `heatmapIntensity` so LayerControlPanel can show
+    // the same intensity slider the old hardcoded heat layer used to have,
+    // scoped to just this one named layer.
+    this.heatmapLayers.forEach((layer, id) => {
+      const meta = this.heatmapLayerMeta.get(id);
+      lookup[id] = {
+        id,
+        name: meta?.title || "Heatmap",
+        visible: layer.visible,
+        removable: true,
+        heatmap: true,
+        heatmapIntensity: meta?.intensity ?? 50,
+        styleGroups: []
       };
     });
 
@@ -1623,7 +1706,7 @@ export default class GISMapEngine {
 
     layer.visible = !layer.visible;
 
-    // Fixed layers (route/touristAttractions/heat/mrtStations/mrtLines/
+    // Fixed layers (route/touristAttractions/mrtStations/mrtLines/
     // searchResult) have a dedicated engine visibility field that seeds
     // their reconstruction in attachToView (a 2D/3D switch rebuilds these
     // as fresh layer instances - see the field comments above `layerOrder`)
@@ -1632,12 +1715,17 @@ export default class GISMapEngine {
     const visibilityField = GISMapEngine.VISIBILITY_FIELD_BY_LAYER_ID[id];
     if (visibilityField) this[visibilityField] = layer.visible;
 
-    // Portal layers have no dedicated engine visibility field (route/heat/
-    // etc. do); portalLayerMeta.visible IS that field for them, and must be
+    // Portal layers have no dedicated engine visibility field (route/etc.
+    // do); portalLayerMeta.visible IS that field for them, and must be
     // kept in sync so the layer reattaches with the right visibility on the
     // next 2D/3D switch (see attachToView's portal-layer reconstruction).
     const meta = this.portalLayerMeta.get(id);
     if (meta) meta.visible = layer.visible;
+
+    // Named heatmap layers need the same visible-sync as portal layers, for
+    // the same reason - see attachToView's heatmap-layer reconstruction.
+    const heatmapMeta = this.heatmapLayerMeta.get(id);
+    if (heatmapMeta) heatmapMeta.visible = layer.visible;
   }
 
   // Adds a layer picked from PortalService.searchPortalLayers as a live
@@ -1732,6 +1820,108 @@ export default class GISMapEngine {
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
+  // ---------------------------------------------------------------------
+  // Named Heatmap Layers
+  //
+  // The discoverable way to run heatmap analysis: rather than requiring a
+  // user to find a source layer's own Symbology section and switch it into
+  // Heatmap mode in place (still available - see the Advanced Renderer
+  // System above), this creates a brand-new, separately named/toggleable/
+  // removable layer in the layers card, so the source layer's own styling
+  // is left untouched and the heatmap itself is as visible/manageable as
+  // any other layer. Only offered for layers with a real hosted URL and
+  // point geometry - a heatmap needs point features to compute density
+  // from, and only a FeatureLayer-backed source (hosted or portal) has a
+  // `url` cheap to duplicate into a second, independently-rendered layer.
+  // ---------------------------------------------------------------------
+
+  // Every layer id (fixed hosted + portal) eligible as a heatmap analysis
+  // source, for populating the "source layer" picker in the UI. Mirrors the
+  // heatmapEligible computation getLayers() does per style group, but as a
+  // flat, UI-ready list rather than embedded in each layer's styleGroups.
+  heatmapEligibleSourceLayers() {
+    const results = [];
+    if (GISMapEngine.isPointGeometry(this.touristAttractionLayer?.geometryType)) {
+      results.push({ id: "touristAttractions", name: "Tourist Attractions" });
+    }
+    if (GISMapEngine.isPointGeometry(this.mrtStationLayer?.geometryType)) {
+      results.push({ id: "mrtStations", name: "MRT Stations" });
+    }
+    this.portalLayers.forEach((layer, id) => {
+      if (GISMapEngine.isPointGeometry(layer.geometryType)) {
+        results.push({ id, name: this.portalLayerMeta.get(id)?.title || "Portal Layer" });
+      }
+    });
+    return results;
+  }
+
+  // Creates a new, independently named/toggleable/removable heatmap layer
+  // from a point source layer's own hosted URL. Throws (same throw-and-
+  // let-the-shell-toast convention as addPortalLayer/setLayerFilter/etc.)
+  // on a missing name or an ineligible source, rather than silently no-
+  // opping or falling back to a generated name - a heatmap layer with no
+  // name of its own would be indistinguishable from its source in the
+  // layers card.
+  createHeatmapLayer(sourceId, { name, intensity = 50, radius = 25 } = {}) {
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) throw new Error("Please give the heatmap layer a name.");
+
+    const eligible = this.heatmapEligibleSourceLayers();
+    if (!eligible.some((l) => l.id === sourceId)) {
+      throw new Error("Choose a point layer (Tourist Attractions, MRT Stations, or an eligible portal layer) to analyze.");
+    }
+
+    const sourceLayer = this.buildLayerMap()[sourceId];
+    const id = `heatmap_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const meta = { title: trimmedName, url: sourceLayer.url, sourceId, intensity, radius, visible: true };
+    this.heatmapLayerMeta.set(id, meta);
+    this.layerOrder = [...this.layerOrder, id];
+
+    const layer = new FeatureLayer({
+      url: meta.url,
+      title: meta.title,
+      visible: meta.visible,
+      outFields: ["*"],
+      opacity: 0.8,
+      renderer: buildHeatmapRenderer(intensity, radius).renderer
+    });
+    this.heatmapLayers.set(id, layer);
+
+    if (this.currentMap) this.currentMap.add(layer);
+
+    return { id, name: trimmedName };
+  }
+
+  // Adjusts an existing named heatmap layer's intensity (same clone-then-
+  // reassign pattern setLayerStyle/resolveSeedRenderer use elsewhere), and
+  // persists it to heatmapLayerMeta so the value survives a 2D/3D
+  // reattachment instead of resetting to whatever it was created with.
+  updateHeatmapLayerIntensity(id, intensity) {
+    const meta = this.heatmapLayerMeta.get(id);
+    if (!meta) return;
+    meta.intensity = intensity;
+
+    const layer = this.heatmapLayers.get(id);
+    if (!layer) return;
+    const r = layer.renderer.clone();
+    r.maxPixelIntensity = intensity;
+    layer.renderer = r;
+  }
+
+  // Removes a named heatmap layer entirely, the same remove-not-hide
+  // behavior removePortalLayer gives user-added portal layers, since this
+  // layer only exists because a user explicitly created it.
+  removeHeatmapLayer(id) {
+    if (!this.heatmapLayerMeta.has(id)) return;
+
+    const layer = this.heatmapLayers.get(id);
+    if (layer && this.currentMap) this.currentMap.remove(layer);
+
+    this.heatmapLayers.delete(id);
+    this.heatmapLayerMeta.delete(id);
+    this.layerOrder = this.layerOrder.filter((x) => x !== id);
+  }
+
   // Zooms/pans the current view to the extent of one layer's content, so a
   // user can jump to e.g. just their drawings or just the MRT lines instead
   // of hunting for them at the current zoom level.
@@ -1760,7 +1950,7 @@ export default class GISMapEngine {
     // like it did nothing regardless of visibility. GraphicsLayers
     // (route/stops/drawings) have no SDK-computed extent, so goTo targets
     // their graphics array directly (Graphic[] is a valid target);
-    // FeatureLayers (touristAttractions/heat/mrt*) use their
+    // FeatureLayers (touristAttractions/mrt*) use their
     // service-provided fullExtent, available once loaded.
     if (layer.graphics) {
       const graphics = layer.graphics.toArray();
@@ -2533,8 +2723,6 @@ export default class GISMapEngine {
       layerOrder: [...this.layerOrder],
       visibility: {
         route: this.routeVisible,
-        heat: this.heatVisible,
-        heatIntensity: this.heatIntensity,
         touristAttractions: this.touristAttractionVisible,
         mrtStations: this.mrtStationVisible,
         mrtLines: this.mrtLineVisible,
@@ -2557,6 +2745,7 @@ export default class GISMapEngine {
           { title: meta.title, url: meta.url, visible: meta.visible, renderer: this.rendererToPlainJSON(meta.renderer) }
         ])
       ),
+      heatmapLayers: Object.fromEntries(this.heatmapLayerMeta),
       drawingFields: [...this.drawingFields],
       drawings: this.drawLayer.graphics.toArray().map((g) => this.graphicToJSON(g)),
       route: this.graphicToJSON(this.routeGraphic),
@@ -2612,12 +2801,14 @@ export default class GISMapEngine {
       return null;
     }
 
-    this.layerOrder = [...state.layerOrder];
+    // Filters out a stale "heat" id from a project file saved before heatmap
+    // became a per-layer renderer mode (see the Heatmap System section) -
+    // that id no longer resolves to anything in getLayers()'s lookup, which
+    // would otherwise leave a hole in the restored layer list.
+    this.layerOrder = state.layerOrder.filter((id) => id !== "heat");
 
     const visibility = state.visibility || {};
     this.routeVisible = visibility.route ?? this.routeVisible;
-    this.heatVisible = visibility.heat ?? this.heatVisible;
-    this.heatIntensity = visibility.heatIntensity ?? this.heatIntensity;
     this.touristAttractionVisible = visibility.touristAttractions ?? this.touristAttractionVisible;
     this.mrtStationVisible = visibility.mrtStations ?? this.mrtStationVisible;
     this.mrtLineVisible = visibility.mrtLines ?? this.mrtLineVisible;
@@ -2635,6 +2826,7 @@ export default class GISMapEngine {
     this.drawingFields = Array.isArray(state.drawingFields) ? [...state.drawingFields] : [];
 
     this.portalLayerMeta = new Map(Object.entries(state.portalLayers || {}));
+    this.heatmapLayerMeta = new Map(Object.entries(state.heatmapLayers || {}));
 
     this.routeGraphic = this.graphicFromJSON(state.route);
     this.startGraphic = this.graphicFromJSON(state.stops?.start);
@@ -2660,9 +2852,7 @@ export default class GISMapEngine {
 
     return {
       is3D: Boolean(state.is3D),
-      routeVisible: this.routeVisible,
-      heatVisible: this.heatVisible,
-      heatIntensity: this.heatIntensity
+      routeVisible: this.routeVisible
     };
   }
 }

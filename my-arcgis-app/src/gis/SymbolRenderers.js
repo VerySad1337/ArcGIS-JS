@@ -340,5 +340,39 @@ export function toArcGISRenderer(descriptor) {
     const { type, field, classBreakInfos } = descriptor;
     return { type, field, classBreakInfos };
   }
+  if (descriptor.type === "heatmap") {
+    const { type, radius, colorStops, maxPixelIntensity, minPixelIntensity } = descriptor;
+    return { type, radius, colorStops, maxPixelIntensity, minPixelIntensity };
+  }
   return descriptor;
+}
+
+// Builds an ArcGIS "heatmap" renderer (JSON) plus an empty `legend` (a
+// heatmap has no discrete entries to list, unlike unique-value/class-breaks -
+// the UI reads `legend.length > 0` to decide whether to render a legend
+// block, so an empty array is deliberate, not an oversight). `intensity`
+// (1-100) maps straight onto `maxPixelIntensity`: the point-density value
+// that saturates to the hottest color stop, the same knob the previous
+// hardcoded "Heat Layer" exposed as its one slider. Applicable to any point
+// layer - hosted, portal, or the local drawings GraphicsLayer - which is what
+// lets heatmap analysis run on whichever layer the user picks from the
+// layers card instead of being wired to one fixed feature service.
+export function buildHeatmapRenderer(intensity = 50, radius = 25) {
+  return {
+    renderer: {
+      type: "heatmap",
+      radius,
+      colorStops: [
+        { ratio: 0, color: "rgba(0,0,255,0)" },
+        { ratio: 0.2, color: "blue" },
+        { ratio: 0.4, color: "cyan" },
+        { ratio: 0.6, color: "lime" },
+        { ratio: 0.8, color: "yellow" },
+        { ratio: 1, color: "red" }
+      ],
+      maxPixelIntensity: intensity,
+      minPixelIntensity: 1
+    },
+    legend: []
+  };
 }

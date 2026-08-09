@@ -6,6 +6,7 @@ import {
   classifyQuantile,
   buildUniqueValueRenderer,
   buildClassBreaksRenderer,
+  buildHeatmapRenderer,
   toArcGISRenderer,
   paletteColor,
   QUALITATIVE_PALETTE
@@ -249,5 +250,37 @@ describe("toArcGISRenderer", () => {
 
   test("passes through a falsy descriptor unchanged", () => {
     expect(toArcGISRenderer(null)).toBeNull();
+  });
+
+  test("strips bookkeeping keys from a heatmap descriptor", () => {
+    const descriptor = {
+      ...buildHeatmapRenderer(80).renderer,
+      symbolType: "simple-marker",
+      legend: []
+    };
+    expect(toArcGISRenderer(descriptor)).toEqual({
+      type: "heatmap",
+      radius: 25,
+      colorStops: descriptor.colorStops,
+      maxPixelIntensity: 80,
+      minPixelIntensity: 1
+    });
+  });
+});
+
+describe("buildHeatmapRenderer", () => {
+  test("maps intensity onto maxPixelIntensity and returns an empty legend", () => {
+    const { renderer, legend } = buildHeatmapRenderer(80, 40);
+    expect(renderer.type).toBe("heatmap");
+    expect(renderer.radius).toBe(40);
+    expect(renderer.maxPixelIntensity).toBe(80);
+    expect(renderer.minPixelIntensity).toBe(1);
+    expect(legend).toEqual([]);
+  });
+
+  test("defaults intensity to 50 and radius to 25 when omitted", () => {
+    const { renderer } = buildHeatmapRenderer();
+    expect(renderer.maxPixelIntensity).toBe(50);
+    expect(renderer.radius).toBe(25);
   });
 });

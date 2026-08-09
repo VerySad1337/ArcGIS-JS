@@ -30,12 +30,17 @@ export default function AnalysisPanel({
   routeOn,
   toggleRoute,
   onRoute,
-  isRouting
+  isRouting,
+  layers,
+  onCreateHeatmapLayer
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [openSections, setOpenSections] = useState({});
   const [distance, setDistance] = useState("100");
   const [unit, setUnit] = useState("meters");
+  const [heatmapSourceId, setHeatmapSourceId] = useState("");
+  const [heatmapName, setHeatmapName] = useState("");
+  const [creatingHeatmap, setCreatingHeatmap] = useState(false);
 
   const isSectionOpen = (section) => Boolean(openSections[section]);
   const toggleSection = (section) => {
@@ -47,6 +52,39 @@ export default function AnalysisPanel({
 
   const handleBuffer = () => {
     onBuffer(distanceValue, unit);
+  };
+
+  // A layer qualifies as a heatmap analysis source when it has at least one
+  // heatmap-eligible style group (point geometry - see GISMapEngine.getLayers's
+  // heatmapEligible computation) AND is URL-backed (a hosted or portal
+  // FeatureLayer) - GISMapEngine.createHeatmapLayer works by duplicating the
+  // source layer's own `url` into a new FeatureLayer, so a source with no
+  // `url` can never actually be used. `drawings` is the one layer this
+  // excludes despite sometimes having a heatmapEligible (simple-marker)
+  // style group of its own: that flag is shared with the in-place Heatmap
+  // renderer mode in the layer's own Symbology section (which *is* valid for
+  // drawings, since it assigns the renderer straight to the live
+  // GraphicsLayer instead of duplicating a service) - without this extra
+  // check, a drawings layer with any point graphic on it would appear
+  // selectable here and then fail once submitted.
+  const heatmapSourceOptions = (layers ?? []).filter(
+    (l) => l && l.id !== "drawings" && (l.styleGroups ?? []).some((g) => g.heatmapEligible)
+  );
+
+  // Intensity starts at a fixed default (matching GISMapEngine.createHeatmapLayer's
+  // own default) rather than being a control on this creation form - the
+  // per-layer intensity slider already lives on the created layer's own row
+  // in the Layers card (see LayerControlPanel), so there is no need for a
+  // second intensity control here before the layer even exists.
+  const handleCreateHeatmapLayer = async () => {
+    if (!heatmapSourceId || !heatmapName.trim() || !onCreateHeatmapLayer) return;
+    setCreatingHeatmap(true);
+    try {
+      await onCreateHeatmapLayer(heatmapSourceId, { name: heatmapName.trim() });
+      setHeatmapName("");
+    } finally {
+      setCreatingHeatmap(false);
+    }
   };
 
   return (
@@ -163,6 +201,66 @@ export default function AnalysisPanel({
               </div>
             )}
           </div>
+
+          {onCreateHeatmapLayer && (
+            <div className="layer-section">
+              <button
+                type="button"
+                className="layer-section-toggle"
+                aria-expanded={isSectionOpen("heatmap")}
+                onClick={() => toggleSection("heatmap")}
+              >
+                <Icon name={isSectionOpen("heatmap") ? "chevronUp" : "chevronDown"} size={14} />
+                <span>Heatmap</span>
+              </button>
+
+              {isSectionOpen("heatmap") && (
+                <div className="analysis-tool-section">
+                  {heatmapSourceOptions.length === 0 ? (
+                    <p className="analysis-tool-hint">
+                      Add a point layer (Tourist Attractions, MRT Stations, or an eligible portal layer) first.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="analysis-aggregate-field">
+                        <span>Analyze</span>
+                        <select
+                          value={heatmapSourceId}
+                          onChange={(e) => setHeatmapSourceId(e.target.value)}
+                          aria-label="Heatmap source layer"
+                        >
+                          <option value="">Choose a layer…</option>
+                          {heatmapSourceOptions.map((l) => (
+                            <option key={l.id} value={l.id}>{l.name}</option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="analysis-aggregate-field">
+                        <span>Name</span>
+                        <input
+                          type="text"
+                          value={heatmapName}
+                          onChange={(e) => setHeatmapName(e.target.value)}
+                          placeholder="e.g. Attraction Density"
+                          aria-label="New heatmap layer name"
+                        />
+                      </label>
+
+                      <button
+                        type="button"
+                        className="gis-button"
+                        disabled={!heatmapSourceId || !heatmapName.trim() || creatingHeatmap}
+                        onClick={handleCreateHeatmapLayer}
+                      >
+                        {creatingHeatmap ? "Adding…" : "Add Heatmap Layer"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -178,5 +276,7 @@ AnalysisPanel.propTypes = {
   routeOn: PropTypes.bool,
   toggleRoute: PropTypes.func,
   onRoute: PropTypes.func,
-  isRouting: PropTypes.bool
+  isRouting: PropTypes.bool,
+  layers: PropTypes.array,
+  onCreateHeatmapLayer: PropTypes.func
 };

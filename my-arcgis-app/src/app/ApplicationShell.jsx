@@ -19,10 +19,7 @@ import Icon from "../components/Icon";
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
   const [routeOn, setRouteOn] = useState(true);
-  const [heatOn, setHeatOn] = useState(false);
-  const [heatIntensity, setHeatIntensity] = useState(50);
   const [layers, setLayers] = useState([]);
-  const viewRef = useRef(null);
   const engineRef = useRef(new GISMapEngine());
   const [toast, setToast] = useState(null);
   const toastTimeoutRef = useRef(null);
@@ -103,7 +100,6 @@ export default function ApplicationShell() {
   };
 
   const handleViewReady = (view) => {
-    viewRef.current = view;
     engineRef.current.setOnFeatureSelect(setSelectedFeature);
     engineRef.current.setOnDrawingsChanged(refreshLayers);
     engineRef.current.setOnDrawStateChange(setActiveDrawType);
@@ -141,30 +137,7 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
-  const toggleHeatmap = () => {
-    const next = !heatOn;
-    if (next) {
-      engineRef.current.enableHeatmap(viewRef.current, heatIntensity);
-    } else {
-      engineRef.current.disableHeatmap();
-    }
-    setHeatOn(next);
-    refreshLayers();
-  };
-
-  const updateIntensity = (value) => {
-    setHeatIntensity(value);
-    engineRef.current.updateHeatmapIntensity(value);
-  };
-
   const toggleLayer = (id) => {
-    // Heatmap visibility goes through enableHeatmap/disableHeatmap (not the
-    // generic per-layer toggle) so its intensity renderer and heatVisible
-    // field stay correct across a 2D/3D reattachment.
-    if (id === "heat") {
-      toggleHeatmap();
-      return;
-    }
     engineRef.current.toggleLayer(id);
     refreshLayers();
   };
@@ -245,7 +218,12 @@ export default function ApplicationShell() {
       await engineRef.current.setLayerAdvancedRenderer(id, options);
       refreshLayers();
       const layerName = engineRef.current.getLayers().find((l) => l?.id === id)?.name || id;
-      showToast(`"${layerName}" is now styled by "${options.field}".`, "success");
+      showToast(
+        options.type === "heatmap"
+          ? `Heatmap applied to "${layerName}".`
+          : `"${layerName}" is now styled by "${options.field}".`,
+        "success"
+      );
     } catch (err) {
       showToast(err.message || "Could not generate renderer.", "error");
     }
@@ -317,8 +295,42 @@ export default function ApplicationShell() {
     }
   };
 
-  const removePortalLayer = (id) => {
-    engineRef.current.removePortalLayer(id);
+  // Named Heatmap Layers: the discoverable, "add to the layers card" way to
+  // run heatmap analysis (see GISMapEngine's "Named Heatmap Layers"
+  // section) - a user picks a source point layer and a name, and gets a
+  // brand-new, independently toggleable/removable layer, instead of having
+  // to find that layer's own Symbology section and switch it into Heatmap
+  // mode in place. createHeatmapLayer throws on a missing name/ineligible
+  // source, same throw-and-toast convention as addPortalLayer/setLayerFilter.
+  // (The "which layers are eligible sources" list is derived by
+  // LayerControlPanel straight from the `layers` prop's own heatmapEligible
+  // style-group flags, so no separate engine round trip is needed for it.)
+  const createHeatmapLayer = (sourceId, options) => {
+    try {
+      const { name } = engineRef.current.createHeatmapLayer(sourceId, options);
+      refreshLayers();
+      showToast(`Added heatmap layer "${name}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to add heatmap layer.", "error");
+    }
+  };
+
+  const updateHeatmapLayerIntensity = (id, intensity) => {
+    engineRef.current.updateHeatmapLayerIntensity(id, intensity);
+    refreshLayers();
+  };
+
+  // A single remove handler for every removable dynamic layer
+  // (LayerControlPanel's remove button doesn't distinguish where a layer
+  // came from) - dispatches on the synthetic id's prefix, the same
+  // "heatmap_<id>"/"portal_<itemId>" id-space convention both engine
+  // methods already use.
+  const removeLayer = (id) => {
+    if (id.startsWith("heatmap_")) {
+      engineRef.current.removeHeatmapLayer(id);
+    } else {
+      engineRef.current.removePortalLayer(id);
+    }
     refreshLayers();
   };
 
@@ -406,10 +418,9 @@ export default function ApplicationShell() {
   // Project Persistence (Save/Load Project) - the ArcGIS Pro ".aprx" analog.
   // saveProjectState/loadProjectState do the actual serialization (see
   // GISMapEngine's "Project Persistence" section); this wrapper's job is
-  // syncing the shell's own useState mirrors (is3D/routeOn/heatOn/
-  // heatIntensity) to whatever the loaded project restored, the same way
-  // toggleHeatmap/toggleRoute/toggleViewMode keep those mirrors in sync with
-  // engine state elsewhere in this file.
+  // syncing the shell's own useState mirrors (is3D/routeOn) to whatever the
+  // loaded project restored, the same way toggleRoute/toggleViewMode keep
+  // those mirrors in sync with engine state elsewhere in this file.
   const saveProject = () => {
     engineRef.current.saveProjectState(showToast);
   };
@@ -421,8 +432,6 @@ export default function ApplicationShell() {
     if (!result) return;
 
     setRouteOn(result.routeVisible);
-    setHeatOn(result.heatVisible);
-    setHeatIntensity(result.heatIntensity);
     if (result.is3D !== is3D) {
       toggleViewMode(result.is3D);
     }
@@ -523,9 +532,7 @@ export default function ApplicationShell() {
           onReorder={reorderLayer}
           onStyleChange={updateLayerStyle}
           onZoomToLayer={zoomToLayer}
-          onRemove={removePortalLayer}
-          heatIntensity={heatIntensity}
-          updateIntensity={updateIntensity}
+          onRemove={removeLayer}
           onGetLayerFields={getLayerFields}
           onApplyFilter={applyLayerFilter}
           onClearFilter={clearLayerFilter}
@@ -535,6 +542,7 @@ export default function ApplicationShell() {
           onSetRenderer={setLayerRenderer}
           onClearRenderer={clearLayerRenderer}
           onUpdateRendererEntry={updateRendererEntry}
+          onUpdateHeatmapLayerIntensity={updateHeatmapLayerIntensity}
         />
 
         <AnalysisPanel
@@ -547,6 +555,8 @@ export default function ApplicationShell() {
           toggleRoute={toggleRoute}
           onRoute={handleRoute}
           isRouting={isRouting}
+          layers={layers}
+          onCreateHeatmapLayer={createHeatmapLayer}
         />
 
         <PortalLayerPanel

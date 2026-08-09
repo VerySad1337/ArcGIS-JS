@@ -24,6 +24,11 @@ jest.mock("../components/AnalysisPanel", () => (props) => (
   <div data-testid="routing-panel">
     <button onClick={props.toggleRoute}>toggle-route</button>
     <button onClick={() => props.onRoute("Start", "End")}>submit-route</button>
+    <button
+      onClick={() => props.onCreateHeatmapLayer("touristAttractions", { name: "Density", intensity: 70 })}
+    >
+      create-heatmap-layer
+    </button>
   </div>
 ));
 
@@ -33,12 +38,14 @@ jest.mock("../components/LayerControlPanel", () => (props) => (
       <span key={l.id}>{l.name}</span>
     ))}
     <button onClick={() => props.onToggle("route")}>toggle-layer</button>
-    <button onClick={() => props.onToggle("heat")}>toggle-heat-layer</button>
-    <button onClick={() => props.updateIntensity(88)}>set-intensity</button>
     <button onClick={() => props.onReorder(0, 1)}>reorder-layer</button>
     <button onClick={() => props.onStyleChange("route", { color: "#fff" })}>style-layer</button>
     <button onClick={() => props.onZoomToLayer("route")}>zoom-layer</button>
     <button onClick={() => props.onRemove("portal_abc")}>remove-layer</button>
+    <button onClick={() => props.onRemove("heatmap_xyz")}>remove-heatmap-layer</button>
+    <button onClick={() => props.onUpdateHeatmapLayerIntensity("heatmap_xyz", 42)}>
+      update-heatmap-intensity
+    </button>
   </div>
 ));
 
@@ -192,35 +199,13 @@ describe("ApplicationShell", () => {
     expect(engine.toggleRoute).toHaveBeenCalledWith(false);
   });
 
-  test("toggling the heat layer in the layer panel calls enableHeatmap, then disableHeatmap", async () => {
-    const user = userEvent.setup();
-    render(<ApplicationShell />);
-    const engine = getEngineInstance();
-
-    await user.click(screen.getByText("toggle-heat-layer"));
-    expect(engine.enableHeatmap).toHaveBeenCalledWith(null, 50);
-
-    await user.click(screen.getByText("toggle-heat-layer"));
-    expect(engine.disableHeatmap).toHaveBeenCalled();
-  });
-
-  test("toggling a non-heat layer forwards to engine.toggleLayer instead", async () => {
+  test("toggling a layer forwards to engine.toggleLayer", async () => {
     const user = userEvent.setup();
     render(<ApplicationShell />);
     const engine = getEngineInstance();
 
     await user.click(screen.getByText("toggle-layer"));
     expect(engine.toggleLayer).toHaveBeenCalledWith("route");
-    expect(engine.enableHeatmap).not.toHaveBeenCalled();
-  });
-
-  test("updating intensity calls engine.updateHeatmapIntensity", async () => {
-    const user = userEvent.setup();
-    render(<ApplicationShell />);
-    const engine = getEngineInstance();
-
-    await user.click(screen.getByText("set-intensity"));
-    expect(engine.updateHeatmapIntensity).toHaveBeenCalledWith(88);
   });
 
   test("toggling/reordering/styling a layer forwards to the engine and refreshes layers", async () => {
@@ -428,6 +413,49 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("remove-layer"));
     expect(engine.removePortalLayer).toHaveBeenCalledWith("portal_abc");
+  });
+
+  test("removing a heatmap_-prefixed layer calls engine.removeHeatmapLayer instead of removePortalLayer", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("remove-heatmap-layer"));
+    expect(engine.removeHeatmapLayer).toHaveBeenCalledWith("heatmap_xyz");
+    expect(engine.removePortalLayer).not.toHaveBeenCalled();
+  });
+
+  test("creating a heatmap layer calls engine.createHeatmapLayer, refreshes layers, and toasts success", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.createHeatmapLayer.mockReturnValue({ id: "heatmap_new", name: "Density" });
+
+    await user.click(screen.getByText("create-heatmap-layer"));
+
+    expect(engine.createHeatmapLayer).toHaveBeenCalledWith("touristAttractions", { name: "Density", intensity: 70 });
+    expect(await screen.findByText('Added heatmap layer "Density".')).toBeInTheDocument();
+  });
+
+  test("a failed heatmap layer creation toasts the engine's error instead of throwing", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.createHeatmapLayer.mockImplementation(() => {
+      throw new Error("Please give the heatmap layer a name.");
+    });
+
+    await user.click(screen.getByText("create-heatmap-layer"));
+    expect(await screen.findByText("Please give the heatmap layer a name.")).toBeInTheDocument();
+  });
+
+  test("updating a heatmap layer's intensity calls engine.updateHeatmapLayerIntensity", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("update-heatmap-intensity"));
+    expect(engine.updateHeatmapLayerIntensity).toHaveBeenCalledWith("heatmap_xyz", 42);
   });
 
   test("without OAuth configured, sign-in is never attempted and existing behavior is unaffected", () => {

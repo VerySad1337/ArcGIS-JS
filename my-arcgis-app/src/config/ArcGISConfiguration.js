@@ -28,8 +28,11 @@ export const WEBSCENE_ID = "54e3ba44a26243f0867d52bb1cc454fc";
 // Routing Service
 export const ROUTE_SERVICE_URL ="https://route.arcgis.com/arcgis/rest/services/World/Route/NAServer/Route_World";
 
-// Heatmap Feature Layer
-export const HEATMAP_FEATURE_LAYER_URL ="https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer";
+// Tourist Attractions Feature Layer. Heatmap analysis is no longer a
+// separate, dedicated layer/service (see knowledge/index.md's Heatmap
+// System) - it's a renderer mode any point layer in the layers card can be
+// switched into, so there is no HEATMAP_FEATURE_LAYER_URL of its own anymore.
+export const TOURIST_ATTRACTIONS_FEATURE_LAYER_URL ="https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Tourist_Attractions/FeatureServer";
 
 //MRT Station Feature Layer
 export const MRT_STATION_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Rail_Stations/FeatureServer";

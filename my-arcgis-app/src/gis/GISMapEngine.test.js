@@ -61,7 +61,7 @@ describe("GISMapEngine.attachToView", () => {
     expect(engine.currentMap).toBe(view.map);
     expect(engine.currentView).toBe(view);
     expect(view.map.removeAll).toHaveBeenCalled();
-    expect(view.map.add).toHaveBeenCalledTimes(8);
+    expect(view.map.add).toHaveBeenCalledTimes(7);
     expect(view.on).toHaveBeenCalledWith("click", expect.any(Function));
     expect(engine.touristAttractionLayer.url).toBeDefined();
     expect(engine.sketchVM.layer).toBe(engine.drawLayer);
@@ -325,38 +325,42 @@ describe("GISMapEngine.toggleRoute", () => {
   });
 });
 
-describe("GISMapEngine heatmap controls", () => {
-  test("enableHeatmap sets visibility/intensity and clones the renderer when attached", () => {
+describe("GISMapEngine heatmap renderer mode", () => {
+  test("setLayerAdvancedRenderer('heatmap') applies a heatmap renderer to a point layer without requiring a field", async () => {
     const engine = new GISMapEngine();
-    engine.enableHeatmap(null, 80);
-    expect(engine.heatVisible).toBe(true);
-    expect(engine.heatIntensity).toBe(80);
-
     engine.attachToView(makeView());
-    engine.enableHeatmap(null, 42);
-    expect(engine.heatLayer.visible).toBe(true);
-    expect(engine.heatLayer.renderer.maxPixelIntensity).toBe(42);
+
+    const result = await engine.setLayerAdvancedRenderer("touristAttractions", { type: "heatmap", intensity: 80 });
+    expect(result.rendererType).toBe("heatmap");
+    expect(engine.touristAttractionLayer.renderer.type).toBe("heatmap");
+    expect(engine.touristAttractionLayer.renderer.maxPixelIntensity).toBe(80);
+
+    const layers = engine.getLayers();
+    const group = layers.find((l) => l.id === "touristAttractions").styleGroups[0];
+    expect(group.rendererType).toBe("heatmap");
+    expect(group.rendererIntensity).toBe(80);
   });
 
-  test("disableHeatmap hides the layer when attached and is safe when not", () => {
+  test("clearLayerAdvancedRenderer reverts a heatmapped layer back to its Simple base", async () => {
     const engine = new GISMapEngine();
-    expect(() => engine.disableHeatmap()).not.toThrow();
-    expect(engine.heatVisible).toBe(false);
-
     engine.attachToView(makeView());
-    engine.enableHeatmap(null, 50);
-    engine.disableHeatmap();
-    expect(engine.heatLayer.visible).toBe(false);
+
+    await engine.setLayerAdvancedRenderer("touristAttractions", { type: "heatmap", intensity: 60 });
+    engine.clearLayerAdvancedRenderer("touristAttractions");
+
+    expect(engine.touristAttractionLayer.renderer.type).not.toBe("heatmap");
   });
 
-  test("updateHeatmapIntensity updates the field and, if attached, clones the renderer", () => {
+  test("heatmap on drawings assigns the layer's own renderer instead of per-graphic symbols, and clearing nulls it back out", async () => {
     const engine = new GISMapEngine();
-    engine.updateHeatmapIntensity(33);
-    expect(engine.heatIntensity).toBe(33);
-
     engine.attachToView(makeView());
-    engine.updateHeatmapIntensity(77);
-    expect(engine.heatLayer.renderer.maxPixelIntensity).toBe(77);
+    engine.drawLayer.add({ symbol: { type: "simple-marker", color: {} } });
+
+    await engine.setLayerAdvancedRenderer("drawings", { type: "heatmap", symbolType: "simple-marker", intensity: 50 });
+    expect(engine.drawLayer.renderer.type).toBe("heatmap");
+
+    engine.clearLayerAdvancedRenderer("drawings");
+    expect(engine.drawLayer.renderer).toBeNull();
   });
 });
 
@@ -410,7 +414,7 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     );
   });
 
-  test("getLayers returns 8 layers in layerOrder with empty styleGroups before any styling exists", () => {
+  test("getLayers returns 7 layers in layerOrder with empty styleGroups before any styling exists", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
 
@@ -419,7 +423,6 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
       "route",
       "stops",
       "touristAttractions",
-      "heat",
       "mrtStations",
       "mrtLines",
       "drawings",
@@ -651,7 +654,7 @@ describe("GISMapEngine.reorderLayers", () => {
 
     engine.reorderLayers(0, 6);
     expect(engine.layerOrder[6]).toBe("route");
-    expect(view.map.reorder).toHaveBeenCalledTimes(8);
+    expect(view.map.reorder).toHaveBeenCalledTimes(7);
   });
 
   test("updates layerOrder without touching the map when not attached", () => {
@@ -823,7 +826,7 @@ describe("GISMapEngine portal layers", () => {
     // setLayerAdvancedRenderer threw "no symbol to base a renderer on yet".
     function attachNonSimpleRenderer(engine, id) {
       const layer = engine.portalLayers.get(id);
-      layer.geometryType = "esriGeometryPoint";
+      layer.geometryType = "point";
       layer.renderer = { type: "unique-value", field: "KIND", uniqueValueInfos: [] };
       return layer;
     }
@@ -918,6 +921,168 @@ describe("GISMapEngine portal layers", () => {
     engine.attachToView(makeView());
     expect(() => engine.removePortalLayer("touristAttractions")).not.toThrow();
     expect(engine.touristAttractionLayer).toBeTruthy();
+  });
+});
+
+describe("GISMapEngine named heatmap layers", () => {
+  test("heatmapEligibleSourceLayers lists the fixed point layers plus eligible portal layers", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+    engine.mrtStationLayer.geometryType = "point";
+    await engine.addPortalLayer({ id: "pts", title: "Points", url: "https://example.com/Points/FeatureServer" });
+    engine.portalLayers.get("portal_pts").geometryType = "point";
+    await engine.addPortalLayer({ id: "lns", title: "Lines", url: "https://example.com/Lines/FeatureServer" });
+    engine.portalLayers.get("portal_lns").geometryType = "polyline";
+
+    const ids = engine.heatmapEligibleSourceLayers().map((l) => l.id);
+    expect(ids).toEqual(["touristAttractions", "mrtStations", "portal_pts"]);
+  });
+
+  // Regression: touristAttractions/mrtStations used to be hardcoded as
+  // always heatmap-eligible on the assumption that they're "known point
+  // layers." That assumption doesn't hold if the configured feature
+  // service's real data isn't point geometry (e.g. MRT stations modeled as
+  // small polygon footprints rather than single coordinates) - the layer's
+  // marker-styled renderer says nothing about its actual geometry.
+  test("excludes touristAttractions/mrtStations from both eligibility checks when their real geometryType is not point/multipoint", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "polygon";
+    engine.mrtStationLayer.geometryType = "polygon";
+
+    expect(engine.heatmapEligibleSourceLayers()).toEqual([]);
+
+    const layers = engine.getLayers();
+    expect(layers.find((l) => l.id === "touristAttractions").styleGroups[0].heatmapEligible).toBe(false);
+    expect(layers.find((l) => l.id === "mrtStations").styleGroups[0].heatmapEligible).toBe(false);
+  });
+
+  test("includes touristAttractions/mrtStations once their real geometryType is confirmed point/multipoint", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+    engine.mrtStationLayer.geometryType = "multipoint";
+
+    const ids = engine.heatmapEligibleSourceLayers().map((l) => l.id);
+    expect(ids).toEqual(["touristAttractions", "mrtStations"]);
+
+    const layers = engine.getLayers();
+    expect(layers.find((l) => l.id === "touristAttractions").styleGroups[0].heatmapEligible).toBe(true);
+    expect(layers.find((l) => l.id === "mrtStations").styleGroups[0].heatmapEligible).toBe(true);
+  });
+
+  test("createHeatmapLayer rejects touristAttractions as a source once its real geometryType is confirmed non-point", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "polygon";
+
+    expect(() => engine.createHeatmapLayer("touristAttractions", { name: "Density" })).toThrow(
+      "Choose a point layer"
+    );
+  });
+
+  test("attachToView refreshes the layer list once touristAttractions/mrtStations finish loading, so eligibility isn't stuck reflecting an unloaded (geometryType-less) state", async () => {
+    const engine = new GISMapEngine();
+    const onDrawingsChanged = jest.fn();
+    engine.setOnDrawingsChanged(onDrawingsChanged);
+
+    engine.attachToView(makeView());
+    expect(onDrawingsChanged).not.toHaveBeenCalled();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onDrawingsChanged).toHaveBeenCalled();
+  });
+
+  test("createHeatmapLayer throws when given no name", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    expect(() => engine.createHeatmapLayer("touristAttractions", { name: "  " })).toThrow(
+      "Please give the heatmap layer a name."
+    );
+  });
+
+  test("createHeatmapLayer throws for an ineligible/unknown source", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    expect(() => engine.createHeatmapLayer("mrtLines", { name: "My Heatmap" })).toThrow(
+      "Choose a point layer"
+    );
+  });
+
+  test("createHeatmapLayer registers a named, removable layer with a heatmap renderer, appends it to layerOrder, and adds it to an attached map", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.touristAttractionLayer.geometryType = "point";
+
+    const { id, name } = engine.createHeatmapLayer("touristAttractions", { name: "Attraction Density", intensity: 70 });
+
+    expect(name).toBe("Attraction Density");
+    expect(engine.layerOrder).toContain(id);
+    const layer = engine.heatmapLayers.get(id);
+    expect(layer.url).toBe(engine.touristAttractionLayer.url);
+    expect(layer.title).toBe("Attraction Density");
+    expect(layer.renderer.type).toBe("heatmap");
+    expect(layer.renderer.maxPixelIntensity).toBe(70);
+    expect(view.map.add).toHaveBeenCalledWith(layer);
+
+    const rows = engine.getLayers();
+    const row = rows.find((l) => l.id === id);
+    expect(row).toMatchObject({ name: "Attraction Density", removable: true, heatmap: true, heatmapIntensity: 70 });
+  });
+
+  test("updateHeatmapLayerIntensity clones and reassigns the renderer, and persists to meta", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 50 });
+
+    engine.updateHeatmapLayerIntensity(id, 90);
+
+    expect(engine.heatmapLayers.get(id).renderer.maxPixelIntensity).toBe(90);
+    expect(engine.heatmapLayerMeta.get(id).intensity).toBe(90);
+  });
+
+  test("removeHeatmapLayer removes it from the map, layerOrder, and internal maps", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.touristAttractionLayer.geometryType = "point";
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density" });
+    const layer = engine.heatmapLayers.get(id);
+
+    engine.removeHeatmapLayer(id);
+
+    expect(view.map.remove).toHaveBeenCalledWith(layer);
+    expect(engine.heatmapLayers.has(id)).toBe(false);
+    expect(engine.heatmapLayerMeta.has(id)).toBe(false);
+    expect(engine.layerOrder).not.toContain(id);
+  });
+
+  test("removeHeatmapLayer is a no-op for an id it didn't add", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    expect(() => engine.removeHeatmapLayer("touristAttractions")).not.toThrow();
+    expect(engine.touristAttractionLayer).toBeTruthy();
+  });
+
+  test("survives a 2D/3D reattachment with its url/title/intensity/visibility intact", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 65 });
+    engine.toggleLayer(id);
+
+    engine.attachToView(makeView());
+
+    const layer = engine.heatmapLayers.get(id);
+    expect(layer.title).toBe("Density");
+    expect(layer.url).toBe(engine.touristAttractionLayer.url);
+    expect(layer.renderer.maxPixelIntensity).toBe(65);
+    expect(layer.visible).toBe(false);
   });
 });
 
@@ -1422,7 +1587,7 @@ describe("GISMapEngine Filter & Aggregate System", () => {
   });
 
   describe("getFilterableLayers / filterableLayerIds", () => {
-    test("excludes route/stops/heat/searchResult and includes the hosted + drawings layers", () => {
+    test("excludes route/stops/searchResult and includes the hosted + drawings layers", () => {
       const ids = engine.getFilterableLayers().map((l) => l.id);
       expect(ids).toEqual(["touristAttractions", "mrtStations", "mrtLines", "drawings"]);
     });

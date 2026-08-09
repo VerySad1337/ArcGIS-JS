@@ -10,6 +10,8 @@ const RENDERER_MODES = [
   { value: "class-breaks", label: "Class Breaks" }
 ];
 
+const HEATMAP_MODE = { value: "heatmap", label: "Heatmap" };
+
 // Small segmented (aria-pressed button group) control, reused for renderer
 // type / classification method / ramp mode - the same visual/semantic
 // pattern the existing AND/OR filter-logic toggle already established.
@@ -57,8 +59,15 @@ function RendererControls({ layerId, layerName, group, showLabel, fields, onStyl
   const [endColor, setEndColor] = useState("#a50f15");
   const [minSize, setMinSize] = useState(6);
   const [maxSize, setMaxSize] = useState(24);
+  const [intensity, setIntensity] = useState(group.rendererIntensity ?? 50);
   const [generating, setGenerating] = useState(false);
   const [haloOpen, setHaloOpen] = useState(Boolean(group.haloEnabled));
+
+  // Heatmap is a density visualization, so it only makes sense for point
+  // geometry - scoped server-side (see GISMapEngine.getLayers's
+  // heatmapEligible computation) rather than trusting symbolType alone,
+  // since a line/polygon layer's style group is never eligible either way.
+  const rendererModes = group.heatmapEligible ? [...RENDERER_MODES, HEATMAP_MODE] : RENDERER_MODES;
 
   const isPolygon = group.symbolType === "simple-fill";
   const isLine = group.symbolType === "simple-line";
@@ -87,21 +96,23 @@ function RendererControls({ layerId, layerName, group, showLabel, fields, onStyl
   const fieldOptions = mode === "class-breaks" ? numericFields : fields;
 
   const generate = async () => {
-    if (!field) return;
+    if (mode !== "heatmap" && !field) return;
     setGenerating(true);
     try {
-      await onSetRenderer(layerId, {
-        type: mode,
-        field,
-        symbolType: group.symbolType,
-        classCount,
-        method,
-        rampMode,
-        startColor,
-        endColor,
-        minSize,
-        maxSize
-      });
+      await onSetRenderer(layerId, mode === "heatmap"
+        ? { type: mode, symbolType: group.symbolType, intensity }
+        : {
+            type: mode,
+            field,
+            symbolType: group.symbolType,
+            classCount,
+            method,
+            rampMode,
+            startColor,
+            endColor,
+            minSize,
+            maxSize
+          });
     } finally {
       setGenerating(false);
     }
@@ -112,7 +123,7 @@ function RendererControls({ layerId, layerName, group, showLabel, fields, onStyl
       {showLabel && group.label && <span className="layer-style-group-label">{group.label}</span>}
 
       <SegmentedToggle
-        options={RENDERER_MODES}
+        options={rendererModes}
         value={mode}
         onChange={selectMode}
         ariaLabel={`Renderer type for ${layerName}`}
@@ -253,7 +264,27 @@ function RendererControls({ layerId, layerName, group, showLabel, fields, onStyl
         </>
       )}
 
-      {mode !== "simple" && (
+      {mode === "heatmap" && (
+        <div className="renderer-generate-form">
+          <div className="heat-slider-container">
+            <input
+              type="range"
+              min="1"
+              max="100"
+              value={intensity}
+              aria-label={`Heatmap intensity for ${layerName}`}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+            />
+            <div className="slider-value">Heat Intensity: {intensity}</div>
+          </div>
+
+          <button type="button" className="gis-button" disabled={generating} onClick={generate}>
+            {generating ? "Applying…" : "Apply Heatmap"}
+          </button>
+        </div>
+      )}
+
+      {mode !== "simple" && mode !== "heatmap" && (
         <>
           <div className="renderer-generate-form">
             <label className="layer-style-field">
@@ -462,8 +493,6 @@ export default function LayerControlPanel({
   onStyleChange,
   onZoomToLayer,
   onRemove,
-  heatIntensity,
-  updateIntensity,
   onGetLayerFields,
   onApplyFilter,
   onClearFilter,
@@ -472,7 +501,8 @@ export default function LayerControlPanel({
   onClearAnnotation,
   onSetRenderer,
   onClearRenderer,
-  onUpdateRendererEntry
+  onUpdateRendererEntry,
+  onUpdateHeatmapLayerIntensity
 }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragBlockIndex, setDragBlockIndex] = useState(null);
@@ -1171,19 +1201,17 @@ export default function LayerControlPanel({
           </div>
         )}
 
-        {layer.id === "heat" && layer.visible && (
+        {layer.heatmap && layer.visible && onUpdateHeatmapLayerIntensity && (
           <div className="heat-slider-container">
             <input
               type="range"
               min="1"
               max="100"
-              value={heatIntensity}
-              onChange={(e) => updateIntensity(Number(e.target.value))}
+              value={layer.heatmapIntensity ?? 50}
+              aria-label={`Heatmap intensity for ${layer.name}`}
+              onChange={(e) => onUpdateHeatmapLayerIntensity(layer.id, Number(e.target.value))}
             />
-
-            <div className="slider-value">
-              Heat Intensity: {heatIntensity}
-            </div>
+            <div className="slider-value">Heat Intensity: {layer.heatmapIntensity ?? 50}</div>
           </div>
         )}
       </div>
@@ -1336,7 +1364,9 @@ LayerControlPanel.propTypes = {
       filterable: PropTypes.bool,
       filterDescription: PropTypes.string,
       annotatable: PropTypes.bool,
-      annotationField: PropTypes.string
+      annotationField: PropTypes.string,
+      heatmap: PropTypes.bool,
+      heatmapIntensity: PropTypes.number
     })
   ).isRequired,
   onToggle: PropTypes.func.isRequired,
@@ -1344,8 +1374,6 @@ LayerControlPanel.propTypes = {
   onStyleChange: PropTypes.func.isRequired,
   onZoomToLayer: PropTypes.func.isRequired,
   onRemove: PropTypes.func,
-  heatIntensity: PropTypes.number,
-  updateIntensity: PropTypes.func,
   onGetLayerFields: PropTypes.func.isRequired,
   onApplyFilter: PropTypes.func.isRequired,
   onClearFilter: PropTypes.func.isRequired,
@@ -1354,5 +1382,6 @@ LayerControlPanel.propTypes = {
   onClearAnnotation: PropTypes.func.isRequired,
   onSetRenderer: PropTypes.func.isRequired,
   onClearRenderer: PropTypes.func.isRequired,
-  onUpdateRendererEntry: PropTypes.func.isRequired
+  onUpdateRendererEntry: PropTypes.func.isRequired,
+  onUpdateHeatmapLayerIntensity: PropTypes.func
 };
