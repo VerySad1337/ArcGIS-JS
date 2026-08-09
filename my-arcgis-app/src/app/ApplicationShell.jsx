@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 const TOAST_DURATION_MS = 4000;
 import GISMapView from "../components/GISMapView";
 import ViewModeToggle from "../components/ViewModeToggle";
-import RoutingControlPanel from "../components/RoutingControlPanel";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
@@ -538,19 +537,16 @@ export default function ApplicationShell() {
           onUpdateRendererEntry={updateRendererEntry}
         />
 
-        <RoutingControlPanel
-          routeOn={routeOn}
-          toggleRoute={toggleRoute}
-          onRoute={handleRoute}
-          isRouting={isRouting}
-        />
-
         <AnalysisPanel
           is3D={is3D}
           selectedFeature={selectedFeature}
           onBuffer={bufferSelectedFeature}
           sliceActive={sliceActive}
           onToggleSlice={toggleSlice}
+          routeOn={routeOn}
+          toggleRoute={toggleRoute}
+          onRoute={handleRoute}
+          isRouting={isRouting}
         />
 
         <PortalLayerPanel

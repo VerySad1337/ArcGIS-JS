@@ -20,7 +20,7 @@ jest.mock("../components/GISMapView", () => (props) => (
   </button>
 ));
 
-jest.mock("../components/RoutingControlPanel", () => (props) => (
+jest.mock("../components/AnalysisPanel", () => (props) => (
   <div data-testid="routing-panel">
     <button onClick={props.toggleRoute}>toggle-route</button>
     <button onClick={() => props.onRoute("Start", "End")}>submit-route</button>

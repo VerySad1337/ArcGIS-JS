@@ -1,6 +1,7 @@
 import { useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
+import RouteInput from "./RouteInput";
 
 const BUFFER_UNITS = [
   { value: "meters", label: "Meters" },
@@ -9,22 +10,37 @@ const BUFFER_UNITS = [
   { value: "miles", label: "Miles" }
 ];
 
+// Route Search, Buffer, and Slice are the three tools under this card.
 // Buffer works in both 2D and 3D (geodesicBuffer is pure geometry math,
 // independent of the current view). Slice wraps an ArcGIS widget that only
 // ever operates against a SceneView, so it alone is gated on is3D - shown
 // as an explanatory hint instead of the toggle button whenever is3D is
 // false, rather than a disabled control whose failure mode a user would
 // have to guess at.
+// Each tool section below is independently collapsible (default collapsed),
+// same per-row chevron sub-section pattern LayerControlPanel uses for
+// Symbology/Filter/Aggregate/Annotate - opening the card shouldn't dump all
+// three tools' controls on the user at once.
 export default function AnalysisPanel({
   is3D,
   selectedFeature,
   onBuffer,
   sliceActive,
-  onToggleSlice
+  onToggleSlice,
+  routeOn,
+  toggleRoute,
+  onRoute,
+  isRouting
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [openSections, setOpenSections] = useState({});
   const [distance, setDistance] = useState("100");
   const [unit, setUnit] = useState("meters");
+
+  const isSectionOpen = (section) => Boolean(openSections[section]);
+  const toggleSection = (section) => {
+    setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  };
 
   const distanceValue = Number(distance);
   const canBuffer = Boolean(selectedFeature) && Number.isFinite(distanceValue) && distanceValue > 0;
@@ -47,57 +63,104 @@ export default function AnalysisPanel({
 
       {isOpen && (
         <>
-          <div className="analysis-tool-section">
-            <span className="analysis-tool-label">Buffer</span>
-            <div className="analysis-tool-row">
-              <input
-                type="number"
-                min="0"
-                step="any"
-                aria-label="Buffer distance"
-                value={distance}
-                onChange={(e) => setDistance(e.target.value)}
-              />
-              <select
-                aria-label="Buffer unit"
-                value={unit}
-                onChange={(e) => setUnit(e.target.value)}
-              >
-                {BUFFER_UNITS.map((u) => (
-                  <option key={u.value} value={u.value}>{u.label}</option>
-                ))}
-              </select>
-            </div>
-            {!selectedFeature && (
-              <p className="analysis-tool-hint">Select a feature on the map first.</p>
-            )}
+          <div className="layer-section">
             <button
               type="button"
-              className="gis-button"
-              disabled={!canBuffer}
-              onClick={handleBuffer}
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen("routeSearch")}
+              onClick={() => toggleSection("routeSearch")}
             >
-              Apply Buffer
+              <Icon name={isSectionOpen("routeSearch") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Route Search</span>
             </button>
+
+            {isSectionOpen("routeSearch") && (
+              <div className="analysis-tool-section">
+                <RouteInput onRoute={onRoute} isRouting={isRouting} />
+                <button type="button" className="gis-button gis-button-secondary" onClick={toggleRoute}>
+                  {routeOn ? "Hide Route" : "Show Route"}
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="analysis-tool-section">
-            <span className="analysis-tool-label">Slice</span>
-            {!is3D ? (
-              <p className="analysis-tool-hint">Switch to 3D view to use Slice.</p>
-            ) : (
-              <>
-                <p className="analysis-tool-hint">
-                  Drag out a box on the scene to cut away part of the 3D view.
-                </p>
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen("buffer")}
+              onClick={() => toggleSection("buffer")}
+            >
+              <Icon name={isSectionOpen("buffer") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Buffer</span>
+            </button>
+
+            {isSectionOpen("buffer") && (
+              <div className="analysis-tool-section">
+                <div className="analysis-tool-row">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    aria-label="Buffer distance"
+                    value={distance}
+                    onChange={(e) => setDistance(e.target.value)}
+                  />
+                  <select
+                    aria-label="Buffer unit"
+                    value={unit}
+                    onChange={(e) => setUnit(e.target.value)}
+                  >
+                    {BUFFER_UNITS.map((u) => (
+                      <option key={u.value} value={u.value}>{u.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {!selectedFeature && (
+                  <p className="analysis-tool-hint">Select a feature on the map first.</p>
+                )}
                 <button
                   type="button"
-                  className="gis-button-secondary"
-                  onClick={onToggleSlice}
+                  className="gis-button"
+                  disabled={!canBuffer}
+                  onClick={handleBuffer}
                 >
-                  {sliceActive ? "Stop Slice" : "Start Slice"}
+                  Apply Buffer
                 </button>
-              </>
+              </div>
+            )}
+          </div>
+
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen("slice")}
+              onClick={() => toggleSection("slice")}
+            >
+              <Icon name={isSectionOpen("slice") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Slice</span>
+            </button>
+
+            {isSectionOpen("slice") && (
+              <div className="analysis-tool-section">
+                {!is3D ? (
+                  <p className="analysis-tool-hint">Switch to 3D view to use Slice.</p>
+                ) : (
+                  <>
+                    <p className="analysis-tool-hint">
+                      Drag out a box on the scene to cut away part of the 3D view.
+                    </p>
+                    <button
+                      type="button"
+                      className="gis-button-secondary"
+                      onClick={onToggleSlice}
+                    >
+                      {sliceActive ? "Stop Slice" : "Start Slice"}
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
         </>
@@ -111,5 +174,9 @@ AnalysisPanel.propTypes = {
   selectedFeature: PropTypes.object,
   onBuffer: PropTypes.func.isRequired,
   sliceActive: PropTypes.bool,
-  onToggleSlice: PropTypes.func.isRequired
+  onToggleSlice: PropTypes.func.isRequired,
+  routeOn: PropTypes.bool,
+  toggleRoute: PropTypes.func,
+  onRoute: PropTypes.func,
+  isRouting: PropTypes.bool
 };

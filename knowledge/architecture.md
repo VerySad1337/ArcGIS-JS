@@ -16,7 +16,7 @@ Source files consulted (all referenced by the index and available):
 - `src/components/FeatureAttributesPanel.jsx`
 - `src/components/GlobalSearchPanel.jsx`
 - `src/components/PortalLayerPanel.jsx`
-- `src/components/RoutingControlPanel.jsx`
+- `src/components/AnalysisPanel.jsx`
 - `src/components/Icon.jsx`
 - `src/services/PortalService.js`
 - `src/services/AuthService.js`
@@ -143,7 +143,7 @@ ArcGISConfiguration.js
         |  imported by
         v
 +--------------------------+        +----------------------------+
-|      ApplicationShell    |<------>|   RoutingControlPanel /    |
+|      ApplicationShell    |<------>|   AnalysisPanel /          |
 |  (owns is3D, routeOn,    |        |   LayerControlPanel /      |
 |   heatOn, layers, toast) |        |   (UI state consumers)     |
 +--------------------------+        +----------------------------+
