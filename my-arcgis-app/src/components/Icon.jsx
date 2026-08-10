@@ -1,3 +1,4 @@
+import { memo } from "react";
 import PropTypes from "prop-types";
 
 // One line-icon language for every control in the app, replacing the mix of
@@ -66,7 +67,7 @@ const PATHS = {
   )
 };
 
-export default function Icon({ name, size = 18, className }) {
+function Icon({ name, size = 18, className }) {
   const path = PATHS[name];
   if (!path) return null;
 
@@ -94,3 +95,10 @@ Icon.propTypes = {
   size: PropTypes.number,
   className: PropTypes.string
 };
+
+// Memoized because this is the most-instantiated component in the app - a
+// layer row alone renders half a dozen, and LayerControlPanel renders one row
+// per layer. Its props are a name string and a number, so the memo comparison
+// is trivially cheap next to rebuilding the SVG element tree on every parent
+// re-render.
+export default memo(Icon);

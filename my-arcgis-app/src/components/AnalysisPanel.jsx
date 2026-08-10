@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 import RouteInput from "./RouteInput";
@@ -90,7 +90,7 @@ SaveBufferLayerForm.propTypes = {
 // same per-row chevron sub-section pattern LayerControlPanel uses for
 // Symbology/Filter/Aggregate/Annotate - opening the card shouldn't dump all
 // three tools' controls on the user at once.
-export default function AnalysisPanel({
+function AnalysisPanel({
   is3D,
   selectedFeature,
   onBuffer,
@@ -413,3 +413,9 @@ AnalysisPanel.propTypes = {
   layers: PropTypes.array,
   onCreateHeatmapLayer: PropTypes.func
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(AnalysisPanel);

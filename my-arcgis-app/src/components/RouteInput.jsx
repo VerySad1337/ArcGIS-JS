@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import PropTypes from "prop-types";
 
-export default function RouteInput({ onRoute, isRouting }) {
+function RouteInput({ onRoute, isRouting }) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [touched, setTouched] = useState(false);
@@ -52,3 +52,8 @@ RouteInput.propTypes = {
   onRoute: PropTypes.func.isRequired,
   isRouting: PropTypes.bool
 };
+
+// Memoized for the same reason as the panels it sits inside: AnalysisPanel
+// re-renders whenever the shell's layer list or analysis state changes, and
+// this form owns its own draft input state that has nothing to do with either.
+export default memo(RouteInput);

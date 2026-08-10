@@ -1,9 +1,10 @@
+import { memo } from "react";
 import PropTypes from "prop-types";
 
 // Rendered at the very top of the sidebar, above every collapsible panel -
 // switching 2D/3D is a frequent, always-relevant action, not scoped to
 // routing or any other single panel.
-export default function ViewModeToggle({ is3D, setIs3D }) {
+function ViewModeToggle({ is3D, setIs3D }) {
   return (
     <div className="view-mode-bar">
       <span className="view-mode-bar-label">View</span>
@@ -33,3 +34,9 @@ ViewModeToggle.propTypes = {
   is3D: PropTypes.bool,
   setIs3D: PropTypes.func.isRequired
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(ViewModeToggle);

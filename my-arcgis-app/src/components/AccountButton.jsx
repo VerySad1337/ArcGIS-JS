@@ -1,3 +1,4 @@
+import { memo } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -8,7 +9,7 @@ import Icon from "./Icon";
 // Entirely inactive/hidden when OAuth isn't configured (oauthConfigured
 // false), same as every other sign-in-gated control in the app - see
 // AuthService.isOAuthConfigured.
-export default function AccountButton({ oauthConfigured, signedInUser, signingIn, onSignIn, onSignOut }) {
+function AccountButton({ oauthConfigured, signedInUser, signingIn, onSignIn, onSignOut }) {
   if (!oauthConfigured) return null;
 
   if (signedInUser) {
@@ -52,3 +53,9 @@ AccountButton.propTypes = {
   onSignIn: PropTypes.func,
   onSignOut: PropTypes.func
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(AccountButton);

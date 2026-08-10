@@ -176,6 +176,34 @@ export default class GISMapEngine {
     "buffer"
   ]);
 
+  // layerOrder members that are deliberately NOT rendered as Layers-card rows
+  // (see getLayers()'s own comment for why each one is excluded). They remain
+  // full layerOrder/buildLayerMap members and keep their absolute layerOrder
+  // slots - only their card row is absent.
+  //
+  // This is a single source of truth on purpose. `getLayers()` and
+  // `reorderLayers()` must agree exactly on this set, because reorderLayers'
+  // `from`/`to` are indices into the card-visible subsequence - i.e. into
+  // getLayers()'s own output - not raw layerOrder positions. When the two
+  // disagree, every row below the first divergence reorders to the wrong
+  // slot, and a row the user never touched moves instead.
+  //
+  // Regression this prevents (2026-08): `drawings` was removed from the card
+  // when drawing became "Draw into"-targeted (see knowledge/features/
+  // drawing-system.md), which updated getLayers()'s filter but not
+  // reorderLayers' - which went on treating drawings as a 4th card row. The
+  // built-in three still reordered correctly (they sit above it), so it read
+  // as "reordering is fine at the top and buggy further down": every
+  // user-added portal/heatmap/route/search/buffer layer sat one index off,
+  // so dragging one of them moved drawings instead.
+  static CARD_HIDDEN_LAYER_IDS = new Set([
+    "route",
+    "stops",
+    "searchResult",
+    "buffer",
+    "drawings"
+  ]);
+
   touristAttractionLayer = null;
   mrtStationLayer = null;
   mrtLineLayer = null;
@@ -2269,7 +2297,7 @@ export default class GISMapEngine {
     // target - only its Layers-card row is gone, matching the
     // route/stops/searchResult/buffer precedent above.
     return l
-      .filter((id) => id !== "route" && id !== "stops" && id !== "searchResult" && id !== "buffer" && id !== "drawings")
+      .filter((id) => !GISMapEngine.CARD_HIDDEN_LAYER_IDS.has(id))
       .map((id) => lookup[id]);
   }
 
@@ -3115,11 +3143,18 @@ export default class GISMapEngine {
   // card-visible id subsequence instead, then reinsert each hidden id back
   // at its own original absolute layerOrder position (never touched by this
   // method, since nothing offers a way to move them from the UI).
+  // `from`/`to` are indices into the card-visible subsequence - what
+  // getLayers() returns - NOT raw layerOrder positions. Both sides read the
+  // same CARD_HIDDEN_LAYER_IDS set so the two index domains cannot drift
+  // apart again; see that constant's comment for the regression this caused.
+  // Card-hidden ids are lifted out, the move is applied to what's left, and
+  // each hidden id is reinserted at its own original absolute slot (ascending
+  // order, so each insert restores the offset for the next).
   reorderLayers(from, to) {
     const hidden = [];
     const visible = [];
     this.layerOrder.forEach((id, i) => {
-      if (id === "route" || id === "stops" || id === "searchResult" || id === "buffer") hidden.push({ id, i });
+      if (GISMapEngine.CARD_HIDDEN_LAYER_IDS.has(id)) hidden.push({ id, i });
       else visible.push(id);
     });
 

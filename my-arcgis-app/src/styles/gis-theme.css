@@ -278,11 +278,24 @@ select:disabled {
 }
 
 arcgis-map,
-arcgis-scene {
+arcgis-scene,
+/* Placeholder shown while the 3D view's custom element definition is being
+   fetched on the first 2D -> 3D switch - see GISMapView's deferred
+   arcgis-scene import. Sized identically so the swap doesn't shift layout. */
+.map-view-loading {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.map-view-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 18, 28, 0.9);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 /* =========================

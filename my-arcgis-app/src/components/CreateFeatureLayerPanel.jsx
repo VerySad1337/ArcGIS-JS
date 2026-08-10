@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -15,7 +15,7 @@ const FIELD_TYPE_OPTIONS = [
 // because it reused the same onCreateLayer plumbing. Collapsed by default,
 // same reasoning as PortalLayerPanel - creating a layer is an occasional
 // action, not something every session needs.
-export default function CreateFeatureLayerPanel({ onCreateLayer, signedInUser }) {
+function CreateFeatureLayerPanel({ onCreateLayer, signedInUser }) {
   const [isOpen, setIsOpen] = useState(false);
   const [layerName, setLayerName] = useState("");
   const [geometryType, setGeometryType] = useState("point");
@@ -158,3 +158,9 @@ CreateFeatureLayerPanel.propTypes = {
     thumbnailUrl: PropTypes.string
   })
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(CreateFeatureLayerPanel);

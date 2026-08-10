@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -10,7 +10,7 @@ const LAYER_LABELS = {
   address: "Address"
 };
 
-export default function GlobalSearchPanel({ onSearch, onSelectResult, hasSearchResult, onCreateSearchResultLayer }) {
+function GlobalSearchPanel({ onSearch, onSelectResult, hasSearchResult, onCreateSearchResultLayer }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
@@ -148,3 +148,9 @@ GlobalSearchPanel.propTypes = {
   hasSearchResult: PropTypes.bool,
   onCreateSearchResultLayer: PropTypes.func
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(GlobalSearchPanel);

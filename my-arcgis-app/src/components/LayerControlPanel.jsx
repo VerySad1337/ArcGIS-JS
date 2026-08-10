@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
+import ThrottledRangeInput from "./ThrottledRangeInput";
 import { FILTER_LOGIC, operatorsForKind } from "../gis/LayerFilterExpression";
 import { MARKER_STYLES, LINE_STYLES, FILL_STYLES } from "../gis/SymbolRenderers";
 
@@ -38,6 +39,36 @@ SegmentedToggle.propTypes = {
   value: PropTypes.string,
   onChange: PropTypes.func.isRequired,
   ariaLabel: PropTypes.string.isRequired
+};
+
+// A named heatmap layer's intensity slider. A real component (not inline JSX
+// in the row .map()) so the live drag position has somewhere to live: the
+// committed value reaching GISMapEngine is throttled (see
+// ThrottledRangeInput), so the readout beside the slider has to follow the
+// draft rather than the layer prop or it would visibly lag the thumb.
+function HeatIntensitySlider({ layerId, layerName, intensity, onCommit }) {
+  const [displayed, setDisplayed] = useState(intensity);
+
+  return (
+    <div className="heat-slider-container">
+      <ThrottledRangeInput
+        value={intensity}
+        min="1"
+        max="100"
+        ariaLabel={`Heatmap intensity for ${layerName}`}
+        onDraftChange={setDisplayed}
+        onCommit={(next) => onCommit(layerId, next)}
+      />
+      <div className="slider-value">Heat Intensity: {displayed}</div>
+    </div>
+  );
+}
+
+HeatIntensitySlider.propTypes = {
+  layerId: PropTypes.string.isRequired,
+  layerName: PropTypes.string.isRequired,
+  intensity: PropTypes.number.isRequired,
+  onCommit: PropTypes.func.isRequired
 };
 
 // Owns one style group's full Symbology controls: the Simple/Unique Values/
@@ -205,13 +236,17 @@ function RendererControls({ layerId, layerName, group, showLabel, fields, onStyl
 
           <label className="layer-style-field">
             <span>Opacity</span>
-            <input
-              type="range"
+            {/* Throttled: every commit clones and reassigns the layer's symbol
+                (for drawings, once per graphic), which a raw 60Hz drag turns
+                into visible stutter. RendererControls is already re-keyed on
+                projectVersion, so the slider re-seeds on a project load. */}
+            <ThrottledRangeInput
               min="0"
               max="1"
               step="0.05"
               value={group.opacity ?? 1}
-              onChange={(e) => applyStyle({ opacity: Number(e.target.value) })}
+              ariaLabel={`Opacity for ${layerName}`}
+              onCommit={(next) => applyStyle({ opacity: next })}
             />
           </label>
 
@@ -500,7 +535,7 @@ function moveBlockBefore(workingIds, blockIds, anchorId) {
 // contiguity, though - a group always renders as one block at the position
 // of its first-seen member, so a stray drag-and-drop that splits a group's
 // members apart in the underlying order still displays sensibly.
-export default function LayerControlPanel({
+function LayerControlPanel({
   layers,
   onToggle,
   onReorder,
@@ -1321,17 +1356,16 @@ export default function LayerControlPanel({
             </button>
 
             {isSectionOpen(layer.id, "heatmap") && (
-              <div className="heat-slider-container">
-                <input
-                  type="range"
-                  min="1"
-                  max="100"
-                  value={layer.heatmapIntensity ?? 50}
-                  aria-label={`Heatmap intensity for ${layer.name}`}
-                  onChange={(e) => onUpdateHeatmapLayerIntensity(layer.id, Number(e.target.value))}
-                />
-                <div className="slider-value">Heat Intensity: {layer.heatmapIntensity ?? 50}</div>
-              </div>
+              // Re-keyed on projectVersion for the same reason RendererControls
+              // is: the slider seeds its drag state from `intensity` on mount
+              // only, so a project load has to remount it to re-seed.
+              <HeatIntensitySlider
+                key={`heat-${projectVersion}`}
+                layerId={layer.id}
+                layerName={layer.name}
+                intensity={layer.heatmapIntensity ?? 50}
+                onCommit={onUpdateHeatmapLayerIntensity}
+              />
             )}
           </div>
         )}
@@ -1557,3 +1591,9 @@ LayerControlPanel.propTypes = {
   onUpdateHeatmapLayerIntensity: PropTypes.func,
   projectVersion: PropTypes.number
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(LayerControlPanel);

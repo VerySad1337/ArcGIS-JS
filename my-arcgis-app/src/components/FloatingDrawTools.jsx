@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -19,7 +19,7 @@ const ALL_TOOLS = [
   { key: "line", icon: "line", label: "Line", geometryType: "polyline" }
 ];
 
-export default function FloatingDrawTools({
+function FloatingDrawTools({
   drawPoint,
   drawLine,
   drawPolygon,
@@ -156,3 +156,9 @@ FloatingDrawTools.propTypes = {
   ),
   onChangeDrawTarget: PropTypes.func
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(FloatingDrawTools);

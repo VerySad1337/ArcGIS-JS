@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const TOAST_DURATION_MS = 4000;
 import GISMapView from "../components/GISMapView";
 import ViewModeToggle from "../components/ViewModeToggle";
@@ -59,10 +59,18 @@ export default function ApplicationShell() {
   // LayerControlPanel's projectVersion prop for why this exists.
   const [projectVersion, setProjectVersion] = useState(0);
 
-  const refreshLayers = () => {
+  // Every handler below is wrapped in useCallback, and every child panel is
+  // wrapped in React.memo (see each component's own export). The two go
+  // together and neither works alone: an inline arrow prop changes identity
+  // on every render, which defeats memo entirely. Without this pairing, a
+  // single layer-visibility toggle (or a colour-picker drag, which fires
+  // continuously) re-rendered the whole panel tree - LayerControlPanel's
+  // ~1500 lines of nested per-layer forms included - even though only the
+  // layer list had changed.
+  const refreshLayers = useCallback(() => {
     const updated = engineRef.current.getLayers();
     setLayers([...updated]);
-  };
+  }, []);
 
   useEffect(() => {
     if (!isOAuthConfigured()) return;
@@ -76,7 +84,7 @@ export default function ApplicationShell() {
       setSignedInUser(user);
       refreshLayers();
     });
-  }, []);
+  }, [refreshLayers]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -92,7 +100,7 @@ export default function ApplicationShell() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [sidebarOpen]);
 
-  const showToast = (message, type = "error") => {
+  const showToast = useCallback((message, type = "error") => {
     setToast({ message, type });
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     // Errors stay on screen until the user dismisses them; only transient
@@ -101,14 +109,14 @@ export default function ApplicationShell() {
     if (type !== "error") {
       toastTimeoutRef.current = setTimeout(() => setToast(null), TOAST_DURATION_MS);
     }
-  };
+  }, []);
 
-  const dismissToast = () => {
+  const dismissToast = useCallback(() => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
-  };
+  }, []);
 
-  const toggleViewMode = (next) => {
+  const toggleViewMode = useCallback((next) => {
     if (next === is3D) return;
     if (activeDrawType) {
       engineRef.current.cancelDraw();
@@ -126,9 +134,9 @@ export default function ApplicationShell() {
     // shell's mirror of that state needs to follow.
     if (sliceActive) setSliceActive(false);
     setIs3D(next);
-  };
+  }, [is3D, activeDrawType, sliceActive, showToast]);
 
-  const handleViewReady = (view) => {
+  const handleViewReady = useCallback((view) => {
     engineRef.current.setOnFeatureSelect(setSelectedFeature);
     engineRef.current.setOnDrawingsChanged(refreshLayers);
     engineRef.current.setOnDrawStateChange(setActiveDrawType);
@@ -141,9 +149,9 @@ export default function ApplicationShell() {
     });
     engineRef.current.attachToView(view);
     refreshLayers();
-  };
+  }, [refreshLayers, showToast]);
 
-  const handleRoute = async (start, end) => {
+  const handleRoute = useCallback(async (start, end) => {
     setHasInteracted(true);
     setIsRouting(true);
     try {
@@ -164,26 +172,26 @@ export default function ApplicationShell() {
     } finally {
       setIsRouting(false);
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const toggleRoute = () => {
+  const toggleRoute = useCallback(() => {
     const next = !routeOn;
     engineRef.current.toggleRoute(next);
     setRouteOn(next);
     refreshLayers();
-  };
+  }, [routeOn, refreshLayers]);
 
-  const toggleLayer = (id) => {
+  const toggleLayer = useCallback((id) => {
     engineRef.current.toggleLayer(id);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
-  const zoomToLayer = async (id) => {
+  const zoomToLayer = useCallback(async (id) => {
     await engineRef.current.zoomToLayer(id, showToast);
     refreshLayers();
-  };
+  }, [refreshLayers, showToast]);
 
-  const reorderLayer = (from, to) => {
+  const reorderLayer = useCallback((from, to) => {
     engineRef.current.reorderLayers(from, to);
     const updated = engineRef.current.getLayers();
     setLayers([...updated]);
@@ -191,12 +199,12 @@ export default function ApplicationShell() {
     if (moved) {
       setReorderAnnouncement(`${moved.name} moved to position ${to + 1} of ${updated.filter(Boolean).length}.`);
     }
-  };
+  }, []);
 
-  const updateLayerStyle = (id, style) => {
+  const updateLayerStyle = useCallback((id, style) => {
     engineRef.current.setLayerStyle(id, style);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
   // Filter & Aggregate: schema lookups are read-only (no toast needed on
   // failure - LayerControlPanel just gets an empty field list); apply/clear
@@ -205,9 +213,9 @@ export default function ApplicationShell() {
   // does. setLayerFilter throws on an invalid condition (bad field/operator/
   // value), consistent with updateSelectedFeatureAttributes/addColumnToLayer/
   // addPortalLayer's throw-and-let-the-shell-toast convention.
-  const getLayerFields = (id) => engineRef.current.getLayerFieldSchema(id);
+  const getLayerFields = useCallback((id) => engineRef.current.getLayerFieldSchema(id), []);
 
-  const applyLayerFilter = async (id, filter) => {
+  const applyLayerFilter = useCallback(async (id, filter) => {
     try {
       const result = await engineRef.current.setLayerFilter(id, filter);
       refreshLayers();
@@ -219,17 +227,17 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Invalid filter.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const clearLayerFilter = (id) => {
+  const clearLayerFilter = useCallback((id) => {
     engineRef.current.clearLayerFilter(id);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
   // Layer Annotation: same throw-and-toast/refresh convention as
   // applyLayerFilter/clearLayerFilter above - setLayerAnnotation throws on
   // a field that doesn't exist on the layer's schema.
-  const setLayerAnnotation = async (id, field) => {
+  const setLayerAnnotation = useCallback(async (id, field) => {
     try {
       await engineRef.current.setLayerAnnotation(id, field);
       refreshLayers();
@@ -238,18 +246,18 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Invalid annotation field.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const clearLayerAnnotation = (id) => {
+  const clearLayerAnnotation = useCallback((id) => {
     engineRef.current.clearLayerAnnotation(id);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
   // Advanced Renderer (Unique Values / Class Breaks): same throw-and-toast/
   // refresh convention as applyLayerFilter/setLayerAnnotation above -
   // setLayerAdvancedRenderer throws on a field that doesn't exist on the
   // layer's schema or an unknown renderer type.
-  const setLayerRenderer = async (id, options) => {
+  const setLayerRenderer = useCallback(async (id, options) => {
     try {
       await engineRef.current.setLayerAdvancedRenderer(id, options);
       refreshLayers();
@@ -263,26 +271,26 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Could not generate renderer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const clearLayerRenderer = (id) => {
+  const clearLayerRenderer = useCallback((id) => {
     engineRef.current.clearLayerAdvancedRenderer(id);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
-  const updateRendererEntry = (id, key, changes) => {
+  const updateRendererEntry = useCallback((id, key, changes) => {
     engineRef.current.updateRendererEntrySymbol(id, key, changes);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
-  const runAnalysis = async (ids, options) => {
+  const runAnalysis = useCallback(async (ids, options) => {
     try {
       return await engineRef.current.runAnalysis(ids, options);
     } catch (err) {
       showToast(err.message || "Analysis failed.", "error");
       return null;
     }
-  };
+  }, [showToast]);
 
   // Spatial Analysis (ANALYSIS card): Buffer and Slice are both 3D-only -
   // see GISMapEngine.isSceneView. bufferSelectedFeature reports its own
@@ -290,38 +298,38 @@ export default function ApplicationShell() {
   // zoomToLayer/uploadGeoJSON), so this wrapper only needs to refresh the
   // layer list afterward, since a successful buffer adds a graphic to the
   // already-tracked drawings layer.
-  const bufferSelectedFeature = (distance, unit) => {
+  const bufferSelectedFeature = useCallback((distance, unit) => {
     engineRef.current.bufferSelectedFeature(distance, unit, showToast);
     refreshLayers();
-  };
+  }, [refreshLayers, showToast]);
 
-  const toggleSlice = () => {
+  const toggleSlice = useCallback(() => {
     if (sliceActive) {
       engineRef.current.stopSlice();
     } else {
       engineRef.current.startSlice(showToast);
     }
     setSliceActive(engineRef.current.isSliceActive());
-  };
+  }, [sliceActive, showToast]);
 
   // Portal layer search itself is a stateless service call (consistent with
   // the existing rule that RoutingService/GeocodingService are invoked from
   // the shell, not the engine); adding/removing the resulting FeatureLayer
   // is engine-owned, same as every other layer mutation.
-  const searchPortal = async (query) => {
+  const searchPortal = useCallback(async (query) => {
     try {
       return await searchPortalLayers(query);
     } catch (err) {
       showToast(err.message || "Portal search failed.", "error");
       return [];
     }
-  };
+  }, [showToast]);
 
   // Async because the engine probes the service for accessibility before
   // registering the layer - a portal item can be publicly listed while its
   // service is subscription-only or restricted, and letting that failure
   // reach the SDK would surface as a forced sign-in modal.
-  const addPortalLayer = async (item) => {
+  const addPortalLayer = useCallback(async (item) => {
     try {
       await engineRef.current.addPortalLayer(item);
       refreshLayers();
@@ -329,13 +337,13 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to add layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
   // Provisions a brand-new hosted Feature Layer on the portal (see
   // GISMapEngine.createHostedFeatureLayer) and registers it exactly like a
   // layer added via portal search - same throw-and-toast convention as
   // addPortalLayer.
-  const createHostedFeatureLayer = async ({ name, geometryType, fields }) => {
+  const createHostedFeatureLayer = useCallback(async ({ name, geometryType, fields }) => {
     try {
       await engineRef.current.createHostedFeatureLayer({ name, geometryType, fields });
       refreshLayers();
@@ -343,7 +351,7 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to create feature layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
   // Which layer FloatingDrawTools' "Draw into" selector offers: every layer
   // getLayers() reports as accepting new features (see GISMapEngine's
@@ -360,18 +368,25 @@ export default function ApplicationShell() {
   // empty (no editable feature class available), FloatingDrawTools hides
   // the selector entirely and drawing still falls back to the local layer
   // via GISMapEngine.activeDrawTargetLayerId's own "drawings" default.
-  const drawTargetOptions = layers
-    .filter((l) => l.canBeDrawTarget)
-    .map((l) => ({ id: l.id, name: l.name, geometryType: l.geometryType }));
+  //
+  // Memoized because it is a fresh array on every render otherwise, which
+  // would make FloatingDrawTools' React.memo a no-op.
+  const drawTargetOptions = useMemo(
+    () =>
+      layers
+        .filter((l) => l.canBeDrawTarget)
+        .map((l) => ({ id: l.id, name: l.name, geometryType: l.geometryType })),
+    [layers]
+  );
 
-  const setDrawTarget = (layerId) => {
+  const setDrawTarget = useCallback((layerId) => {
     try {
       engineRef.current.setDrawTarget(layerId);
       setDrawTargetLayerId(layerId);
     } catch (err) {
       showToast(err.message || "Failed to set draw target.", "error");
     }
-  };
+  }, [showToast]);
 
   // "Draw into" starts with nothing explicitly chosen (drawTargetLayerId ===
   // ""). Once the layer list reports one or more editable feature classes
@@ -386,7 +401,7 @@ export default function ApplicationShell() {
     if (editableLayers.length < 1) return;
     const topmost = editableLayers[editableLayers.length - 1];
     setDrawTarget(topmost.id);
-  }, [layers, drawTargetLayerId]);
+  }, [layers, drawTargetLayerId, setDrawTarget]);
 
   // Named Heatmap Layers: the discoverable, "add to the layers card" way to
   // run heatmap analysis (see GISMapEngine's "Named Heatmap Layers"
@@ -398,7 +413,7 @@ export default function ApplicationShell() {
   // (The "which layers are eligible sources" list is derived by
   // LayerControlPanel straight from the `layers` prop's own heatmapEligible
   // style-group flags, so no separate engine round trip is needed for it.)
-  const createHeatmapLayer = (sourceId, options) => {
+  const createHeatmapLayer = useCallback((sourceId, options) => {
     try {
       const { name } = engineRef.current.createHeatmapLayer(sourceId, options);
       refreshLayers();
@@ -406,12 +421,12 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to add heatmap layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const updateHeatmapLayerIntensity = (id, intensity) => {
+  const updateHeatmapLayerIntensity = useCallback((id, intensity) => {
     engineRef.current.updateHeatmapLayerIntensity(id, intensity);
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
   // "Add to Layers" in Route Search's discoverable way to keep a route
   // result around: route/stops are excluded from the Layers card (see
@@ -420,7 +435,7 @@ export default function ApplicationShell() {
   // current route+stops into a brand-new, independently named/toggleable/
   // removable layer instead. Same throw-and-toast convention as
   // createHeatmapLayer (blank name / no route drawn yet).
-  const createRouteResultLayer = (name) => {
+  const createRouteResultLayer = useCallback((name) => {
     try {
       const { name: savedName } = engineRef.current.createRouteResultLayer(name);
       refreshLayers();
@@ -428,7 +443,7 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to add route layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
   // "Add to Layers" in the Search card's discoverable way to keep an
   // address search result around: searchResult is excluded from the Layers
@@ -441,7 +456,7 @@ export default function ApplicationShell() {
   // Search card resets to its empty initial state rather than leaving a
   // now-redundant marker (duplicating the one just saved) on the map -
   // GlobalSearchPanel mirrors this by clearing its own query/results state.
-  const createSearchResultLayer = (name) => {
+  const createSearchResultLayer = useCallback((name) => {
     try {
       const { name: savedName } = engineRef.current.createSearchResultLayer(name);
       engineRef.current.clearSearchResult();
@@ -451,7 +466,7 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to add search result layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
   // "Add to Layers" in the Buffer section's discoverable way to keep a
   // buffer result around: buffer is excluded from the Layers card (see
@@ -462,7 +477,7 @@ export default function ApplicationShell() {
   // createRouteResultLayer/createSearchResultLayer (blank name / no buffer
   // yet). Once saved, the live buffer is cleared (engine.clearBufferResult)
   // the same way a saved search result clears its own live marker.
-  const createBufferResultLayer = (name) => {
+  const createBufferResultLayer = useCallback((name) => {
     try {
       const { name: savedName } = engineRef.current.createBufferResultLayer(name);
       engineRef.current.clearBufferResult();
@@ -471,14 +486,14 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to add buffer layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
   // A single remove handler for every removable dynamic layer
   // (LayerControlPanel's remove button doesn't distinguish where a layer
   // came from) - dispatches on the synthetic id's prefix, the same
   // "heatmap_<id>"/"portal_<itemId>"/"route_<id>"/"search_<id>"/
   // "buffer_<id>" id-space convention all five engine methods already use.
-  const removeLayer = (id) => {
+  const removeLayer = useCallback((id) => {
     if (id.startsWith("heatmap_")) {
       engineRef.current.removeHeatmapLayer(id);
     } else if (id.startsWith("route_")) {
@@ -491,22 +506,22 @@ export default function ApplicationShell() {
       engineRef.current.removePortalLayer(id);
     }
     refreshLayers();
-  };
+  }, [refreshLayers]);
 
   // Rename is scoped to the same five user-created layer kinds removeLayer
   // dispatches over (engine.renameLayer itself checks which *LayerMeta the
   // id belongs to, so no id-prefix branching is needed here) - throw-and-
   // toast, same convention as createHeatmapLayer/addPortalLayer.
-  const renameLayer = (id, name) => {
+  const renameLayer = useCallback((id, name) => {
     try {
       engineRef.current.renameLayer(id, name);
       refreshLayers();
     } catch (err) {
       showToast(err.message || "Failed to rename layer.", "error");
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const handleSignIn = async () => {
+  const handleSignIn = useCallback(async () => {
     setSigningIn(true);
     try {
       const user = await signIn();
@@ -523,21 +538,21 @@ export default function ApplicationShell() {
     } finally {
       setSigningIn(false);
     }
-  };
+  }, [refreshLayers, showToast]);
 
-  const handleSignOut = () => {
+  const handleSignOut = useCallback(() => {
     signOut();
     setSignedInUser(null);
     showToast("Signed out.", "success");
     refreshLayers();
-  };
+  }, [refreshLayers, showToast]);
 
   // Combines map-feature search (Tourist Attractions/MRT Stations/MRT
   // Lines/Drawings, via the engine) with address geocoding (via the
   // existing GeocodingService) into one result list. Geocoding is invoked
   // here rather than from the engine, consistent with the existing rule
   // that stateless services are called from the shell, not the engine.
-  const handleSearch = async (query) => {
+  const handleSearch = useCallback(async (query) => {
     const [featureResults, addressLocation] = await Promise.all([
       engineRef.current.searchFeatures(query),
       geocodeAddress(query).catch(() => null)
@@ -554,9 +569,9 @@ export default function ApplicationShell() {
       : [];
 
     return [...featureResults, ...addressResult];
-  };
+  }, []);
 
-  const handleSelectSearchResult = async (result) => {
+  const handleSelectSearchResult = useCallback(async (result) => {
     setHasInteracted(true);
     if (result.type === "address") {
       await engineRef.current.zoomToPoint(result.longitude, result.latitude);
@@ -564,26 +579,26 @@ export default function ApplicationShell() {
     } else {
       await engineRef.current.zoomToSearchResult(result);
     }
-  };
+  }, []);
 
-  const drawPoint = () => {
-  setHasInteracted(true);
-  engineRef.current.startPointDraw();
-  };
+  const drawPoint = useCallback(() => {
+    setHasInteracted(true);
+    engineRef.current.startPointDraw();
+  }, []);
 
-  const drawLine = () => {
-  setHasInteracted(true);
-  engineRef.current.startLineDraw();
-  };
+  const drawLine = useCallback(() => {
+    setHasInteracted(true);
+    engineRef.current.startLineDraw();
+  }, []);
 
-  const drawPolygon = () => {
-  setHasInteracted(true);
-  engineRef.current.startPolygonDraw();
-  };
+  const drawPolygon = useCallback(() => {
+    setHasInteracted(true);
+    engineRef.current.startPolygonDraw();
+  }, []);
 
-  const cancelDraw = () => {
+  const cancelDraw = useCallback(() => {
     engineRef.current.cancelDraw();
-  };
+  }, []);
 
   // Project Persistence (Save/Load Project) - the ArcGIS Pro ".aprx" analog.
   // saveProjectState/loadProjectState do the actual serialization (see
@@ -591,11 +606,11 @@ export default function ApplicationShell() {
   // syncing the shell's own useState mirrors (is3D/routeOn) to whatever the
   // loaded project restored, the same way toggleRoute/toggleViewMode keep
   // those mirrors in sync with engine state elsewhere in this file.
-  const saveProject = () => {
+  const saveProject = useCallback(() => {
     engineRef.current.saveProjectState(showToast);
-  };
+  }, [showToast]);
 
-  const loadProject = async (file) => {
+  const loadProject = useCallback(async (file) => {
     if (!file) return;
     setHasInteracted(true);
     const result = await engineRef.current.loadProjectState(file, showToast);
@@ -616,9 +631,9 @@ export default function ApplicationShell() {
     // Bumping this forces those instances to remount and re-seed from the
     // freshly loaded renderer state (see the key on RendererControls).
     setProjectVersion((v) => v + 1);
-  };
+  }, [is3D, refreshLayers, showToast, toggleViewMode]);
 
-  const handleSaveAttributes = async (updates) => {
+  const handleSaveAttributes = useCallback(async (updates) => {
     try {
       const result = await engineRef.current.updateSelectedFeatureAttributes(updates);
       setSelectedFeature((prev) => (prev ? { ...prev, attributes: result.attributes } : prev));
@@ -626,7 +641,7 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to save attribute changes.", "error");
     }
-  };
+  }, [showToast]);
 
   // Drawings live in memory on the local GraphicsLayer, so editing them needs
   // no account and must keep working anonymously - that is the app's normal
@@ -638,7 +653,7 @@ export default function ApplicationShell() {
   const canEditSelectedFeature =
     selectedFeature?.layerId === "drawings" || Boolean(signedInUser);
 
-  const handleAddColumn = async (fieldName, defaultValue) => {
+  const handleAddColumn = useCallback(async (fieldName, defaultValue) => {
     if (!selectedFeature) return;
     try {
       await engineRef.current.addColumnToLayer(selectedFeature.layerId, fieldName, "esriFieldTypeString", defaultValue);
@@ -649,12 +664,12 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to add column.", "error");
     }
-  };
+  }, [selectedFeature, showToast]);
 
   // Mirrors handleAddColumn: the engine owns the schema change, the shell
   // drops the key from the panel's copy of the attributes so the popup
   // reflects it without waiting for another hitTest.
-  const handleDeleteColumn = async (fieldName) => {
+  const handleDeleteColumn = useCallback(async (fieldName) => {
     if (!selectedFeature) return;
     try {
       await engineRef.current.deleteColumnFromLayer(selectedFeature.layerId, fieldName);
@@ -668,13 +683,13 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to delete column.", "error");
     }
-  };
+  }, [selectedFeature, showToast]);
 
   // Deleting the selected feature itself, not one of its columns. The graphic
   // the panel was showing no longer exists, so the popup is closed rather than
   // left pointing at a deleted row; refreshLayers() picks up the drawings
   // layer's now-changed style groups when the feature was a local drawing.
-  const handleDeleteFeature = async () => {
+  const handleDeleteFeature = useCallback(async () => {
     if (!selectedFeature) return;
     try {
       await engineRef.current.deleteSelectedFeature();
@@ -684,7 +699,22 @@ export default function ApplicationShell() {
     } catch (err) {
       showToast(err.message || "Failed to delete feature.", "error");
     }
-  };
+  }, [refreshLayers, selectedFeature, showToast]);
+
+  // Inline arrows in JSX would change identity every render and defeat the
+  // memo on the components they're passed to, same as the handlers above.
+  const closeFeaturePanel = useCallback(() => setSelectedFeature(null), []);
+  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const openLoadProjectPicker = useCallback(() => loadProjectInputRef.current?.click(), []);
+  const handleLoadProjectFile = useCallback(
+    ({ target }) => {
+      const file = target.files?.[0];
+      target.value = "";
+      if (file) loadProject(file);
+    },
+    [loadProject]
+  );
 
   return (
     <div className="app">
@@ -692,7 +722,7 @@ export default function ApplicationShell() {
         ref={sidebarToggleRef}
         className="sidebar-toggle"
         aria-label={sidebarOpen ? "Close panel" : "Open panel"}
-        onClick={() => setSidebarOpen((open) => !open)}
+        onClick={toggleSidebar}
       >
         <Icon name={sidebarOpen ? "close" : "menu"} />
       </button>
@@ -702,7 +732,7 @@ export default function ApplicationShell() {
           type="button"
           className="side-panel-backdrop"
           aria-label="Close panel"
-          onClick={() => setSidebarOpen(false)}
+          onClick={closeSidebar}
         />
       )}
 
@@ -727,7 +757,7 @@ export default function ApplicationShell() {
           <button
             type="button"
             className="gis-button-secondary"
-            onClick={() => loadProjectInputRef.current?.click()}
+            onClick={openLoadProjectPicker}
           >
             <Icon name="folder" size={16} />
             Load Project
@@ -737,11 +767,7 @@ export default function ApplicationShell() {
             hidden
             type="file"
             accept=".json"
-            onChange={({ target }) => {
-              const file = target.files?.[0];
-              target.value = "";
-              if (file) loadProject(file);
-            }}
+            onChange={handleLoadProjectFile}
           />
         </div>
 
@@ -832,7 +858,7 @@ export default function ApplicationShell() {
           />
         <FeatureAttributesPanel
           feature={selectedFeature}
-          onClose={() => setSelectedFeature(null)}
+          onClose={closeFeaturePanel}
           onSaveAttributes={handleSaveAttributes}
           onAddColumn={handleAddColumn}
           onDeleteColumn={handleDeleteColumn}

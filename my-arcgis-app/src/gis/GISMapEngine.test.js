@@ -745,20 +745,22 @@ describe("GISMapEngine.setLayerStyle", () => {
 });
 
 describe("GISMapEngine.reorderLayers", () => {
-  // from/to are indices into the Layers card's own displayed order
-  // (getLayers()'s output: touristAttractions, mrtStations, mrtLines,
-  // drawings), not raw this.layerOrder positions - route/stops/searchResult/
-  // buffer are excluded from the card and are never touched by this method,
-  // but still occupy their original absolute layerOrder slots (0, 1, 6, 7).
-  test("updates layerOrder and reorders the underlying map layers when attached, leaving route/stops/searchResult pinned", () => {
+  // from/to are indices into the Layers card's own displayed order - i.e.
+  // into getLayers()'s output (touristAttractions, mrtStations, mrtLines,
+  // then any user-added layers) - not raw this.layerOrder positions.
+  // route/stops/drawings/searchResult/buffer are all excluded from the card
+  // and are never touched by this method, but still occupy their original
+  // absolute layerOrder slots (0, 1, 5, 6, 7).
+  test("updates layerOrder and reorders the underlying map layers when attached, leaving the card-hidden layers pinned", () => {
     const engine = new GISMapEngine();
     const view = makeView();
     engine.attachToView(view);
 
-    engine.reorderLayers(0, 3);
+    engine.reorderLayers(0, 2);
     expect(engine.layerOrder[0]).toBe("route");
     expect(engine.layerOrder[1]).toBe("stops");
-    expect(engine.layerOrder[5]).toBe("touristAttractions");
+    expect(engine.layerOrder[4]).toBe("touristAttractions");
+    expect(engine.layerOrder[5]).toBe("drawings");
     expect(engine.layerOrder[6]).toBe("searchResult");
     expect(engine.layerOrder[7]).toBe("buffer");
     expect(view.map.reorder).toHaveBeenCalledTimes(8);
@@ -770,6 +772,50 @@ describe("GISMapEngine.reorderLayers", () => {
     expect(engine.layerOrder[0]).toBe("route");
     expect(engine.layerOrder[1]).toBe("stops");
     expect(engine.layerOrder[4]).toBe("touristAttractions");
+  });
+
+  // Pins getLayers()'s own filter to CARD_HIDDEN_LAYER_IDS, so the card can't
+  // start rendering (or stop rendering) a row without the shared constant
+  // moving with it. Note this passes by construction once both sides read the
+  // constant - the behavioral test below is what actually catches
+  // reorderLayers indexing into a different domain.
+  test("indexes into exactly the subsequence getLayers() renders", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+
+    const cardIds = engine.getLayers().filter(Boolean).map((l) => l.id);
+    const reorderableIds = engine.layerOrder.filter(
+      (id) => !GISMapEngine.CARD_HIDDEN_LAYER_IDS.has(id)
+    );
+
+    expect(reorderableIds).toEqual(cardIds);
+  });
+
+  // The user-visible symptom of the drift: with `drawings` still counted as a
+  // card row by reorderLayers only, every row below it was one index off, so
+  // dragging the first user-added layer moved `drawings` instead and the row
+  // the user grabbed appeared to stay put.
+  test("moving a user-added layer by its card index moves that layer, not a card-hidden one", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await engine.addPortalLayer({
+      id: "abc123",
+      title: "Parks",
+      url: "https://example.com/Parks/FeatureServer"
+    });
+
+    const before = engine.getLayers().filter(Boolean).map((l) => l.id);
+    const portalIndex = before.indexOf("portal_abc123");
+    expect(portalIndex).toBe(3);
+
+    // Drag the portal layer to the top of the card.
+    engine.reorderLayers(portalIndex, 0);
+
+    const after = engine.getLayers().filter(Boolean).map((l) => l.id);
+    expect(after[0]).toBe("portal_abc123");
+    expect(after).toEqual(["portal_abc123", "touristAttractions", "mrtStations", "mrtLines"]);
+    // ...and drawings kept its own absolute slot, untouched.
+    expect(engine.layerOrder.indexOf("drawings")).toBe(5);
   });
 });
 

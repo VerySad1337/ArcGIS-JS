@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -11,7 +11,7 @@ import Icon from "./Icon";
 // behind its own inner chevron - it was split out into its own top-level
 // card, CreateFeatureLayerPanel (2026-08), since creating a layer isn't
 // really "adding from portal".
-export default function PortalLayerPanel({
+function PortalLayerPanel({
   onSearch,
   onAddLayer
 }) {
@@ -101,3 +101,9 @@ PortalLayerPanel.propTypes = {
   onSearch: PropTypes.func.isRequired,
   onAddLayer: PropTypes.func.isRequired
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(PortalLayerPanel);

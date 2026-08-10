@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -11,7 +11,7 @@ const OFFSET = 14;
 // surfaced as IdentityManager's own sign-in modal, which reads as the app
 // demanding a login. Viewing attributes never requires an account, so the
 // read-only panel is the default and editing is additive.
-export default function FeatureAttributesPanel({
+function FeatureAttributesPanel({
   feature,
   onClose,
   onSaveAttributes,
@@ -321,3 +321,9 @@ FeatureAttributesPanel.propTypes = {
   onDeleteFeature: PropTypes.func,
   canEdit: PropTypes.bool
 };
+
+// Memoized: ApplicationShell re-renders on any of its own state changes
+// (toast, sidebar, draw state, layer refresh). Every prop this component
+// receives from there is either a primitive or a useCallback/useMemo-stabilized
+// value, so memo lets those unrelated re-renders stop at this boundary.
+export default memo(FeatureAttributesPanel);
