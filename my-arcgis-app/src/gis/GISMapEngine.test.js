@@ -61,7 +61,7 @@ describe("GISMapEngine.attachToView", () => {
     expect(engine.currentMap).toBe(view.map);
     expect(engine.currentView).toBe(view);
     expect(view.map.removeAll).toHaveBeenCalled();
-    expect(view.map.add).toHaveBeenCalledTimes(7);
+    expect(view.map.add).toHaveBeenCalledTimes(8);
     expect(view.on).toHaveBeenCalledWith("click", expect.any(Function));
     expect(engine.touristAttractionLayer.url).toBeDefined();
     expect(engine.sketchVM.layer).toBe(engine.drawLayer);
@@ -758,9 +758,9 @@ describe("GISMapEngine.setLayerStyle", () => {
 describe("GISMapEngine.reorderLayers", () => {
   // from/to are indices into the Layers card's own displayed order
   // (getLayers()'s output: touristAttractions, mrtStations, mrtLines,
-  // drawings), not raw this.layerOrder positions - route/stops/searchResult
-  // are excluded from the card and are never touched by this method, but
-  // still occupy their original absolute layerOrder slots (0, 1, and 6).
+  // drawings), not raw this.layerOrder positions - route/stops/searchResult/
+  // buffer are excluded from the card and are never touched by this method,
+  // but still occupy their original absolute layerOrder slots (0, 1, 6, 7).
   test("updates layerOrder and reorders the underlying map layers when attached, leaving route/stops/searchResult pinned", () => {
     const engine = new GISMapEngine();
     const view = makeView();
@@ -771,7 +771,8 @@ describe("GISMapEngine.reorderLayers", () => {
     expect(engine.layerOrder[1]).toBe("stops");
     expect(engine.layerOrder[5]).toBe("touristAttractions");
     expect(engine.layerOrder[6]).toBe("searchResult");
-    expect(view.map.reorder).toHaveBeenCalledTimes(7);
+    expect(engine.layerOrder[7]).toBe("buffer");
+    expect(view.map.reorder).toHaveBeenCalledTimes(8);
   });
 
   test("updates layerOrder without touching the map when not attached", () => {

@@ -59,11 +59,21 @@ export default class GISMapEngine {
   routeLayer = null;
   stopLayer = null;
   searchLayer = null;
+  // Holds only the most recent Buffer result (see bufferSelectedFeature) -
+  // excluded from the Layers card the same way routeLayer/stopLayer/
+  // searchLayer are, since it's live, always-overwritten-by-the-next-buffer
+  // working state rather than something a user browses/reorders there. A
+  // user who wants to keep a particular buffer result uses the Buffer
+  // section's own "Add to Layers" control instead (createBufferResultLayer),
+  // which produces an ordinary, independently named/styled/reorderable card
+  // row like a saved route or search result.
+  bufferLayer = null;
 
   routeGraphic = null;
   startGraphic = null;
   endGraphic = null;
   searchGraphic = null;
+  bufferGraphic = null;
 
   routeVisible = true;
   searchVisible = true;
@@ -75,13 +85,14 @@ export default class GISMapEngine {
     "mrtStations",
     "mrtLines",
     "drawings",
-    "searchResult"
+    "searchResult",
+    "buffer"
   ];
 
-  // Same seven ids as the initial layerOrder above - used by
+  // Same eight ids as the initial layerOrder above - used by
   // loadProjectState to tell a built-in layer id apart from a dynamic
-  // (portal/heatmap/route-result/search-result) one when validating a
-  // restored layerOrder against what actually still exists.
+  // (portal/heatmap/route-result/search-result/buffer-result) one when
+  // validating a restored layerOrder against what actually still exists.
   static FIXED_LAYER_IDS = new Set([
     "route",
     "stops",
@@ -89,7 +100,8 @@ export default class GISMapEngine {
     "mrtStations",
     "mrtLines",
     "drawings",
-    "searchResult"
+    "searchResult",
+    "buffer"
   ]);
 
   touristAttractionLayer = null;
@@ -148,6 +160,18 @@ export default class GISMapEngine {
   // namedRouteLayers.
   namedSearchLayers = new Map();
   namedSearchLayerMeta = new Map();
+
+  // User-saved named buffer-result layers (see createBufferResultLayer/
+  // removeBufferResultLayer) - the discoverable "add to the layers card" way
+  // to keep a particular buffer result around, since the live bufferLayer
+  // (see bufferGraphic/bufferLayer above) is excluded from that card and
+  // always reflects only the most recent buffer. Structurally identical to
+  // namedSearchLayers/namedSearchLayerMeta above but snapshots a single
+  // polygon (simple-fill) graphic instead of a point marker. Keyed by a
+  // synthetic "buffer_<id>" id, same id space as layerOrder/portalLayers/
+  // heatmapLayers/namedRouteLayers/namedSearchLayers.
+  namedBufferLayers = new Map();
+  namedBufferLayerMeta = new Map();
 
   touristAttractionVisible = true;
   mrtStationVisible = true;
@@ -344,10 +368,12 @@ export default class GISMapEngine {
       mrtLines: this.mrtLineLayer,
       drawings: this.drawLayer,
       searchResult: this.searchLayer,
+      buffer: this.bufferLayer,
       ...Object.fromEntries(this.portalLayers),
       ...Object.fromEntries(this.heatmapLayers),
       ...Object.fromEntries(this.namedRouteLayers),
-      ...Object.fromEntries(this.namedSearchLayers)
+      ...Object.fromEntries(this.namedSearchLayers),
+      ...Object.fromEntries(this.namedBufferLayers)
     };
   }
 
@@ -391,6 +417,7 @@ export default class GISMapEngine {
     this.routeLayer = new GraphicsLayer({ title: "Route Layer", visible: this.routeVisible });
     this.stopLayer  = new GraphicsLayer({ title: "Stop Layer",  visible: this.routeVisible });
     this.searchLayer = new GraphicsLayer({ title: "Search Result", visible: this.searchVisible });
+    this.bufferLayer = new GraphicsLayer({ title: "Buffer Result" });
 
     this.touristAttractionLayer = new FeatureLayer({
       url: TOURIST_ATTRACTIONS_FEATURE_LAYER_URL,
@@ -466,6 +493,7 @@ export default class GISMapEngine {
     if (this.startGraphic) this.stopLayer.add(this.startGraphic);
     if (this.endGraphic) this.stopLayer.add(this.endGraphic);
     if (this.searchGraphic) this.searchLayer.add(this.searchGraphic);
+    if (this.bufferGraphic) this.bufferLayer.add(this.bufferGraphic);
 
     if (existingDrawings.length) {
       // Defensively drop any graphic with no geometry (e.g. left over from
@@ -550,6 +578,19 @@ export default class GISMapEngine {
       const graphic = this.graphicFromJSON(meta.marker);
       if (graphic) rebuilt.add(graphic);
       this.namedSearchLayers.set(id, rebuilt);
+    });
+
+    // Named buffer-result layers (see createBufferResultLayer) are
+    // reconstructed the same way and for the same reason as named
+    // search-result layers above: a fresh GraphicsLayer is cheap, and
+    // namedBufferLayerMeta (not the live layer object) is the real source of
+    // truth for its graphic/title/visibility across a 2D/3D reattachment.
+    this.namedBufferLayers = new Map();
+    this.namedBufferLayerMeta.forEach((meta, id) => {
+      const rebuilt = new GraphicsLayer({ title: meta.title, visible: meta.visible });
+      const graphic = this.graphicFromJSON(meta.polygon);
+      if (graphic) rebuilt.add(graphic);
+      this.namedBufferLayers.set(id, rebuilt);
     });
 
     const layerMap = this.buildLayerMap();
@@ -653,10 +694,14 @@ export default class GISMapEngine {
   // ever operates against a SceneView to begin with (see the sliceWidget
   // field comment). Buffer has no such technical constraint - geodesicBuffer
   // is pure geometry math, independent of the current view - so it works in
-  // both 2D and 3D. Buffer results are added to the existing drawLayer
-  // rather than a dedicated layer, so they get styling/filtering/export for
-  // free through the machinery drawings already have, tagged with
-  // attributes.analysisType so they're identifiable if that's ever needed.
+  // both 2D and 3D. Buffer results are added to their own bufferLayer
+  // (excluded from the Layers card, same treatment as route/stops/
+  // searchResult - see bufferLayer's field comment) rather than the
+  // drawings layer, since a buffer is a live, always-overwritten-by-the-
+  // next-buffer working result, not a permanent drawing. A user who wants
+  // to keep a particular buffer result uses the Buffer section's own "Add
+  // to Layers" control (createBufferResultLayer), which snapshots it into
+  // an ordinary, independently named/styled/reorderable card row.
   // ---------------------------------------------------------------------
 
   isSceneView() {
@@ -701,17 +746,27 @@ export default class GISMapEngine {
         color: [255, 140, 0, 0.3],
         outline: { color: [255, 140, 0, 0.9], width: 1.5 }
       },
-      attributes: this.buildDrawingAttributes({
+      attributes: {
         analysisType: "buffer",
         bufferDistance: distance,
         bufferUnit: unit
-      })
+      }
     });
 
-    this.drawLayer.add(graphic);
-    this.applyDrawingsFilterToGraphic(graphic);
-    this.onDrawingsChanged?.();
+    this.bufferGraphic = graphic;
+    this.bufferLayer?.removeAll();
+    this.bufferLayer?.add(graphic);
     msg?.(`Buffer created (${distance} ${unit}).`, "success");
+  }
+
+  // Clears the live, transient buffer result (bufferGraphic/bufferLayer) -
+  // called once its contents have been snapshotted into a named layer (see
+  // createBufferResultLayer/ApplicationShell), so the Buffer section returns
+  // to its empty initial state instead of leaving a now-redundant polygon
+  // (duplicating the one just saved) on the map. Mirrors clearSearchResult.
+  clearBufferResult() {
+    this.bufferGraphic = null;
+    this.bufferLayer?.removeAll();
   }
 
   // Starts/stops the ArcGIS Slice widget, which lets the user drag out a
@@ -1804,16 +1859,38 @@ export default class GISMapEngine {
       };
     });
 
-    // route/stops/searchResult are deliberately excluded from the Layers
-    // card: they're the live, always-overwritten-on-next-search working
-    // state (visibility is controlled by Route Search's own "Hide/Show
-    // Route" toggle, or the Search card's own marker, not a card row), not
-    // something a user browses/reorders/removes there. A user who wants a
-    // persistent, named entry uses "Add to Layers" in Route Search
-    // (createRouteResultLayer) or the Search card (createSearchResultLayer)
-    // instead, which each produce an ordinary card row like any other layer.
+    // Named buffer-result layers (see createBufferResultLayer) - removable
+    // like a portal/heatmap/route-result/search-result layer, no
+    // Filter/Annotate sections (a single buffer polygon has no attribute
+    // schema worth filtering on), but DOES get a Symbology section: it's a
+    // GraphicsLayer holding one real symbol'd graphic (the polygon), same
+    // reasoning as the named route/search-result layers' style groups above.
+    this.namedBufferLayers.forEach((layer, id) => {
+      const meta = this.namedBufferLayerMeta.get(id);
+      const polygonGraphic = layer.graphics.toArray().find((g) => g.symbol?.type === "simple-fill");
+      lookup[id] = {
+        id,
+        name: meta?.title || "Buffer",
+        visible: layer.visible,
+        removable: true,
+        styleGroups: polygonGraphic
+          ? [this.attachRendererInfo(this.symbolToStyleGroup(polygonGraphic.symbol, "Buffer"), id)]
+          : []
+      };
+    });
+
+    // route/stops/searchResult/buffer are deliberately excluded from the
+    // Layers card: they're the live, always-overwritten-on-next-search(or
+    // -buffer) working state (visibility is controlled by Route Search's
+    // own "Hide/Show Route" toggle, or the Search/Buffer sections' own
+    // marker/polygon, not a card row), not something a user browses/
+    // reorders/removes there. A user who wants a persistent, named entry
+    // uses "Add to Layers" in Route Search (createRouteResultLayer), the
+    // Search card (createSearchResultLayer), or the Buffer section
+    // (createBufferResultLayer) instead, which each produce an ordinary
+    // card row like any other layer.
     return l
-      .filter((id) => id !== "route" && id !== "stops" && id !== "searchResult")
+      .filter((id) => id !== "route" && id !== "stops" && id !== "searchResult" && id !== "buffer")
       .map((id) => lookup[id]);
   }
 
@@ -1853,6 +1930,11 @@ export default class GISMapEngine {
     // reason - see attachToView's search-result-layer reconstruction.
     const namedSearchMeta = this.namedSearchLayerMeta.get(id);
     if (namedSearchMeta) namedSearchMeta.visible = layer.visible;
+
+    // Named buffer-result layers need the same visible-sync, for the same
+    // reason - see attachToView's buffer-result-layer reconstruction.
+    const namedBufferMeta = this.namedBufferLayerMeta.get(id);
+    if (namedBufferMeta) namedBufferMeta.visible = layer.visible;
   }
 
   // Adds a layer picked from PortalService.searchPortalLayers as a live
@@ -2152,6 +2234,51 @@ export default class GISMapEngine {
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
+  // Snapshots the current Buffer result as a new, independently named/
+  // toggleable/removable layer in the Layers card - the discoverable "save
+  // this buffer" entry point, since the live bufferLayer (see
+  // bufferGraphic/bufferLayer) is excluded from that card and always gets
+  // overwritten by the next buffer. Throws (same throw-and-let-the-shell-
+  // toast convention as createSearchResultLayer) on a blank name or when
+  // there is no buffer currently drawn.
+  createBufferResultLayer(name) {
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) throw new Error("Please give the buffer layer a name.");
+    if (!this.bufferGraphic) throw new Error("Apply a buffer first, then add it to the layers card.");
+
+    const id = `buffer_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const meta = {
+      title: trimmedName,
+      polygon: this.graphicToJSON(this.bufferGraphic),
+      visible: true
+    };
+    this.namedBufferLayerMeta.set(id, meta);
+
+    const layer = new GraphicsLayer({ title: trimmedName, visible: true });
+    const graphic = this.graphicFromJSON(meta.polygon);
+    if (graphic) layer.add(graphic);
+    this.namedBufferLayers.set(id, layer);
+    this.layerOrder = [...this.layerOrder, id];
+
+    if (this.currentMap) this.currentMap.add(layer);
+
+    return { id, name: trimmedName };
+  }
+
+  // Removes a named buffer-result layer entirely, the same remove-not-hide
+  // behavior removeSearchResultLayer/removeRouteResultLayer/
+  // removeHeatmapLayer/removePortalLayer give other user-created layers.
+  removeBufferResultLayer(id) {
+    if (!this.namedBufferLayerMeta.has(id)) return;
+
+    const layer = this.namedBufferLayers.get(id);
+    if (layer && this.currentMap) this.currentMap.remove(layer);
+
+    this.namedBufferLayers.delete(id);
+    this.namedBufferLayerMeta.delete(id);
+    this.layerOrder = this.layerOrder.filter((x) => x !== id);
+  }
+
   // Zooms/pans the current view to the extent of one layer's content, so a
   // user can jump to e.g. just their drawings or just the MRT lines instead
   // of hunting for them at the current zoom level.
@@ -2269,6 +2396,23 @@ export default class GISMapEngine {
       return;
     }
 
+    // Named buffer-result layers (see createBufferResultLayer) have a
+    // dynamic, per-instance id ("buffer_<id>"), so they can't be a `switch`
+    // case literal either - checked the same way namedRouteLayers/
+    // namedSearchLayers are above. The edited symbol is written back into
+    // `namedBufferLayerMeta` (not just the live graphic) so it survives a
+    // 2D/3D reattachment, which rebuilds this layer's graphic from that meta
+    // snapshot - see attachToView.
+    if (this.namedBufferLayers.has(id)) {
+      const layer = this.namedBufferLayers.get(id);
+      const polygonGraphic = layer?.graphics.toArray().find((g) => g.symbol?.type === "simple-fill");
+      if (!polygonGraphic) return;
+      polygonGraphic.symbol = applySymbolStyle(polygonGraphic.symbol);
+      const meta = this.namedBufferLayerMeta.get(id);
+      if (meta) meta.polygon = this.graphicToJSON(polygonGraphic);
+      return;
+    }
+
     switch (id) {
       case "touristAttractions": {
         const template = this.ensureSimpleBase(
@@ -2359,7 +2503,7 @@ export default class GISMapEngine {
 
   // `from`/`to` are indices into what the Layers card actually displays
   // (LayerControlPanel's `layers` prop, i.e. getLayers()'s output), not raw
-  // positions in `this.layerOrder` - route/stops/searchResult occupy
+  // positions in `this.layerOrder` - route/stops/searchResult/buffer occupy
   // layerOrder slots but are filtered out of getLayers() (see its comment),
   // so a naive splice directly on layerOrder would be off by however many
   // hidden ids precede the touched position. Reorder within the
@@ -2370,7 +2514,7 @@ export default class GISMapEngine {
     const hidden = [];
     const visible = [];
     this.layerOrder.forEach((id, i) => {
-      if (id === "route" || id === "stops" || id === "searchResult") hidden.push({ id, i });
+      if (id === "route" || id === "stops" || id === "searchResult" || id === "buffer") hidden.push({ id, i });
       else visible.push(id);
     });
 
@@ -3033,11 +3177,13 @@ export default class GISMapEngine {
       heatmapLayers: Object.fromEntries(this.heatmapLayerMeta),
       namedRouteLayers: Object.fromEntries(this.namedRouteLayerMeta),
       namedSearchLayers: Object.fromEntries(this.namedSearchLayerMeta),
+      namedBufferLayers: Object.fromEntries(this.namedBufferLayerMeta),
       drawingFields: [...this.drawingFields],
       drawings: this.drawLayer.graphics.toArray().map((g) => this.graphicToJSON(g)),
       route: this.graphicToJSON(this.routeGraphic),
       stops: { start: this.graphicToJSON(this.startGraphic), end: this.graphicToJSON(this.endGraphic) },
-      searchMarker: this.graphicToJSON(this.searchGraphic)
+      searchMarker: this.graphicToJSON(this.searchGraphic),
+      bufferResult: this.graphicToJSON(this.bufferGraphic)
     };
   }
 
@@ -3110,6 +3256,7 @@ export default class GISMapEngine {
     this.heatmapLayerMeta = new Map(Object.entries(state.heatmapLayers || {}));
     this.namedRouteLayerMeta = new Map(Object.entries(state.namedRouteLayers || {}));
     this.namedSearchLayerMeta = new Map(Object.entries(state.namedSearchLayers || {}));
+    this.namedBufferLayerMeta = new Map(Object.entries(state.namedBufferLayers || {}));
 
     // Drop any layerOrder id that no longer resolves to a real layer -
     // "heat" from a project saved before heatmap became a per-layer renderer
@@ -3128,7 +3275,8 @@ export default class GISMapEngine {
       this.portalLayerMeta.has(id) ||
       this.heatmapLayerMeta.has(id) ||
       this.namedRouteLayerMeta.has(id) ||
-      this.namedSearchLayerMeta.has(id);
+      this.namedSearchLayerMeta.has(id) ||
+      this.namedBufferLayerMeta.has(id);
     this.layerOrder = state.layerOrder.filter(
       (id) => GISMapEngine.FIXED_LAYER_IDS.has(id) || knownDynamicId(id)
     );
@@ -3137,6 +3285,7 @@ export default class GISMapEngine {
     this.startGraphic = this.graphicFromJSON(state.stops?.start);
     this.endGraphic = this.graphicFromJSON(state.stops?.end);
     this.searchGraphic = this.graphicFromJSON(state.searchMarker);
+    this.bufferGraphic = this.graphicFromJSON(state.bufferResult);
 
     this.drawLayer.removeAll();
     const drawings = (state.drawings || []).map((entry) => this.graphicFromJSON(entry)).filter(Boolean);

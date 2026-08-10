@@ -45,6 +45,40 @@ SaveRouteLayerForm.propTypes = {
   saving: PropTypes.bool
 };
 
+// "Add to Layers" for Buffer - same reasoning/shape as SaveRouteLayerForm
+// above: the live buffer result has no row of its own in the Layers card
+// (see GISMapEngine.getLayers's comment), so this is the only way to keep a
+// particular buffer result around once a later buffer overwrites it.
+function SaveBufferLayerForm({ hasBuffer, name, onNameChange, onSave, saving }) {
+  if (!hasBuffer) {
+    return <p className="analysis-tool-hint">Apply a buffer first, then add it to the layers card.</p>;
+  }
+
+  return (
+    <label className="analysis-aggregate-field">
+      <span>Save buffer as layer</span>
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => onNameChange(e.target.value)}
+        placeholder="e.g. 500m Safety Zone"
+        aria-label="New buffer layer name"
+      />
+      <button type="button" className="gis-button" disabled={!name.trim() || saving} onClick={onSave}>
+        {saving ? "Adding…" : "Add to Layers"}
+      </button>
+    </label>
+  );
+}
+
+SaveBufferLayerForm.propTypes = {
+  hasBuffer: PropTypes.bool,
+  name: PropTypes.string.isRequired,
+  onNameChange: PropTypes.func.isRequired,
+  onSave: PropTypes.func.isRequired,
+  saving: PropTypes.bool
+};
+
 // Route Search, Buffer, and Slice are the three tools under this card.
 // Buffer works in both 2D and 3D (geodesicBuffer is pure geometry math,
 // independent of the current view). Slice wraps an ArcGIS widget that only
@@ -68,6 +102,8 @@ export default function AnalysisPanel({
   isRouting,
   hasRoute,
   onCreateRouteLayer,
+  hasBuffer,
+  onCreateBufferLayer,
   layers,
   onCreateHeatmapLayer
 }) {
@@ -77,6 +113,8 @@ export default function AnalysisPanel({
   const [unit, setUnit] = useState("meters");
   const [routeLayerName, setRouteLayerName] = useState("");
   const [creatingRouteLayer, setCreatingRouteLayer] = useState(false);
+  const [bufferLayerName, setBufferLayerName] = useState("");
+  const [creatingBufferLayer, setCreatingBufferLayer] = useState(false);
   const [heatmapSourceId, setHeatmapSourceId] = useState("");
   const [heatmapName, setHeatmapName] = useState("");
   const [creatingHeatmap, setCreatingHeatmap] = useState(false);
@@ -106,6 +144,22 @@ export default function AnalysisPanel({
       setRouteLayerName("");
     } finally {
       setCreatingRouteLayer(false);
+    }
+  };
+
+  // Saves the current buffer result under a user-given name as a new
+  // Layers-card row (see GISMapEngine.createBufferResultLayer) - the buffer
+  // itself has no card row of its own (it's just the live, always-
+  // overwritten-by-the-next-buffer working state), so this is the only way
+  // to keep a particular buffer result around after a later buffer is run.
+  const handleCreateBufferLayer = async () => {
+    if (!bufferLayerName.trim() || !onCreateBufferLayer) return;
+    setCreatingBufferLayer(true);
+    try {
+      await onCreateBufferLayer(bufferLayerName.trim());
+      setBufferLayerName("");
+    } finally {
+      setCreatingBufferLayer(false);
     }
   };
 
@@ -230,6 +284,16 @@ export default function AnalysisPanel({
                 >
                   Apply Buffer
                 </button>
+
+                {onCreateBufferLayer && (
+                  <SaveBufferLayerForm
+                    hasBuffer={hasBuffer}
+                    name={bufferLayerName}
+                    onNameChange={setBufferLayerName}
+                    onSave={handleCreateBufferLayer}
+                    saving={creatingBufferLayer}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -344,6 +408,8 @@ AnalysisPanel.propTypes = {
   isRouting: PropTypes.bool,
   hasRoute: PropTypes.bool,
   onCreateRouteLayer: PropTypes.func,
+  hasBuffer: PropTypes.bool,
+  onCreateBufferLayer: PropTypes.func,
   layers: PropTypes.array,
   onCreateHeatmapLayer: PropTypes.func
 };

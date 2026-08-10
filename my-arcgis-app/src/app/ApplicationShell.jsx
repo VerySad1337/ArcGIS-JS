@@ -371,11 +371,31 @@ export default function ApplicationShell() {
     }
   };
 
+  // "Add to Layers" in the Buffer section's discoverable way to keep a
+  // buffer result around: buffer is excluded from the Layers card (see
+  // GISMapEngine.getLayers's comment) since it's just the live, always-
+  // overwritten-by-the-next-buffer working state - this snapshots the
+  // current polygon into a brand-new, independently named/toggleable/
+  // removable layer instead. Same throw-and-toast convention as
+  // createRouteResultLayer/createSearchResultLayer (blank name / no buffer
+  // yet). Once saved, the live buffer is cleared (engine.clearBufferResult)
+  // the same way a saved search result clears its own live marker.
+  const createBufferResultLayer = (name) => {
+    try {
+      const { name: savedName } = engineRef.current.createBufferResultLayer(name);
+      engineRef.current.clearBufferResult();
+      refreshLayers();
+      showToast(`Added buffer layer "${savedName}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to add buffer layer.", "error");
+    }
+  };
+
   // A single remove handler for every removable dynamic layer
   // (LayerControlPanel's remove button doesn't distinguish where a layer
   // came from) - dispatches on the synthetic id's prefix, the same
-  // "heatmap_<id>"/"portal_<itemId>"/"route_<id>"/"search_<id>" id-space
-  // convention all four engine methods already use.
+  // "heatmap_<id>"/"portal_<itemId>"/"route_<id>"/"search_<id>"/
+  // "buffer_<id>" id-space convention all five engine methods already use.
   const removeLayer = (id) => {
     if (id.startsWith("heatmap_")) {
       engineRef.current.removeHeatmapLayer(id);
@@ -383,6 +403,8 @@ export default function ApplicationShell() {
       engineRef.current.removeRouteResultLayer(id);
     } else if (id.startsWith("search_")) {
       engineRef.current.removeSearchResultLayer(id);
+    } else if (id.startsWith("buffer_")) {
+      engineRef.current.removeBufferResultLayer(id);
     } else {
       engineRef.current.removePortalLayer(id);
     }
@@ -619,6 +641,8 @@ export default function ApplicationShell() {
           isRouting={isRouting}
           hasRoute={Boolean(engineRef.current?.routeGraphic)}
           onCreateRouteLayer={createRouteResultLayer}
+          hasBuffer={Boolean(engineRef.current?.bufferGraphic)}
+          onCreateBufferLayer={createBufferResultLayer}
           layers={layers}
           onCreateHeatmapLayer={createHeatmapLayer}
         />
