@@ -270,7 +270,15 @@ export default class GISMapEngine {
   clickHandle = null;
   onDrawingsChanged = null;
   onDrawStateChange = null;
+  onFeatureAddedToLayer = null;
+  onDrawTargetError = null;
   activeDrawType = null;
+
+  // Which layer a completed sketch is persisted to. "drawings" (the default)
+  // keeps the existing local-only behavior; any other value must resolve via
+  // hostedLayerById (see setDrawTarget) and routes the completed graphic
+  // through addFeatureToHostedLayer instead of leaving it on drawLayer.
+  activeDrawTargetLayerId = "drawings";
 
   // Client-side "schema" for the drawings layer: drawLayer is a local
   // GraphicsLayer with no backing service, so added columns are tracked
@@ -370,6 +378,20 @@ export default class GISMapEngine {
   // the map is armed after picking a draw tool.
   setOnDrawStateChange(callback) {
     this.onDrawStateChange = callback;
+  }
+
+  // Notifies the shell when a sketch completed on drawLayer was successfully
+  // pushed to a hosted/portal draw target (see setDrawTarget /
+  // addFeatureToHostedLayer), so it can refresh the layer list and toast.
+  setOnFeatureAddedToLayer(callback) {
+    this.onFeatureAddedToLayer = callback;
+  }
+
+  // Notifies the shell when a sketch's push to a hosted/portal draw target
+  // failed (the graphic itself is left on drawLayer - see the sketchVM
+  // "create" handler), so the shell can toast the reason.
+  setOnDrawTargetError(callback) {
+    this.onDrawTargetError = callback;
   }
 
   // Must be called BEFORE the outgoing <arcgis-map>/<arcgis-scene> custom
@@ -601,9 +623,37 @@ export default class GISMapEngine {
         this.onDrawStateChange?.(this.activeDrawType);
       } else if (event.state === "complete") {
         event.graphic.attributes = this.buildDrawingAttributes();
-        this.applyDrawingsFilterToGraphic(event.graphic);
-        this.applyDrawingsRendererToGraphic(event.graphic);
-        this.onDrawingsChanged?.();
+
+        // SketchViewModel has no way to sketch directly onto an arbitrary
+        // FeatureLayer - it only ever draws onto the GraphicsLayer it was
+        // constructed with (drawLayer). When the user has picked a
+        // non-"drawings" target, the graphic still lands on drawLayer first;
+        // we then try to persist it to the target hosted layer and, only on
+        // success, remove the local copy. A failed push leaves the graphic on
+        // drawLayer (styled/filtered like any other drawing) so the user's
+        // sketch is never silently lost. The target is read here, at
+        // "complete" time, not at "start" - switching the dropdown mid-sketch
+        // only affects where the *next* completed sketch goes.
+        const targetLayerId = this.activeDrawTargetLayerId;
+        if (targetLayerId === "drawings") {
+          this.applyDrawingsFilterToGraphic(event.graphic);
+          this.applyDrawingsRendererToGraphic(event.graphic);
+          this.onDrawingsChanged?.();
+        } else {
+          const graphic = event.graphic;
+          this.addFeatureToHostedLayer(targetLayerId, graphic)
+            .then(() => {
+              this.drawLayer.remove(graphic);
+              this.onFeatureAddedToLayer?.(targetLayerId);
+            })
+            .catch((err) => {
+              this.applyDrawingsFilterToGraphic(graphic);
+              this.applyDrawingsRendererToGraphic(graphic);
+              this.onDrawingsChanged?.();
+              this.onDrawTargetError?.(err.message);
+            });
+        }
+
         this.activeDrawType = null;
         this.onDrawStateChange?.(null);
       } else if (event.state === "cancel") {
@@ -1877,7 +1927,8 @@ export default class GISMapEngine {
         filterable: true,
         filterDescription: this.getLayerFilterDescription("touristAttractions"),
         annotatable: true,
-        annotationField: this.getLayerAnnotationField("touristAttractions")
+        annotationField: this.getLayerAnnotationField("touristAttractions"),
+        canBeDrawTarget: this.touristAttractionLayer?.capabilities?.operations?.supportsAdd === true
       },
       mrtStations: {
         id: "mrtStations",
@@ -1889,7 +1940,8 @@ export default class GISMapEngine {
         filterable: true,
         filterDescription: this.getLayerFilterDescription("mrtStations"),
         annotatable: true,
-        annotationField: this.getLayerAnnotationField("mrtStations")
+        annotationField: this.getLayerAnnotationField("mrtStations"),
+        canBeDrawTarget: this.mrtStationLayer?.capabilities?.operations?.supportsAdd === true
       },
       mrtLines: {
         id: "mrtLines",
@@ -1901,7 +1953,8 @@ export default class GISMapEngine {
         filterable: true,
         filterDescription: this.getLayerFilterDescription("mrtLines"),
         annotatable: true,
-        annotationField: this.getLayerAnnotationField("mrtLines")
+        annotationField: this.getLayerAnnotationField("mrtLines"),
+        canBeDrawTarget: this.mrtLineLayer?.capabilities?.operations?.supportsAdd === true
       },
       drawings: {
         id: "drawings",
@@ -1954,7 +2007,8 @@ export default class GISMapEngine {
         filterable: true,
         filterDescription: this.getLayerFilterDescription(id),
         annotatable: true,
-        annotationField: this.getLayerAnnotationField(id)
+        annotationField: this.getLayerAnnotationField(id),
+        canBeDrawTarget: layer.capabilities?.operations?.supportsAdd === true
       };
     });
 
@@ -2134,8 +2188,17 @@ export default class GISMapEngine {
       });
       // ArcGIS REST reports authorization failures as HTTP 200 with an error
       // body, so a resolved promise is not on its own proof of access.
-      return !response?.data?.error;
-    } catch {
+      if (response?.data?.error) {
+        // Temporary diagnostic (2026-08): this branch normally just returns
+        // false silently; logging the actual error body here so a
+        // freshly-created layer's "not (yet) accessible" reason is visible
+        // instead of collapsing to one generic downstream message.
+        console.warn("canAccessPortalService: error body for", url, response.data.error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn("canAccessPortalService: request threw for", url, err);
       return false;
     }
   }
@@ -2180,6 +2243,184 @@ export default class GISMapEngine {
     await layer.load().catch(() => {});
 
     return layerId;
+  }
+
+  static DRAW_GEOMETRY_TYPE_TO_ESRI = {
+    point: "esriGeometryPoint",
+    polyline: "esriGeometryPolyline",
+    polygon: "esriGeometryPolygon"
+  };
+
+  static DRAW_FIELD_TYPE_TO_ESRI = {
+    text: "esriFieldTypeString",
+    number: "esriFieldTypeDouble",
+    date: "esriFieldTypeDate"
+  };
+
+  // Provisions a brand-new hosted Feature Layer on the portal (point/
+  // polyline/polygon) and registers it exactly like a layer added via portal
+  // search. Two admin REST calls, both gated by the same findCredential ->
+  // throw -> getCredential pattern as addColumnToLayer, keyed off the portal
+  // sharing root since no service exists yet to key a per-service credential
+  // off of:
+  //   1. createService - provisions an empty hosted feature service. AGOL
+  //      defaults an omitted `capabilities` to Query-only, so it's requested
+  //      explicitly here; without it, the layer would come back read-only
+  //      and every draw-target push to it would fail supportsAdd.
+  //   2. addToDefinition (service-level, no /{layerId} suffix) - adds the
+  //      one layer with the requested geometry type and field schema.
+  // On success, hands off to addPortalLayer for registration so there is
+  // exactly one place that owns portalLayers/portalLayerMeta/layerOrder
+  // bookkeeping. No rollback is attempted if step 2 fails after step 1
+  // succeeds (deleting a portal item is its own privileged, failure-prone
+  // call) - the error names the orphaned item so the user can clean it up.
+  async createHostedFeatureLayer({ name, geometryType, fields = [] }) {
+    if (!name?.trim()) throw new Error("Layer name is required.");
+
+    const esriGeometryType = GISMapEngine.DRAW_GEOMETRY_TYPE_TO_ESRI[geometryType];
+    if (!esriGeometryType) throw new Error("Choose a geometry type.");
+
+    const existingCredential = IdentityManager.findCredential(`${PORTAL_URL}/sharing`);
+    if (!existingCredential) {
+      throw new Error("Sign in with an ArcGIS account to create a feature layer.");
+    }
+
+    const credential = await IdentityManager.getCredential(`${PORTAL_URL}/sharing`);
+
+    const createBody = new FormData();
+    createBody.append("f", "json");
+    createBody.append("token", credential.token);
+    createBody.append("outputType", "featureService");
+    createBody.append(
+      "createParameters",
+      JSON.stringify({
+        name: name.trim(),
+        serviceDescription: "",
+        hasStaticData: false,
+        maxRecordCount: 2000,
+        capabilities: "Create,Delete,Query,Update,Editing",
+        spatialReference: { wkid: 102100 },
+        allowGeometryUpdates: true,
+        units: "esriMeters",
+        xssPreventionInfo: {
+          xssPreventionEnabled: true,
+          xssPreventionRule: "InputOnly",
+          xssInputRule: "rejectInvalid"
+        }
+      })
+    );
+
+    const createResponse = await esriRequest(
+      `${PORTAL_URL}/sharing/rest/content/users/${credential.userId}/createService`,
+      { method: "post", responseType: "json", body: createBody }
+    );
+
+    if (createResponse.data?.error) {
+      throw new Error(createResponse.data.error.message || "Failed to create feature service.");
+    }
+
+    const { encodedServiceURL, itemId } = createResponse.data;
+
+    // Service-level addToDefinition (adding a brand-new layer to a service
+    // that has none yet) requires the ADMIN REST path
+    // (".../rest/admin/services/...") - unlike the layer-level addToDefinition
+    // addColumnToLayer already uses successfully (adding a field to a layer
+    // that already exists), which the public, non-admin FeatureServer URL
+    // does expose directly. Posting this operation to the public path
+    // instead returns a real 200-with-error-body response whose message is
+    // "The requested layer (layerId: addToDefinition) was not found." - the
+    // public FeatureServer router tries to resolve "addToDefinition" as if
+    // it were a layer id/name path segment, since it has no route for this
+    // operation at the service root.
+    const adminServiceURL = encodedServiceURL.replace("/rest/services/", "/rest/admin/services/");
+
+    const addDefBody = new FormData();
+    addDefBody.append("f", "json");
+    addDefBody.append("token", credential.token);
+    addDefBody.append(
+      "addToDefinition",
+      JSON.stringify({
+        layers: [
+          {
+            name: name.trim(),
+            type: "Feature Layer",
+            geometryType: esriGeometryType,
+            spatialReference: { wkid: 102100 },
+            objectIdField: "OBJECTID",
+            fields: [
+              { name: "OBJECTID", type: "esriFieldTypeOID", alias: "OBJECTID", nullable: false, editable: false },
+              ...fields.map((f) => ({
+                name: f.name,
+                type: GISMapEngine.DRAW_FIELD_TYPE_TO_ESRI[f.type] || "esriFieldTypeString",
+                alias: f.name,
+                nullable: true,
+                editable: true
+              }))
+            ],
+            capabilities: "Create,Delete,Query,Update,Editing"
+          }
+        ]
+      })
+    );
+
+    const addDefResponse = await esriRequest(`${adminServiceURL}/addToDefinition`, {
+      method: "post",
+      responseType: "json",
+      body: addDefBody
+    });
+
+    if (addDefResponse.data?.error) {
+      throw new Error(
+        `Service "${name.trim()}" was created but its layer definition failed (${
+          addDefResponse.data.error.message || "unknown error"
+        }). Open the ArcGIS portal and delete item ${itemId} manually, then try again.`
+      );
+    }
+
+    return this.addPortalLayer({ id: itemId, title: name.trim(), url: `${encodedServiceURL}/0` });
+  }
+
+  // Validates and sets the layer a completed sketch is pushed to (see the
+  // sketchVM "create" handler in attachToView). "drawings" is always valid;
+  // anything else must resolve through hostedLayerById.
+  setDrawTarget(layerId) {
+    if (layerId !== "drawings" && !this.hostedLayerById(layerId)) {
+      throw new Error("That layer is not available as a draw target.");
+    }
+    this.activeDrawTargetLayerId = layerId;
+  }
+
+  // Persists a single newly-sketched graphic to a hosted/portal FeatureLayer
+  // via applyEdits({ addFeatures }). Mirrors updateSelectedFeatureAttributes's
+  // capability gate (supportsAdd instead of supportsUpdate) and
+  // addColumnToLayer's findCredential -> throw -> getCredential gate, for the
+  // same "never force a sign-in" reason documented on both of those methods.
+  async addFeatureToHostedLayer(layerId, graphic) {
+    const layer = this.hostedLayerById(layerId);
+    if (!layer) throw new Error("Layer not found.");
+
+    if (layer.capabilities?.operations?.supportsAdd === false) {
+      throw new Error(`"${layer.title}" does not allow adding new features.`);
+    }
+
+    const existingCredential =
+      IdentityManager.findCredential(layer.url) ||
+      IdentityManager.findCredential(`${PORTAL_URL}/sharing`);
+
+    if (!existingCredential) {
+      throw new Error("Sign in with an account that can edit this layer to add features.");
+    }
+
+    await IdentityManager.getCredential(layer.url);
+
+    const result = await layer.applyEdits({ addFeatures: [graphic] });
+    const addResult = result.addFeatureResults?.[0];
+
+    if (addResult?.error) {
+      throw new Error(addResult.error.message || "Failed to add feature.");
+    }
+
+    return { success: true, objectId: addResult.objectId };
   }
 
   // Removes a portal-added layer entirely (not just hides it), since unlike

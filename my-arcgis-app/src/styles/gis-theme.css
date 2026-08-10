@@ -564,30 +564,35 @@ arcgis-scene {
   color: var(--text-muted);
 }
 
-.portal-account-row {
+.account-button {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   padding: var(--space-2);
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.04);
-}
-
-.portal-account-status {
-  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-.portal-account-status strong {
+.account-button-signed-in {
   color: white;
 }
 
-.portal-account-btn {
+.account-button-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-button-action {
   flex-shrink: 0;
   width: auto;
   margin-top: 0;
+  margin-left: auto;
   padding: 4px 10px;
   font-size: var(--text-xs);
 }
@@ -645,6 +650,33 @@ arcgis-scene {
 
 .portal-result-add-btn:hover {
   background: linear-gradient(90deg, var(--accent-hover), var(--accent-strong));
+}
+
+.portal-field-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.portal-field-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+}
+
+.portal-field-row select {
+  flex: 0 0 auto;
+}
+
+.portal-field-remove-btn {
+  flex-shrink: 0;
+  width: auto;
+  padding: 5px;
+  margin-top: 0;
 }
 
 .global-search-empty {
@@ -1337,6 +1369,45 @@ input[type="range"] {
 
 .fab-upload input{
   display:none;
+}
+
+/* "Draw into" layer picker, stacked in the same fan as the draw tools so it
+   shares their open/closed transition instead of needing its own. */
+.draw-target-select{
+  display:flex;
+  align-items:center;
+  gap:var(--space-2);
+
+  border:1px solid rgba(56, 189, 248, 0.2);
+  border-radius:var(--radius-pill);
+  padding:6px 12px;
+
+  background:var(--surface-1);
+  color:var(--text-muted);
+  font-size:var(--text-xs);
+  white-space:nowrap;
+
+  opacity:0;
+  pointer-events:none;
+  transform:translateY(8px) scale(.95);
+
+  transition:transform .2s cubic-bezier(.34,1.56,.64,1), opacity .15s ease;
+
+  box-shadow:0 4px 10px rgba(0,0,0,.3);
+}
+
+.fab-container.open .draw-target-select{
+  opacity:1;
+  pointer-events:auto;
+  transform:translateY(0) scale(1);
+}
+
+.draw-target-select select{
+  background:#0f172a;
+  color:#fff;
+  border:1px solid rgba(255, 255, 255, 0.15);
+  border-radius:var(--radius-sm);
+  padding:4px 6px;
 }
 
 @media (max-width: 768px) {

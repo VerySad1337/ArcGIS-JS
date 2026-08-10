@@ -8,3 +8,16 @@
 **/coverage
 sonar-project.properties
 Dockerfile
+
+# Real secrets (VITE_ARCGIS_API_KEY, VITE_ARCGIS_OAUTH_CLIENT_ID) live here.
+# Without this, `COPY my-arcgis-app/. .` in the Dockerfile's build stage
+# copies my-arcgis-app/.env straight into that stage's image layer - even
+# though the final nginx stage only copies dist/ out of it, the build
+# stage's own layers (and anything built with --target build, or pushed/
+# cached) still contain the raw file. Build-time config must reach the
+# image only via explicit ARG/ENV (see Dockerfile), never via a copied
+# .env - Compose already reads .env directly off disk to fill in those
+# ARGs' values without it ever entering the build context.
+**/.env
+**/.env.*
+!**/.env.example

@@ -90,6 +90,10 @@ The SketchViewModel fix above only protects an in-*progress* sketch. Completed d
 
 Fix: `GISMapEngine.detachFromView()` calls `this.currentMap?.removeAll()` (detach only, not destroy) and is invoked from `ApplicationShell.toggleViewMode` synchronously, before the `setIs3D(next)` call that triggers the unmount. This pulls all engine-owned layers off the doomed map before React ever tears it down, so they survive independently of whether (or how quickly) the new view becomes ready. See `knowledge/architecture.md`'s "2D/3D Synchronization" section for the full root-cause writeup.
 
+## Draw Target Routing (2026-08)
+
+A completed sketch is no longer always local-only. `GISMapEngine.activeDrawTargetLayerId` (default `"drawings"`, set via `setDrawTarget`) lets the user pick, via `FloatingDrawTools`' "Draw into" selector, a hosted/portal `FeatureLayer` to persist new sketches to instead. Since `SketchViewModel` can only ever draw onto the `GraphicsLayer` it was constructed with, a completed graphic always lands on `drawLayer` first regardless of target; when the target isn't `"drawings"`, the `"complete"` handler then pushes it to the target layer via `addFeatureToHostedLayer` (an authenticated `applyEdits({ addFeatures })` call) and only removes the local copy on success — a failed push leaves the graphic on `drawLayer`, styled/filtered like any other drawing, so nothing is lost. See `knowledge/index.md`'s Hosted Feature Layer Creation section for the full design, including how a brand-new hosted layer eligible as a draw target gets created in the first place.
+
 ## Limitations
 - **Geometry Types** – Only point, polyline, and polygon are supported via SketchViewModel.
 - **Spatial Reference** – Upload conversion forces Web Mercator (wkid 3857); other spatial references are not handled.

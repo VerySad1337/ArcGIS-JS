@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <!--
+      Required by AuthService.js's OAuthInfo({ popup: true }) - OAuthInfo.popupCallbackUrl
+      defaults to "oauth-callback.html" and the ArcGIS portal redirects the sign-in popup
+      here after the user authorizes. Without this file, the popup falls through to the
+      SPA's index.html instead (via nginx.conf's try_files/index.html fallback in
+      production, or Vite's dev-server history-API fallback in `npm run dev`), which
+      never completes the handshake back to the opener window - the popup just shows the
+      whole app again and the original tab's IdentityManager.getCredential() call hangs
+      until the user manually closes the popup, surfacing as a "sign-in cancelled" toast.
+
+      Verbatim copy of Esri's reference implementation (linked from OAuthInfo's own
+      popupCallbackUrl docs): https://github.com/Esri/jsapi-resources/blob/main/oauth/oauth-callback.html
+      Deliberately dependency-free (no @arcgis/core import) so it works regardless of
+      which @arcgis/core version this app is on - IdentityManager listens for the
+      "arcgis:auth:hash"/"arcgis:auth:location:search" events dispatched here, or reads
+      via `esri/kernel` when available, so nothing here needs to track the SDK's version.
+    -->
+    <script>
+      function loadHandler() {
+        if (opener) {
+          if (location.hash) {
+            try {
+              var esriId = opener.require("esri/kernel").id;
+            } catch (e) {}
+            if (esriId) {
+              esriId.setOAuthResponseHash(location.hash);
+            } else {
+              opener.dispatchEvent(new CustomEvent("arcgis:auth:hash", { detail: location.hash }));
+            }
+          } else if (location.search) {
+            opener.dispatchEvent(new CustomEvent("arcgis:auth:location:search", { detail: location.search }));
+          }
+        }
+        close();
+      }
+    </script>
+  </head>
+  <body onload="loadHandler();"></body>
+</html>

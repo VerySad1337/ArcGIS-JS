@@ -3,11 +3,22 @@
 **Purpose:** Documents how the app is built and containerized for deployment.
 
 **Key Files:**
-- `Dockerfile` (repo root) – multi-stage build: `node:22-alpine` builds the Vite app in `my-arcgis-app/`, then `nginx:alpine` serves the resulting `dist/` on port 80, using `nginx.conf` (below) instead of the image's default server block.
-- `nginx.conf` (repo root) – sets the caching policy the SPA needs (see "Stale-deploy 404s on 2D/3D toggle" below): `/assets/*` (Vite's content-hashed JS/CSS chunks) get `Cache-Control: public, max-age=31536000, immutable`; `index.html` gets `Cache-Control: no-cache` so it always revalidates. `location / { try_files $uri $uri/ /index.html; }` is the standard SPA fallback (the app has no client-side router today, but this costs nothing and avoids a 404 if one is added later).
-- `docker-compose.yml` (repo root) – one `arcgis-app` service that builds from the repo-root context and publishes `8080:80`. It passes `VITE_ARCGIS_API_KEY: ${VITE_ARCGIS_API_KEY}` as a build arg.
-- `.dockerignore` (repo root) – excludes `node_modules`, `dist`, `.git`, `.vscode`, `.vite`, `.scannerwork`, `coverage`, `sonar-project.properties`, and `Dockerfile` itself from the build context. `nginx.conf` is **not** excluded — it must reach the build context for `COPY nginx.conf /etc/nginx/conf.d/default.conf` to succeed.
+- `Dockerfile` (repo root) – multi-stage build: `node:22-alpine` builds the Vite app in `my-arcgis-app/`, then `nginx:alpine` serves the resulting `dist/` over **HTTPS on port 443** (see "Local HTTPS" below), using `nginx.conf` (below) instead of the image's default server block.
+- `nginx.conf` (repo root) – sets the caching policy the SPA needs (see "Stale-deploy 404s on 2D/3D toggle" below): `/assets/*` (Vite's content-hashed JS/CSS chunks) get `Cache-Control: public, max-age=31536000, immutable`; `index.html` gets `Cache-Control: no-cache` so it always revalidates. `location / { try_files $uri $uri/ /index.html; }` is the standard SPA fallback (the app has no client-side router today, but this costs nothing and avoids a 404 if one is added later). The server block listens on `443 ssl` rather than `80`.
+- `docker-compose.yml` (repo root) – one `arcgis-app` service that builds from the repo-root context and publishes `8080:443` (container's HTTPS port, mapped to `https://localhost:8080` on the host). It passes `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, and `VITE_ARCGIS_PORTAL_URL` as build args, all sourced from the untracked root `.env`.
+- `.dockerignore` (repo root) – excludes `node_modules`, `dist`, `.git`, `.vscode`, `.vite`, `.scannerwork`, `coverage`, `sonar-project.properties`, `Dockerfile` itself, and (2026-08) `**/.env`/`**/.env.*` from the build context — see "Resolved — OAuth build-arg wiring + a real `.env`-in-image leak" below for why the `.env` exclusion matters. `nginx.conf` is **not** excluded — it must reach the build context for `COPY nginx.conf /etc/nginx/conf.d/default.conf` to succeed.
+- `my-arcgis-app/public/oauth-callback.html` – static page the ArcGIS sign-in popup redirects to on completion; see "OAuth popup callback page" below.
 - `my-arcgis-app/package.json` – `build` script (`vite build`) invoked inside the Docker build stage.
+
+### Local HTTPS (2026-08)
+
+**Why:** OAuth sign-in (see `knowledge/index.md`'s Portal Sign-In section) and several browser APIs (`IdentityManager`'s popup flow among them) behave more predictably served over HTTPS, and testing against `https://localhost:8080` mirrors production more closely than plain HTTP. The container now terminates TLS itself rather than requiring an external reverse proxy for local use.
+
+**How:** the `nginx:alpine` stage generates a **self-signed certificate at image build time** (`RUN openssl req -x509 -nodes ... -subj "/CN=localhost"`, writing `/etc/nginx/ssl/localhost.{crt,key}`) — regenerated fresh on every build rather than committed, so no private key sits in the repo or image registry history. `nginx.conf`'s server block listens on `443 ssl` and points `ssl_certificate`/`ssl_certificate_key` at those two files. The `Dockerfile` now `EXPOSE`s `443` (not `80`), and `docker-compose.yml` publishes `"8080:443"` — so `docker compose up --build` serves the app at `https://localhost:8080`.
+
+**Expect a browser certificate warning.** Nothing signs this certificate except itself, so every browser will flag it as untrusted (e.g. Chrome's "Your connection is not private") on first visit — click through/accept it (or add it to your OS/browser trust store) to proceed. This is expected for local dev; swap in a real certificate (e.g. from a reverse proxy or Let's Encrypt) before exposing this image anywhere beyond `localhost`.
+
+**Interaction with the "OAuth cannot be configured for a Docker/Compose build" gap below still applies** — HTTPS on its own does not make `VITE_ARCGIS_OAUTH_CLIENT_ID` reach a Docker build; that gap is tracked separately in the Postmortem section.
 
 ### Stale-deploy 404s on 2D/3D toggle (2026-08)
 
@@ -60,13 +71,31 @@ Two lessons encoded in the current setup:
   docker exec <container> grep -ro "AAPT" /usr/share/nginx/html/assets | wc -l
   ```
 - **Check how the app is actually run before touching build configuration.** `npm run dev` and `docker compose` read different env files; a file that is inert for one can be load-bearing for the other.
-- **OAuth cannot be configured for a Docker/Compose build at all.** `VITE_ARCGIS_OAUTH_CLIENT_ID` and `VITE_ARCGIS_PORTAL_URL` are read by the app but never passed through as build args — `docker-compose.yml` forwards only `VITE_ARCGIS_API_KEY` and the `Dockerfile` declares only that one `ARG`. A containerized deployment therefore always runs anonymous-only, regardless of what `my-arcgis-app/.env` says, because that file is `.dockerignore`d/not copied and Vite inlines these at build time. Fixing this needs a new `ARG`/`ENV` pair in the `Dockerfile` plus a matching entry under `build.args` in `docker-compose.yml`.
+
+**Resolved (2026-08) — OAuth build-arg wiring + a real `.env`-in-image leak.** Two related issues, found and fixed together:
+1. **`my-arcgis-app/.env` was never actually excluded from the Docker build context**, despite this file previously (incorrectly) documenting otherwise. `.dockerignore` had no `.env` entry, so the `Dockerfile`'s `COPY my-arcgis-app/. .` copied the real file — real `VITE_ARCGIS_API_KEY` and (once OAuth was configured) real `VITE_ARCGIS_OAUTH_CLIENT_ID` included — straight into the build stage's image layer. Only the final `nginx:alpine` stage's `dist/` output was ever *meant* to ship, but the build stage's own layers still exist locally (build cache) and would ship too if that stage were ever pushed or targeted directly (`--target build`). Fixed: `.dockerignore` now excludes `**/.env`/`**/.env.*` (keeping a future `.env.example` un-ignored via `!**/.env.example`), the same pattern already used for `node_modules`/`.git`/etc.
+2. **This is also what had been silently masking the "OAuth cannot be configured for a Docker/Compose build" gap** this section used to describe: with `.env` accidentally present in the build context, Vite picked up `VITE_ARCGIS_OAUTH_CLIENT_ID` from the copied file rather than from an explicit build arg — so OAuth appeared to "work" in a containerized build, but only as an accidental side effect of the secrets leak above, not through any real, intentional plumbing. Fixed properly, alongside the leak: the `Dockerfile` now declares `ARG`/`ENV` pairs for `VITE_ARCGIS_OAUTH_CLIENT_ID` and `VITE_ARCGIS_PORTAL_URL` (both defaulting to `""`, unlike `VITE_ARCGIS_API_KEY` — blank is a legitimate, intended value for either, matching `AuthService.isOAuthConfigured()`'s "OAuth is opt-in" behavior outside Docker), and `docker-compose.yml` forwards both under `build.args`, sourced from the untracked root `.env` the same way `VITE_ARCGIS_API_KEY` already was (via `${VAR:-}`, not `${VAR:?...}`, since a missing value here should build anonymous-only rather than abort).
+
+Verified post-fix: `docker run --rm --entrypoint sh <image> -c "find / -maxdepth 4 -iname '*.env*'"` finds nothing under the image root, and `docker exec <container> grep -rl "<the real client id>" /usr/share/nginx/html/assets` still finds it — confirming the *value* reaches the built bundle via the intended build-arg path while the *file* itself no longer reaches the image at all.
+
+### OAuth popup callback page (2026-08)
+
+**Symptom:** clicking "Sign in to ArcGIS" opens a popup that loads the *entire app again* at `<origin>/oauth-callback.html` instead of completing sign-in and closing itself; the original tab never detects a signed-in user, and closing the popup manually surfaces a "sign-in cancelled" toast there.
+
+**Root cause:** `OAuthInfo` (`AuthService.js`, `popup: true`) defaults `popupCallbackUrl` to the relative path `"oauth-callback.html"` — the ArcGIS portal redirects the popup there once the user authorizes, and a small static page at that path is expected to read the auth result out of the URL and hand it back to the opener window via `IdentityManager`'s postMessage-style handshake, then close itself. No such file existed in `my-arcgis-app/public/`, so the popup fell through to the SPA's own catch-all routing (nginx's `try_files ... /index.html` in production, Vite's dev-server history-API fallback locally) and rendered the whole React app instead — which has no idea it's inside an OAuth callback, so the handshake never completes.
+
+**Fix:** added `my-arcgis-app/public/oauth-callback.html`, a verbatim copy of Esri's own reference implementation (linked directly from `OAuthInfo.popupCallbackUrl`'s doc comments in the installed `@arcgis/core` package: https://github.com/Esri/jsapi-resources/blob/main/oauth/oauth-callback.html). Deliberately has no `@arcgis/core` import/CDN dependency — it dispatches a plain `arcgis:auth:hash`/`arcgis:auth:location:search` `CustomEvent` on `window.opener` (falling back to `opener.require("esri/kernel").id.setOAuthResponseHash(...)` when available) and calls `close()`, so it works regardless of which `@arcgis/core` version this app is pinned to, with no version-matching required. Vite's `public/` directory is copied to the build output root as-is, so this becomes `dist/oauth-callback.html` / `https://localhost:8080/oauth-callback.html` automatically — no build config change needed.
 
 **Build & run:**
 ```
-# Plain Docker — key passed explicitly
-docker build --build-arg VITE_ARCGIS_API_KEY=<key> -t arcgis-app .
-docker run -p 8080:80 arcgis-app
+# Plain Docker — key passed explicitly; OAuth args are optional (blank = anonymous-only)
+docker build \
+  --build-arg VITE_ARCGIS_API_KEY=<key> \
+  --build-arg VITE_ARCGIS_OAUTH_CLIENT_ID=<client id, optional> \
+  --build-arg VITE_ARCGIS_PORTAL_URL=<portal url, optional> \
+  -t arcgis-app .
+docker run -p 8080:443 arcgis-app
+# -> https://localhost:8080 (self-signed cert - see "Local HTTPS" above)
 
 # Compose — reads the root .env automatically (must be kept in sync
 # with my-arcgis-app/.env by hand; see table above)

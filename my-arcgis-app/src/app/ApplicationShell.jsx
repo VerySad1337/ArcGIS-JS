@@ -5,6 +5,7 @@ import ViewModeToggle from "../components/ViewModeToggle";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
+import AccountButton from "../components/AccountButton";
 import AnalysisPanel from "../components/AnalysisPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
@@ -26,6 +27,9 @@ export default function ApplicationShell() {
   const [selectedFeature, setSelectedFeature] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeDrawType, setActiveDrawType] = useState(null);
+  // Which layer a completed sketch is persisted to - "drawings" (default,
+  // local-only) or a hosted/portal layer id (see GISMapEngine.setDrawTarget).
+  const [drawTargetLayerId, setDrawTargetLayerId] = useState("drawings");
   const [hasInteracted, setHasInteracted] = useState(false);
   const [isRouting, setIsRouting] = useState(false);
   // Explicit state (rather than deriving Boolean(engineRef.current?.searchGraphic)
@@ -117,6 +121,13 @@ export default function ApplicationShell() {
     engineRef.current.setOnFeatureSelect(setSelectedFeature);
     engineRef.current.setOnDrawingsChanged(refreshLayers);
     engineRef.current.setOnDrawStateChange(setActiveDrawType);
+    engineRef.current.setOnFeatureAddedToLayer(() => {
+      refreshLayers();
+      showToast("Feature added to layer.", "success");
+    });
+    engineRef.current.setOnDrawTargetError((message) => {
+      showToast(message || "Failed to add feature to layer.", "error");
+    });
     engineRef.current.attachToView(view);
     refreshLayers();
   };
@@ -306,6 +317,54 @@ export default function ApplicationShell() {
       showToast(`Added "${item.title}" to layers.`, "success");
     } catch (err) {
       showToast(err.message || "Failed to add layer.", "error");
+    }
+  };
+
+  // Provisions a brand-new hosted Feature Layer on the portal (see
+  // GISMapEngine.createHostedFeatureLayer) and registers it exactly like a
+  // layer added via portal search - same throw-and-toast convention as
+  // addPortalLayer.
+  const createHostedFeatureLayer = async ({ name, geometryType, fields }) => {
+    // Temporary diagnostic (2026-08): the engine call and refreshLayers()
+    // are split into two try/catches, each with its own console.error tag,
+    // so a failure can be pinned to a specific step - the toast alone can't
+    // tell "the REST calls actually failed" apart from "they succeeded but
+    // getLayers()/refreshLayers() blew up afterward reading the new layer".
+    let newLayerId;
+    try {
+      newLayerId = await engineRef.current.createHostedFeatureLayer({ name, geometryType, fields });
+    } catch (err) {
+      console.error("createHostedFeatureLayer: engine call failed:", err);
+      showToast(err.message || "Failed to create feature layer.", "error");
+      return;
+    }
+    try {
+      refreshLayers();
+      showToast(`Created hosted layer "${name}".`, "success");
+    } catch (err) {
+      console.error("createHostedFeatureLayer: refreshLayers() failed after layer", newLayerId, "was created:", err);
+      showToast(
+        `Layer "${name}" was created, but the layer list couldn't refresh (${err.message || "unknown error"}). Reload the page.`,
+        "error"
+      );
+    }
+  };
+
+  // Which layer FloatingDrawTools' "Draw into" selector offers: "Drawings"
+  // plus any layer getLayers() reports as accepting new features (see
+  // GISMapEngine's canBeDrawTarget). Derived from the already-computed
+  // `layers` state, no extra engine round trip needed.
+  const drawTargetOptions = [
+    { id: "drawings", name: "Drawings" },
+    ...layers.filter((l) => l.canBeDrawTarget).map((l) => ({ id: l.id, name: l.name }))
+  ];
+
+  const setDrawTarget = (layerId) => {
+    try {
+      engineRef.current.setDrawTarget(layerId);
+      setDrawTargetLayerId(layerId);
+    } catch (err) {
+      showToast(err.message || "Failed to set draw target.", "error");
     }
   };
 
@@ -587,6 +646,14 @@ export default function ApplicationShell() {
         className={`side-panel${sidebarOpen ? " open" : ""}`}
         tabIndex={-1}
       >
+        <AccountButton
+          oauthConfigured={isOAuthConfigured()}
+          signedInUser={signedInUser}
+          signingIn={signingIn}
+          onSignIn={handleSignIn}
+          onSignOut={handleSignOut}
+        />
+
         <div className="project-persistence-row">
           <button type="button" className="gis-button-secondary" onClick={saveProject}>
             <Icon name="folder" size={16} />
@@ -663,11 +730,8 @@ export default function ApplicationShell() {
         <PortalLayerPanel
           onSearch={searchPortal}
           onAddLayer={addPortalLayer}
-          oauthConfigured={isOAuthConfigured()}
+          onCreateLayer={createHostedFeatureLayer}
           signedInUser={signedInUser}
-          signingIn={signingIn}
-          onSignIn={handleSignIn}
-          onSignOut={handleSignOut}
         />
       </div>
 
@@ -695,6 +759,9 @@ export default function ApplicationShell() {
           uploadGeoJSON={uploadGeoJSON}
           activeDrawType={activeDrawType}
           onCancelDraw={cancelDraw}
+          drawTargetLayerId={drawTargetLayerId}
+          drawTargetOptions={drawTargetOptions}
+          onChangeDrawTarget={setDrawTarget}
           />
         <FeatureAttributesPanel
           feature={selectedFeature}

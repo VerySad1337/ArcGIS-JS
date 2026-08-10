@@ -15,7 +15,10 @@ export default function FloatingDrawTools({
   saveGeoJSON,
   uploadGeoJSON,
   activeDrawType,
-  onCancelDraw
+  onCancelDraw,
+  drawTargetLayerId,
+  drawTargetOptions,
+  onChangeDrawTarget
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
@@ -59,6 +62,24 @@ export default function FloatingDrawTools({
       ref={containerRef}
     >
       <div className="fab-tool-stack">
+        {drawTargetOptions && drawTargetOptions.length > 1 && (
+          <label className="draw-target-select">
+            <span>Draw into</span>
+            <select
+              value={drawTargetLayerId}
+              onChange={(e) => onChangeDrawTarget(e.target.value)}
+              aria-label="Layer to draw new features into"
+              tabIndex={isOpen ? 0 : -1}
+            >
+              {drawTargetOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         {tools.map((tool, i) => {
           const style = {
             transitionDelay: isOpen ? `${(tools.length - 1 - i) * 30}ms` : "0ms"
@@ -139,5 +160,10 @@ FloatingDrawTools.propTypes = {
   saveGeoJSON: PropTypes.func.isRequired,
   uploadGeoJSON: PropTypes.func.isRequired,
   activeDrawType: PropTypes.oneOf(["point", "polyline", "polygon"]),
-  onCancelDraw: PropTypes.func
+  onCancelDraw: PropTypes.func,
+  drawTargetLayerId: PropTypes.string,
+  drawTargetOptions: PropTypes.arrayOf(
+    PropTypes.shape({ id: PropTypes.string, name: PropTypes.string })
+  ),
+  onChangeDrawTarget: PropTypes.func
 };

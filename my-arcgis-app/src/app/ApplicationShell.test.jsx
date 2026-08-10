@@ -1,5 +1,5 @@
 /* eslint-disable react/prop-types -- mock components stand in for real ones; props are exercised by the tests, not consumers */
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ApplicationShell from "./ApplicationShell";
 import GISMapEngine from "../gis/GISMapEngine";
@@ -53,7 +53,6 @@ jest.mock("../components/LayerControlPanel", () => (props) => (
 
 jest.mock("../components/PortalLayerPanel", () => (props) => (
   <div data-testid="portal-layer-panel">
-    <span data-testid="oauth-configured">{String(props.oauthConfigured)}</span>
     <span data-testid="signed-in-user">{props.signedInUser?.fullName ?? ""}</span>
     <button onClick={() => props.onSearch("parks")}>search-portal</button>
     <button
@@ -61,6 +60,13 @@ jest.mock("../components/PortalLayerPanel", () => (props) => (
     >
       add-portal-layer
     </button>
+  </div>
+));
+
+jest.mock("../components/AccountButton", () => (props) => (
+  <div data-testid="account-button">
+    <span data-testid="oauth-configured">{String(props.oauthConfigured)}</span>
+    <span data-testid="account-signed-in-user">{props.signedInUser?.fullName ?? ""}</span>
     <button onClick={props.onSignIn}>sign-in</button>
     <button onClick={props.onSignOut}>sign-out</button>
   </div>
@@ -615,7 +621,9 @@ describe("ApplicationShell", () => {
     render(<ApplicationShell />);
 
     expect(checkSignInStatus).toHaveBeenCalled();
-    expect(await screen.findByText("Jane Doe")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("account-signed-in-user")).toHaveTextContent("Jane Doe");
+    });
   });
 
   test("signing in updates the signed-in user and shows a success toast", async () => {
@@ -628,6 +636,7 @@ describe("ApplicationShell", () => {
     await user.click(screen.getByText("sign-in"));
 
     expect(await screen.findByText("Signed in as Jane Doe.")).toBeInTheDocument();
+    expect(screen.getByTestId("account-signed-in-user")).toHaveTextContent("Jane Doe");
     expect(screen.getByTestId("signed-in-user")).toHaveTextContent("Jane Doe");
   });
 
@@ -648,12 +657,15 @@ describe("ApplicationShell", () => {
     isOAuthConfigured.mockReturnValue(true);
     checkSignInStatus.mockResolvedValue({ username: "jdoe", fullName: "Jane Doe" });
     render(<ApplicationShell />);
-    await screen.findByText("Jane Doe");
+    await waitFor(() => {
+      expect(screen.getByTestId("account-signed-in-user")).toHaveTextContent("Jane Doe");
+    });
 
     await user.click(screen.getByText("sign-out"));
 
     expect(signOut).toHaveBeenCalled();
     expect(await screen.findByText("Signed out.")).toBeInTheDocument();
+    expect(screen.getByTestId("account-signed-in-user")).toHaveTextContent("");
     expect(screen.getByTestId("signed-in-user")).toHaveTextContent("");
   });
 });

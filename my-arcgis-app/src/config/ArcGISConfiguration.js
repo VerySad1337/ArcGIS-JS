@@ -1,7 +1,5 @@
 import esriConfig from "@arcgis/core/config";
 
-esriConfig.apiKey = import.meta.env.VITE_ARCGIS_API_KEY;
-
 // Portal to search/sign in against. Defaults to ArcGIS Online when unset;
 // point this at an Enterprise portal's sharing root
 // (e.g. "https://your-enterprise-domain/portal") via .env instead of
@@ -42,3 +40,45 @@ export const MRT_LINE_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20a
 
 //Geocoding Service
 export const GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
+
+// API key, SCOPED to just this app's own known services - never set as the
+// blanket `esriConfig.apiKey`.
+//
+// The ArcGIS JS SDK's request pipeline (request/process.js) checks
+// `getApiKey(url)` BEFORE ever consulting IdentityManager for a signed-in
+// user's OAuth credential; if `esriConfig.apiKey` (singular) is set, that
+// function returns it for literally any "*.arcgis.com" URL with no way to
+// exclude one, which includes the portal's own sign-in endpoints
+// (`${PORTAL_URL}/sharing/rest/portals/self`, used by AuthService's
+// checkSignInStatus/signIn to read the signed-in user's profile). A blanket
+// apiKey therefore silently wins over a freshly-obtained OAuth credential on
+// every such request - `Portal.load()` authenticates as the API key's own
+// app identity, `portal.user` comes back undefined, and sign-in appears to
+// succeed (the popup completes, no error is thrown) while never actually
+// reporting a signed-in user. This is what caused sign-in to silently do
+// nothing after the popup closed (2026-08).
+//
+// `esriConfig.apiKeys.scopes` is an allow-list instead: the key is attached
+// only to requests matching one of these URLs, so portal/sign-in requests
+// fall through to IdentityManager as intended. Scope it to exactly the
+// services this app actually needs anonymous/public access to.
+//
+// Trade-off: a portal search result NOT in this list (e.g. an arbitrary
+// Living Atlas subscription-only layer added via "Add Layer from Portal")
+// no longer gets this key attached automatically - it needs the current
+// user to be signed in with their own access instead. See
+// knowledge/index.md's Portal Layer System for the full note.
+esriConfig.apiKeys = {
+  scopes: [
+    {
+      urls: [
+        TOURIST_ATTRACTIONS_FEATURE_LAYER_URL,
+        MRT_STATION_FEATURE_LAYER_URL,
+        MRT_LINE_FEATURE_LAYER_URL,
+        GEOCODER_URL,
+        ROUTE_SERVICE_URL
+      ],
+      token: import.meta.env.VITE_ARCGIS_API_KEY
+    }
+  ]
+};

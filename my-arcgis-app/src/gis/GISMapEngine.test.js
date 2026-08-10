@@ -888,7 +888,8 @@ describe("GISMapEngine portal layers", () => {
       filterable: true,
       filterDescription: null,
       annotatable: true,
-      annotationField: null
+      annotationField: null,
+      canBeDrawTarget: false
     });
 
     const view2 = makeView();
