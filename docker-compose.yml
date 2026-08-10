@@ -2,47 +2,34 @@
 #
 #   docker compose up --build
 #
-# Compose interpolates the build args below from a .env sitting next to this
-# compose file (repo root). That root .env is an UNTRACKED COPY of
-# my-arcgis-app/.env (the file Vite actually reads) - it exists only because
-# Compose has no way, from inside this YAML, to be pointed at another file for
-# interpolation. If you change VITE_ARCGIS_API_KEY, update
-# my-arcgis-app/.env first, then re-copy it here:
+# VITE_ARCGIS_API_KEY / VITE_ARCGIS_OAUTH_CLIENT_ID / VITE_ARCGIS_PORTAL_URL
+# are runtime values now (see docker-entrypoint.sh) - Compose passes them
+# into the container's environment, and env-config.js is regenerated from
+# them on every container start. They are NOT build args anymore: the same
+# built image works unmodified across environments, only the `environment:`
+# values below (or an --env-file) need to change.
+#
+# Compose auto-loads a `.env` sitting next to this file (repo root) to fill
+# in the ${...} references below. That root .env is an UNTRACKED COPY of
+# my-arcgis-app/.env (the file Vite still reads for `npm run dev`) - kept in
+# sync by hand:
 #
 #   cp my-arcgis-app/.env .env
 #
-# A stale root .env fails silently (old key, no error) rather than loudly, so
-# don't skip that step. To avoid the sync step entirely, read the real file
-# directly instead:
+# or skip the sync step and read the real file directly:
 #
 #   docker compose --env-file my-arcgis-app/.env up --build
 #
 # The repo-root .env must never be git-tracked - it used to be, with a real
 # key committed, before history was rewritten to purge it. See
 # knowledge/deployment.md for the full postmortem.
-#
-# The ":?" on VITE_ARCGIS_API_KEY makes a missing value abort the build.
-# Without it, Compose substitutes an empty string and emits only a warning,
-# so the image builds "successfully" with no API key baked in - and the
-# failure surfaces much later, at runtime, as subscription content returning
-# 499 and the ArcGIS SDK popping a sign-in dialog.
-#
-# VITE_ARCGIS_OAUTH_CLIENT_ID/VITE_ARCGIS_PORTAL_URL are NOT ":?"-required -
-# blank is a legitimate value for both (OAuth sign-in is opt-in; see
-# AuthService.isOAuthConfigured), so a missing value here just builds an
-# anonymous-only image, same as leaving them blank in my-arcgis-app/.env.
-#
-# Note these three values reach the image ONLY as build args (Dockerfile
-# ARG/ENV) - Compose reads the root .env directly off disk to fill in
-# ${...} below, but that .env file itself is never sent into the build
-# context (see .dockerignore) or copied into any image layer.
 services:
   arcgis-app:
     build:
       context: .
-      args:
-        VITE_ARCGIS_API_KEY: "${VITE_ARCGIS_API_KEY:?missing - rerun with --env-file my-arcgis-app/.env}"
-        VITE_ARCGIS_OAUTH_CLIENT_ID: "${VITE_ARCGIS_OAUTH_CLIENT_ID:-}"
-        VITE_ARCGIS_PORTAL_URL: "${VITE_ARCGIS_PORTAL_URL:-}"
+    environment:
+      VITE_ARCGIS_API_KEY: "${VITE_ARCGIS_API_KEY:?missing - rerun with --env-file my-arcgis-app/.env}"
+      VITE_ARCGIS_OAUTH_CLIENT_ID: "${VITE_ARCGIS_OAUTH_CLIENT_ID:-}"
+      VITE_ARCGIS_PORTAL_URL: "${VITE_ARCGIS_PORTAL_URL:-}"
     ports:
       - "8080:443"

@@ -3,12 +3,30 @@
 **Purpose:** Documents how the app is built and containerized for deployment.
 
 **Key Files:**
-- `Dockerfile` (repo root) – multi-stage build: `node:22-alpine` builds the Vite app in `my-arcgis-app/`, then `nginx:alpine` serves the resulting `dist/` over **HTTPS on port 443** (see "Local HTTPS" below), using `nginx.conf` (below) instead of the image's default server block.
-- `nginx.conf` (repo root) – sets the caching policy the SPA needs (see "Stale-deploy 404s on 2D/3D toggle" below): `/assets/*` (Vite's content-hashed JS/CSS chunks) get `Cache-Control: public, max-age=31536000, immutable`; `index.html` gets `Cache-Control: no-cache` so it always revalidates. `location / { try_files $uri $uri/ /index.html; }` is the standard SPA fallback (the app has no client-side router today, but this costs nothing and avoids a 404 if one is added later). The server block listens on `443 ssl` rather than `80`.
-- `docker-compose.yml` (repo root) – one `arcgis-app` service that builds from the repo-root context and publishes `8080:443` (container's HTTPS port, mapped to `https://localhost:8080` on the host). It passes `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, and `VITE_ARCGIS_PORTAL_URL` as build args, all sourced from the untracked root `.env`.
-- `.dockerignore` (repo root) – excludes `node_modules`, `dist`, `.git`, `.vscode`, `.vite`, `.scannerwork`, `coverage`, `sonar-project.properties`, `Dockerfile` itself, and (2026-08) `**/.env`/`**/.env.*` from the build context — see "Resolved — OAuth build-arg wiring + a real `.env`-in-image leak" below for why the `.env` exclusion matters. `nginx.conf` is **not** excluded — it must reach the build context for `COPY nginx.conf /etc/nginx/conf.d/default.conf` to succeed.
+- `Dockerfile` (repo root) – multi-stage build: `node:22-alpine` builds the Vite app in `my-arcgis-app/`, then `nginx:alpine` serves the resulting `dist/` over **HTTPS on port 443** (see "Local HTTPS" below), using `nginx.conf` (below) instead of the image's default server block. The build stage takes no `VITE_ARCGIS_*` build args (see "Runtime configuration" below) — `docker-entrypoint.sh` is `COPY`'d into the final stage and set as `ENTRYPOINT`.
+- `docker-entrypoint.sh` (repo root) – runs before `nginx` starts on every container start; regenerates `/usr/share/nginx/html/env-config.js` from the container's `VITE_ARCGIS_*` environment variables, then `exec`s the Dockerfile's `CMD` (`nginx -g daemon off;`). See "Runtime configuration" below.
+- `nginx.conf` (repo root) – sets the caching policy the SPA needs (see "Stale-deploy 404s on 2D/3D toggle" below): `/assets/*` (Vite's content-hashed JS/CSS chunks) get `Cache-Control: public, max-age=31536000, immutable`; `index.html` and `env-config.js` both get `Cache-Control: no-cache` so they always revalidate. `location / { try_files $uri $uri/ /index.html; }` is the standard SPA fallback (the app has no client-side router today, but this costs nothing and avoids a 404 if one is added later). The server block listens on `443 ssl` rather than `80`.
+- `docker-compose.yml` (repo root) – one `arcgis-app` service that builds from the repo-root context and publishes `8080:443` (container's HTTPS port, mapped to `https://localhost:8080` on the host). It passes `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, and `VITE_ARCGIS_PORTAL_URL` as container **environment** variables (not build args — see "Runtime configuration" below), sourced from the untracked root `.env`.
+- `.dockerignore` (repo root) – excludes `node_modules`, `dist`, `.git`, `.vscode`, `.vite`, `.scannerwork`, `coverage`, `sonar-project.properties`, `Dockerfile` itself, and (2026-08) `**/.env`/`**/.env.*` from the build context — see "Resolved — OAuth build-arg wiring + a real `.env`-in-image leak" below for why the `.env` exclusion matters (it remains relevant even though these vars are no longer build-time: the build context still shouldn't contain the raw file). `nginx.conf` is **not** excluded — it must reach the build context for `COPY nginx.conf /etc/nginx/conf.d/default.conf` to succeed.
+- `my-arcgis-app/public/env-config.js` – empty `window.__ENV__ = {}` placeholder used only by `npm run dev`/`vite build` outside Docker; Vite copies `public/` verbatim to `dist/`, and `docker-entrypoint.sh` overwrites this specific file with real values at container start. `my-arcgis-app/src/config/ArcGISConfiguration.js` reads `window.__ENV__` first, falling back to `import.meta.env` for that same local-dev case.
 - `my-arcgis-app/public/oauth-callback.html` – static page the ArcGIS sign-in popup redirects to on completion; see "OAuth popup callback page" below.
 - `my-arcgis-app/package.json` – `build` script (`vite build`) invoked inside the Docker build stage.
+
+### Runtime configuration (2026-08, supersedes build-time baking below)
+
+**Why:** the deploy script (`deployArcGISReact.sh`, run on the server) only `docker pull`s a prebuilt image and `docker run`s it — it never runs `docker build`. Under the old build-time-`ARG` scheme, whatever `VITE_ARCGIS_*` values were active on whichever machine built and pushed the image (typically a local dev machine, not the server) were the only ones that could ever reach that image; the server's own `$HOME/.env` had no path into the running container at all, since `docker run` in the deploy script passed no `--env-file`/`-e` and even if it had, nginx serving static files never reads container env vars.
+
+**How:** `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, and `VITE_ARCGIS_PORTAL_URL` are now read at **container startup**, not baked into the JS bundle at build time:
+- The Dockerfile's build stage no longer declares `ARG`/`ENV` for these three — `vite build` runs with no knowledge of them.
+- `docker-entrypoint.sh` (the image's `ENTRYPOINT`) runs first on every container start, reads them from the container's environment, and writes `/usr/share/nginx/html/env-config.js` as `window.__ENV__ = { VITE_ARCGIS_API_KEY: "...", ... }` (values are backslash/quote-escaped before interpolation so a value can't break out of the JS string literal), then `exec`s `nginx -g daemon off;`.
+- `index.html` loads `env-config.js` in a plain (non-module) `<script>` tag, before `main.jsx`, so `window.__ENV__` exists before `ArcGISConfiguration.js` runs.
+- `ArcGISConfiguration.js` reads `window.__ENV__[key] || import.meta.env[key]` — the runtime value wins in the container; the `import.meta.env` fallback keeps `npm run dev`/local `vite build` working unchanged, reading `my-arcgis-app/.env` as before.
+
+**Consequence:** the same image (`erictanbq/arcgisreact1.0.0:latest`) is now deployable anywhere with different config, by varying only the container's environment — no rebuild, no `--build-arg`. `deployArcGISReact.sh`'s `docker run` passes `--env-file "$HOME/.env"`, so the server's own `.env` (which previously had no effect at all) now actually determines the running app's API key/OAuth client ID/portal URL. `docker-compose.yml` passes the same three under `environment:` instead of `build.args`.
+
+**Trade-off vs. the old build-time scheme:** none from a secrecy standpoint — `VITE_ARCGIS_API_KEY` ends up visible to any client of this SPA either way (baked into a downloadable JS bundle, or served plaintext via `env-config.js`); it was never a true secret, just a portal-scoped key (see `esriConfig.apiKeys.scopes` in `ArcGISConfiguration.js`). The trade-off is operational: one image now serves multiple environments/deployments correctly, at the cost of a value in `env-config.js` being visible via browser devtools/view-source in a way that's slightly more discoverable than digging it out of a minified bundle (not meaningfully more discoverable — `grep` finds it in the bundle just as easily, as the Postmortem below already demonstrates).
+
+**The `**/.env`/`**/.env.*` `.dockerignore` exclusion and the "never commit a real `.env`" rules below still apply unchanged** — a `.env` file itself (as opposed to the values it holds) should never enter a build context or get git-tracked, regardless of whether those values are consumed at build time or run time.
 
 ### Local HTTPS (2026-08)
 
@@ -29,16 +47,16 @@
 
 **Fix:** `nginx.conf` (above) sets `Cache-Control: no-cache` on `index.html` specifically (nginx's stock config sets no explicit caching header on it, which lets a browser apply its own heuristic caching and hold onto a stale copy for a while) so a reload always revalidates and picks up the current build's asset references, while `/assets/*` — which never changes contents for a given filename — is still cached aggressively. This does not fix an *already-open* tab that loaded before the nginx config existed or before a given redeploy; the immediate remedy there is always a hard refresh (Ctrl+Shift+R) or a fresh tab.
 
-**Build-time configuration:**
-- `VITE_ARCGIS_API_KEY` is passed as a Docker build `ARG` and baked into the static bundle at build time (Vite inlines `VITE_*` env vars at build, not runtime). It must be supplied via `--build-arg` (or a build-time `.env` consumed by Vite) — it is **not** read from the container at runtime.
+**Configuration (2026-08: runtime, not build-time — see "Runtime configuration" above):**
+- `VITE_ARCGIS_API_KEY` is read by `docker-entrypoint.sh` from the **container's environment at startup** and written into `env-config.js`, which the app reads via `window.__ENV__`. It is supplied via `docker run --env-file`/`-e` or Compose's `environment:` — no longer via `--build-arg`.
 - Do not commit real API keys in a tracked `.env` file. See Repository Access Rules below.
 
 **There are two `.env` files, both untracked, and they must be kept in sync by hand.**
 
 | File | Read by | Purpose |
 | --- | --- | --- |
-| `my-arcgis-app/.env` | **Vite** (`npm run dev`, `npm run build`) | The app's real config file: `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, `VITE_ARCGIS_PORTAL_URL`. Vite loads `.env` from **its own project root only** — it does not read a parent directory's `.env`. This is the source of truth; edit the key here first. |
-| `.env` (repo root) | **Docker Compose** (`docker compose up --build`, with no `--env-file` flag) | A copy of `my-arcgis-app/.env`, kept only so plain `docker compose up --build` works without extra flags — Compose auto-loads a `.env` sitting next to `docker-compose.yml` for build-arg interpolation and has no way to be pointed elsewhere from inside the YAML itself. |
+| `my-arcgis-app/.env` | **Vite** (`npm run dev`, `npm run build`) — and, indirectly, `import.meta.env` fallback in `ArcGISConfiguration.js` when `window.__ENV__` has no value for a key | The app's real config file: `VITE_ARCGIS_API_KEY`, `VITE_ARCGIS_OAUTH_CLIENT_ID`, `VITE_ARCGIS_PORTAL_URL`. Vite loads `.env` from **its own project root only** — it does not read a parent directory's `.env`. This is the source of truth for local (non-Docker) dev; edit the key here first. |
+| `.env` (repo root) | **Docker Compose**, and the server's `deployArcGISReact.sh` (as `$HOME/.env`) via `docker run --env-file` | A copy of `my-arcgis-app/.env`, kept only so plain `docker compose up --build` works without extra flags — Compose auto-loads a `.env` sitting next to `docker-compose.yml` to fill in `environment:` values and has no way to be pointed elsewhere from inside the YAML itself. On the deploy server this file is `$HOME/.env`, not a repo-root file, and is the one that actually reaches the running container. |
 
 A root `.env` was previously removed entirely (see *Postmortem* below) because it had been git-tracked with a real key. It has since been reintroduced, but **only as an untracked copy** — `.gitignore` line 1 covers it, and it must never be `git add`ed. A symlink (`ln -s my-arcgis-app/.env .env`) was tried first, to make this a true single source of truth with no sync step, but failed silently on this checkout's filesystem/Windows privileges and fell back to a plain file copy — verify with `ls -la .env` (a symlink shows `l...` and a small size; a copy shows a regular file the same size as `my-arcgis-app/.env`) if this is retried elsewhere.
 
@@ -50,7 +68,9 @@ Forgetting this step does **not** fail loudly — Compose will happily build wit
 
 If you'd rather not maintain two files by hand, `docker compose --env-file my-arcgis-app/.env up --build` still works and reads directly from the single real file — see *Build & run* below.
 
-### Postmortem: deleting the root `.env` silently broke the deployed app
+### Postmortem: deleting the root `.env` silently broke the deployed app (historical — predates runtime config)
+
+**This postmortem describes the build-time-`ARG` scheme in place before the 2026-08 "Runtime configuration" change above.** The specific failure mode below (`docker compose up --build` silently building with an empty key) no longer applies as described, since these values aren't build args anymore — but the two lessons at the end still apply directly to the current `environment:`/`--env-file` mechanism, and the `.env`-in-build-context leak below is independent of build-time vs. runtime and remains fully relevant. Left intact for that reason.
 
 This is worth stating plainly because the failure mode was badly misleading, and the diagnosis initially went the wrong way.
 
@@ -76,7 +96,7 @@ Two lessons encoded in the current setup:
 1. **`my-arcgis-app/.env` was never actually excluded from the Docker build context**, despite this file previously (incorrectly) documenting otherwise. `.dockerignore` had no `.env` entry, so the `Dockerfile`'s `COPY my-arcgis-app/. .` copied the real file — real `VITE_ARCGIS_API_KEY` and (once OAuth was configured) real `VITE_ARCGIS_OAUTH_CLIENT_ID` included — straight into the build stage's image layer. Only the final `nginx:alpine` stage's `dist/` output was ever *meant* to ship, but the build stage's own layers still exist locally (build cache) and would ship too if that stage were ever pushed or targeted directly (`--target build`). Fixed: `.dockerignore` now excludes `**/.env`/`**/.env.*` (keeping a future `.env.example` un-ignored via `!**/.env.example`), the same pattern already used for `node_modules`/`.git`/etc.
 2. **This is also what had been silently masking the "OAuth cannot be configured for a Docker/Compose build" gap** this section used to describe: with `.env` accidentally present in the build context, Vite picked up `VITE_ARCGIS_OAUTH_CLIENT_ID` from the copied file rather than from an explicit build arg — so OAuth appeared to "work" in a containerized build, but only as an accidental side effect of the secrets leak above, not through any real, intentional plumbing. Fixed properly, alongside the leak: the `Dockerfile` now declares `ARG`/`ENV` pairs for `VITE_ARCGIS_OAUTH_CLIENT_ID` and `VITE_ARCGIS_PORTAL_URL` (both defaulting to `""`, unlike `VITE_ARCGIS_API_KEY` — blank is a legitimate, intended value for either, matching `AuthService.isOAuthConfigured()`'s "OAuth is opt-in" behavior outside Docker), and `docker-compose.yml` forwards both under `build.args`, sourced from the untracked root `.env` the same way `VITE_ARCGIS_API_KEY` already was (via `${VAR:-}`, not `${VAR:?...}`, since a missing value here should build anonymous-only rather than abort).
 
-Verified post-fix: `docker run --rm --entrypoint sh <image> -c "find / -maxdepth 4 -iname '*.env*'"` finds nothing under the image root, and `docker exec <container> grep -rl "<the real client id>" /usr/share/nginx/html/assets` still finds it — confirming the *value* reaches the built bundle via the intended build-arg path while the *file* itself no longer reaches the image at all.
+Verified post-fix (at the time, under the build-arg scheme): `docker run --rm --entrypoint sh <image> -c "find / -maxdepth 4 -iname '*.env*'"` found nothing under the image root, and `docker exec <container> grep -rl "<the real client id>" /usr/share/nginx/html/assets` still found it — confirming the *value* reached the built bundle via the intended build-arg path while the *file* itself never reached the image at all. Under the current runtime-config scheme the equivalent check is `docker exec <container> cat /usr/share/nginx/html/env-config.js` (should show the real value) plus `docker exec <container> grep -rl "<value>" /usr/share/nginx/html/assets` (should now find *nothing*, since it's no longer in the bundle at all) — re-verified 2026-08 when the switch to `docker-entrypoint.sh` was made.
 
 ### OAuth popup callback page (2026-08)
 
@@ -86,16 +106,14 @@ Verified post-fix: `docker run --rm --entrypoint sh <image> -c "find / -maxdepth
 
 **Fix:** added `my-arcgis-app/public/oauth-callback.html`, a verbatim copy of Esri's own reference implementation (linked directly from `OAuthInfo.popupCallbackUrl`'s doc comments in the installed `@arcgis/core` package: https://github.com/Esri/jsapi-resources/blob/main/oauth/oauth-callback.html). Deliberately has no `@arcgis/core` import/CDN dependency — it dispatches a plain `arcgis:auth:hash`/`arcgis:auth:location:search` `CustomEvent` on `window.opener` (falling back to `opener.require("esri/kernel").id.setOAuthResponseHash(...)` when available) and calls `close()`, so it works regardless of which `@arcgis/core` version this app is pinned to, with no version-matching required. Vite's `public/` directory is copied to the build output root as-is, so this becomes `dist/oauth-callback.html` / `https://localhost:8080/oauth-callback.html` automatically — no build config change needed.
 
-**Build & run:**
+**Build & run (2026-08: config is now a runtime `docker run`/`environment:` value, not a `--build-arg`):**
 ```
-# Plain Docker — key passed explicitly; OAuth args are optional (blank = anonymous-only)
-docker build \
-  --build-arg VITE_ARCGIS_API_KEY=<key> \
-  --build-arg VITE_ARCGIS_OAUTH_CLIENT_ID=<client id, optional> \
-  --build-arg VITE_ARCGIS_PORTAL_URL=<portal url, optional> \
-  -t arcgis-app .
-docker run -p 8080:443 arcgis-app
+# Plain Docker — build takes no VITE_ARCGIS_* args at all now
+docker build -t arcgis-app .
+docker run -p 8080:443 --env-file my-arcgis-app/.env arcgis-app
 # -> https://localhost:8080 (self-signed cert - see "Local HTTPS" above)
+# OAuth/portal vars are optional (blank = anonymous-only); only
+# VITE_ARCGIS_API_KEY needs to actually be set for subscription content.
 
 # Compose — reads the root .env automatically (must be kept in sync
 # with my-arcgis-app/.env by hand; see table above)
@@ -103,11 +121,18 @@ docker compose up --build
 
 # Compose — or skip the root .env/sync step and read the real file directly
 docker compose --env-file my-arcgis-app/.env up --build
+
+# Server deploy (deployArcGISReact.sh) — pulls the prebuilt image and runs
+# it with $HOME/.env; no build step, so this is the only place these
+# values need to be current for a production deploy
+docker run -d --name arcgis-react -p 9999:443 \
+  --env-file "$HOME/.env" --restart unless-stopped \
+  erictanbq/arcgisreact1.0.0:latest
 ```
 
 **Known gap:** the Docker build does not run the test suite (`npm test`) or lint (`npm run lint`) before `vite build` — a broken component can still produce a "successful" image. If build-time gating is desired, add a `RUN npm test` step (and copy test config/fixtures) before `RUN npm run build`, or run tests in CI ahead of the Docker build.
 
-**Secrets:** the ArcGIS API key must never be committed to a tracked `.env` file. Use `.env.example` with a placeholder, keep the real `.env` untracked, and supply the real value via `--build-arg` or CI/CD secret injection.
+**Secrets:** the ArcGIS API key must never be committed to a tracked `.env` file. Use `.env.example` with a placeholder, keep the real `.env` untracked, and supply the real value via `--env-file`/`environment:` (runtime) or CI/CD secret injection.
 
 **Resolved issue — the root `.env` was git-tracked despite being in `.gitignore`.** Both `.env` and `my-arcgis-app/.env` are listed in the root `.gitignore`, but `.gitignore` has no effect on a path git is *already* tracking, and the root `.env` had been committed before the ignore rule was added. It carried a real ArcGIS API key into pushed history. It has since been deleted and untracked, and the history rewritten to purge it.
 

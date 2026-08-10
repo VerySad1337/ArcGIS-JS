@@ -1,12 +1,21 @@
 import esriConfig from "@arcgis/core/config";
 
+// Runtime config, generated into env-config.js by docker-entrypoint.sh from
+// the container's environment at startup (see Dockerfile) - falls back to
+// Vite's build-time env for `npm run dev`/`npm run build` outside Docker,
+// where window.__ENV__ is just the empty placeholder in public/env-config.js.
+const runtimeEnv = (typeof window !== "undefined" && window.__ENV__) || {};
+function getEnv(key) {
+  return runtimeEnv[key] || import.meta.env[key];
+}
+
 // Portal to search/sign in against. Defaults to ArcGIS Online when unset;
 // point this at an Enterprise portal's sharing root
 // (e.g. "https://your-enterprise-domain/portal") via .env instead of
-// hardcoding it here, so the same build can target different portals per
-// environment (dev/staging/prod) without a code change.
-export const PORTAL_URL = import.meta.env.VITE_ARCGIS_PORTAL_URL || "https://www.arcgis.com";
-if (import.meta.env.VITE_ARCGIS_PORTAL_URL) {
+// hardcoding it here, so the same image can target different portals per
+// environment (dev/staging/prod) without a rebuild.
+export const PORTAL_URL = getEnv("VITE_ARCGIS_PORTAL_URL") || "https://www.arcgis.com";
+if (getEnv("VITE_ARCGIS_PORTAL_URL")) {
   esriConfig.portalUrl = PORTAL_URL;
 }
 
@@ -15,7 +24,7 @@ if (import.meta.env.VITE_ARCGIS_PORTAL_URL) {
 // Sign-in (see AuthService.js) is entirely optional and only activates when
 // this is set - an app with no client ID configured just stays anonymous,
 // same as before this feature existed.
-export const OAUTH_APP_ID = import.meta.env.VITE_ARCGIS_OAUTH_CLIENT_ID || null;
+export const OAUTH_APP_ID = getEnv("VITE_ARCGIS_OAUTH_CLIENT_ID") || null;
 
 // Web Map
 export const WEBMAP_ID ="e64141e618654205b8e4849c39f23212";
@@ -78,7 +87,7 @@ esriConfig.apiKeys = {
         GEOCODER_URL,
         ROUTE_SERVICE_URL
       ],
-      token: import.meta.env.VITE_ARCGIS_API_KEY
+      token: getEnv("VITE_ARCGIS_API_KEY")
     }
   ]
 };

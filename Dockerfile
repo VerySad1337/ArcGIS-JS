@@ -2,18 +2,10 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-# Build-time variables for Vite. Passed explicitly as ARGs (never via a
-# copied .env - see .dockerignore) so the exact same "OAuth is entirely
-# optional, on only when a Client ID is supplied" behavior the app has
-# outside Docker also applies to a containerized build: leave the OAuth/
-# portal args unset and the image builds anonymous-only, same as leaving
-# them blank in my-arcgis-app/.env for `npm run dev`/`vite build`.
-ARG VITE_ARCGIS_API_KEY
-ARG VITE_ARCGIS_OAUTH_CLIENT_ID=""
-ARG VITE_ARCGIS_PORTAL_URL=""
-ENV VITE_ARCGIS_API_KEY=$VITE_ARCGIS_API_KEY
-ENV VITE_ARCGIS_OAUTH_CLIENT_ID=$VITE_ARCGIS_OAUTH_CLIENT_ID
-ENV VITE_ARCGIS_PORTAL_URL=$VITE_ARCGIS_PORTAL_URL
+# VITE_ARCGIS_* config is no longer baked in at build time - it's injected
+# at container startup instead (see docker-entrypoint.sh), so the same
+# image can be deployed with different values per environment. This build
+# stage no longer needs or accepts those as ARGs.
 
 # Copy package files
 COPY my-arcgis-app/package*.json ./
@@ -44,6 +36,13 @@ RUN apk add --no-cache openssl \
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Regenerates env-config.js from the container's environment on every
+# start (see docker-entrypoint.sh) - this is what makes VITE_ARCGIS_* a
+# runtime value instead of something baked into the image.
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 443
 
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]

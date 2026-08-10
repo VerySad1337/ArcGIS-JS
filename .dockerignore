@@ -14,10 +14,7 @@ Dockerfile
 # copies my-arcgis-app/.env straight into that stage's image layer - even
 # though the final nginx stage only copies dist/ out of it, the build
 # stage's own layers (and anything built with --target build, or pushed/
-# cached) still contain the raw file. Build-time config must reach the
-# image only via explicit ARG/ENV (see Dockerfile), never via a copied
-# .env - Compose already reads .env directly off disk to fill in those
-# ARGs' values without it ever entering the build context.
-**/.env
-**/.env.*
-!**/.env.example
+# cached) still contain the raw file. VITE_ARCGIS_* config is a runtime
+# value now (see docker-entrypoint.sh) and never needs to reach the build
+# context at all - Compose/`docker run` supply it via `environment:`/
+# `--env-file` directly to the container, not the build.
