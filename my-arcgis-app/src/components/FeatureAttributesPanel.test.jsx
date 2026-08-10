@@ -118,6 +118,102 @@ describe("FeatureAttributesPanel", () => {
     expect(onAddColumn).not.toHaveBeenCalled();
   });
 
+  test("disables + Add Column until a name is typed", async () => {
+    const user = userEvent.setup();
+    render(<FeatureAttributesPanel feature={baseFeature} onAddColumn={jest.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const button = screen.getByRole("button", { name: "+ Add Column" });
+    expect(button).toBeDisabled();
+
+    await user.type(screen.getByPlaceholderText("New column name"), "status");
+    expect(button).toBeEnabled();
+  });
+
+  test("offers a delete control per editable column, but never for the object id field", async () => {
+    const user = userEvent.setup();
+    render(<FeatureAttributesPanel feature={baseFeature} onDeleteColumn={jest.fn()} />);
+
+    // Not offered outside edit mode.
+    expect(screen.queryByRole("button", { name: "Delete column name" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByRole("button", { name: "Delete column name" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete column OBJECTID" })
+    ).not.toBeInTheDocument();
+  });
+
+  test("hides the delete control when no onDeleteColumn handler is supplied", async () => {
+    const user = userEvent.setup();
+    render(<FeatureAttributesPanel feature={baseFeature} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("button", { name: "Delete column name" })).not.toBeInTheDocument();
+  });
+
+  test("deleting a column asks for confirmation first", async () => {
+    const user = userEvent.setup();
+    const onDeleteColumn = jest.fn().mockResolvedValue(undefined);
+    render(<FeatureAttributesPanel feature={baseFeature} onDeleteColumn={onDeleteColumn} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete column name" }));
+
+    expect(onDeleteColumn).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete "name"?')).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDeleteColumn).toHaveBeenCalledWith("name");
+  });
+
+  test("keeping the column restores the row and calls nothing", async () => {
+    // The confirm's dismiss button is "Keep", not "Cancel": the footer's own
+    // Cancel exits edit mode entirely, and two adjacent buttons named Cancel
+    // that do different things is a trap in a popup this narrow.
+    const user = userEvent.setup();
+    const onDeleteColumn = jest.fn();
+    render(<FeatureAttributesPanel feature={baseFeature} onDeleteColumn={onDeleteColumn} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete column name" }));
+    await user.click(screen.getByRole("button", { name: "Keep" }));
+
+    expect(onDeleteColumn).not.toHaveBeenCalled();
+    expect(screen.queryByText('Delete "name"?')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Merlion")).toBeInTheDocument();
+  });
+
+  test("a deleted column is dropped from the draft, so a later Save can't resurrect it", async () => {
+    const user = userEvent.setup();
+    const onDeleteColumn = jest.fn().mockResolvedValue(undefined);
+    const onSaveAttributes = jest.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <FeatureAttributesPanel
+        feature={baseFeature}
+        onDeleteColumn={onDeleteColumn}
+        onSaveAttributes={onSaveAttributes}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete column name" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    // The shell drops the key from its own copy of the attributes too.
+    rerender(
+      <FeatureAttributesPanel
+        feature={{ ...baseFeature, attributes: { OBJECTID: 1 } }}
+        onDeleteColumn={onDeleteColumn}
+        onSaveAttributes={onSaveAttributes}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSaveAttributes).toHaveBeenCalledWith({ OBJECTID: 1 });
+  });
+
   test("preserves edit mode across an attribute update for the same feature (same click position)", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<FeatureAttributesPanel feature={baseFeature} />);

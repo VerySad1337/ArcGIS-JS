@@ -1736,6 +1736,58 @@ input[type="range"] {
   text-align:right;
 }
 
+/* Per-column delete (edit mode only). Muted until hovered so a row of
+   attributes doesn't read as a row of destructive buttons. */
+.feature-attribute-delete{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  border:none;
+  background:transparent;
+  color:var(--text-muted);
+  cursor:pointer;
+  padding:2px;
+}
+
+.feature-attribute-delete:hover{
+  color:#f87171;
+}
+
+/* Replaces the row itself while a delete is awaiting confirmation, so the
+   confirmation is unmistakably attached to the column it will drop. */
+.feature-attribute-confirm{
+  align-items:center;
+  gap:8px;
+}
+
+.feature-attribute-confirm-actions{
+  display:flex;
+  gap:6px;
+  flex-shrink:0;
+}
+
+.feature-attribute-confirm-actions button{
+  background:transparent;
+  border:1px solid rgba(56, 189, 248, 0.3);
+  border-radius:var(--radius-sm);
+  color:#fff;
+  font-size:12px;
+  padding:2px 8px;
+  cursor:pointer;
+}
+
+.feature-attribute-confirm-actions button:disabled{
+  opacity:0.6;
+  cursor:default;
+}
+
+.feature-attribute-confirm-actions .feature-attribute-confirm-delete{
+  background:rgba(248, 113, 113, 0.15);
+  border-color:rgba(248, 113, 113, 0.55);
+  color:#fca5a5;
+}
+
 .feature-attributes-add-column{
   display:flex;
   gap:6px;

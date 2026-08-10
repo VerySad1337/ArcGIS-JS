@@ -1675,6 +1675,208 @@ describe("GISMapEngine.addColumnToLayer", () => {
     IdentityManager.findCredential.mockReset();
     IdentityManager.findCredential.mockReturnValue(undefined);
   });
+
+  test("posts to the ADMIN catalog, at the layer level, with a numeric layer id", async () => {
+    // Regression: the public "/rest/services/" path has no addToDefinition
+    // route on ArcGIS Online (its router answers with a generic "Cannot
+    // perform query. Invalid query parameters."), and a `layerId` parsed off
+    // a URL arrives as the string "0", which AGOL's own layer lookup crashes
+    // on rather than reporting. Both are why "+ Add Column" failed with an
+    // error that pointed nowhere near the cause.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.portalLayers.set("portal_1", {
+      url: "https://services1.arcgis.com/abc/arcgis/rest/services/My_Layer/FeatureServer/0",
+      layerId: "0",
+      fields: [],
+      refresh: jest.fn().mockResolvedValue(undefined)
+    });
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    esriRequest.mockResolvedValueOnce({ data: {} });
+
+    await engine.addColumnToLayer("portal_1", "status");
+
+    expect(esriRequest).toHaveBeenCalledWith(
+      "https://services1.arcgis.com/abc/arcgis/rest/admin/services/My_Layer/FeatureServer/0/addToDefinition",
+      expect.objectContaining({ method: "post" })
+    );
+  });
+
+  test("declares a length on a string column", async () => {
+    // A text column with no width is rejected by the definition merge, which
+    // surfaces as the same opaque "Unable to add feature service definition."
+    // every other malformed request produces.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    esriRequest.mockResolvedValueOnce({ data: {} });
+
+    await engine.addColumnToLayer("touristAttractions", "status", "esriFieldTypeString", "");
+
+    const sent = JSON.parse(esriRequest.mock.calls[0][1].body.get("addToDefinition"));
+    expect(sent.fields[0]).toMatchObject({ name: "status", length: 255 });
+    // A blank default-value input means "no default", not "the empty string".
+    expect(sent.fields[0].defaultValue).toBeNull();
+  });
+
+  test("rejects a column name a hosted service can't use as a database column", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+
+    await expect(
+      engine.addColumnToLayer("touristAttractions", "my column")
+    ).rejects.toThrow("is not a valid column name");
+    expect(esriRequest).not.toHaveBeenCalled();
+  });
+
+  test("rejects a column the hosted layer already has", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.fields = [{ name: "Status" }];
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+
+    await expect(engine.addColumnToLayer("touristAttractions", "status")).rejects.toThrow(
+      'Column "status" already exists.'
+    );
+    expect(esriRequest).not.toHaveBeenCalled();
+  });
+
+  test("surfaces `details` when the service error carries an empty message", async () => {
+    // ArcGIS Online answers some failed definition changes with message: ""
+    // and the real explanation only in details; `message || fallback` threw
+    // the one useful string away.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    esriRequest.mockResolvedValueOnce({
+      data: { error: { message: "", details: ["Invalid definition for field."] } }
+    });
+
+    await expect(engine.addColumnToLayer("touristAttractions", "newField")).rejects.toThrow(
+      "Invalid definition for field."
+    );
+  });
+});
+
+describe("GISMapEngine.deleteColumnFromLayer", () => {
+  test("requires a field name", async () => {
+    const engine = new GISMapEngine();
+    await expect(engine.deleteColumnFromLayer("drawings", "")).rejects.toThrow(
+      "Field name is required."
+    );
+  });
+
+  test("removes a drawings column from the schema and from every graphic", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.drawingFields = [{ name: "status", type: "esriFieldTypeString", defaultValue: null }];
+    engine.drawLayer.add({ symbol: {}, attributes: { status: "a", note: "keep" } });
+
+    const result = await engine.deleteColumnFromLayer("drawings", "status");
+
+    expect(result).toEqual({ success: true });
+    expect(engine.drawingFields).toEqual([]);
+    expect(engine.drawLayer.graphics.toArray()[0].attributes).toEqual({ note: "keep" });
+  });
+
+  test("removes an uploaded-GeoJSON property that was never a formal drawings column", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.drawLayer.add({ symbol: {}, attributes: { imported: "x" } });
+
+    await expect(engine.deleteColumnFromLayer("drawings", "imported")).resolves.toEqual({
+      success: true
+    });
+    expect(engine.drawLayer.graphics.toArray()[0].attributes).toEqual({});
+  });
+
+  test("throws for a drawings column that exists nowhere", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+
+    await expect(engine.deleteColumnFromLayer("drawings", "ghost")).rejects.toThrow(
+      'Column "ghost" does not exist.'
+    );
+  });
+
+  test("throws when the hosted layer can't be resolved", async () => {
+    const engine = new GISMapEngine();
+    await expect(engine.deleteColumnFromLayer("unknown-layer", "field")).rejects.toThrow(
+      "Layer not found."
+    );
+  });
+
+  test("refuses to delete the object id field", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+
+    await expect(
+      engine.deleteColumnFromLayer("touristAttractions", "OBJECTID")
+    ).rejects.toThrow("identifies each feature and cannot be deleted.");
+    expect(esriRequest).not.toHaveBeenCalled();
+  });
+
+  test("does not force a sign-in when nobody is signed in", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue(undefined);
+
+    await expect(engine.deleteColumnFromLayer("touristAttractions", "note")).rejects.toThrow(
+      "Sign in with an account that owns this layer to delete a column."
+    );
+    expect(IdentityManager.getCredential).not.toHaveBeenCalled();
+    expect(esriRequest).not.toHaveBeenCalled();
+  });
+
+  test("posts deleteFromDefinition to the admin layer URL and refreshes the layer", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.url =
+      "https://services1.arcgis.com/abc/arcgis/rest/services/My_Layer/FeatureServer";
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    esriRequest.mockResolvedValueOnce({ data: {} });
+
+    const result = await engine.deleteColumnFromLayer("touristAttractions", "note");
+
+    expect(esriRequest).toHaveBeenCalledWith(
+      "https://services1.arcgis.com/abc/arcgis/rest/admin/services/My_Layer/FeatureServer/0/deleteFromDefinition",
+      expect.objectContaining({ method: "post", responseType: "json" })
+    );
+    const sent = JSON.parse(esriRequest.mock.calls[0][1].body.get("deleteFromDefinition"));
+    expect(sent).toEqual({ fields: [{ name: "note" }] });
+    expect(engine.touristAttractionLayer.refresh).toHaveBeenCalled();
+    expect(result).toEqual({ success: true });
+  });
+
+  test("drops the deleted key off the cached selected graphic", async () => {
+    // layer.refresh() requeries the service, but the graphic cached from the
+    // last hitTest keeps the attributes it was selected with - so re-opening
+    // the panel would still list the column that was just dropped.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 1, note: "gone" } };
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    esriRequest.mockResolvedValueOnce({ data: {} });
+
+    await engine.deleteColumnFromLayer("touristAttractions", "note");
+
+    expect(engine.selectedGraphic.attributes).toEqual({ OBJECTID: 1 });
+  });
+
+  test("throws the service error message when deleteFromDefinition fails", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    esriRequest.mockResolvedValueOnce({ data: { error: { message: "Not authorized" } } });
+
+    await expect(
+      engine.deleteColumnFromLayer("touristAttractions", "note")
+    ).rejects.toThrow("Not authorized");
+    expect(engine.touristAttractionLayer.refresh).not.toHaveBeenCalled();
+  });
 });
 
 describe("GISMapEngine Filter & Aggregate System", () => {

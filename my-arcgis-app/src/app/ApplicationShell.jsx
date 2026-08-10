@@ -651,6 +651,25 @@ export default function ApplicationShell() {
     }
   };
 
+  // Mirrors handleAddColumn: the engine owns the schema change, the shell
+  // drops the key from the panel's copy of the attributes so the popup
+  // reflects it without waiting for another hitTest.
+  const handleDeleteColumn = async (fieldName) => {
+    if (!selectedFeature) return;
+    try {
+      await engineRef.current.deleteColumnFromLayer(selectedFeature.layerId, fieldName);
+      setSelectedFeature((prev) => {
+        if (!prev) return prev;
+        const remaining = { ...prev.attributes };
+        delete remaining[fieldName];
+        return { ...prev, attributes: remaining };
+      });
+      showToast(`Column "${fieldName}" deleted.`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to delete column.", "error");
+    }
+  };
+
   return (
     <div className="app">
       <button
@@ -800,6 +819,7 @@ export default function ApplicationShell() {
           onClose={() => setSelectedFeature(null)}
           onSaveAttributes={handleSaveAttributes}
           onAddColumn={handleAddColumn}
+          onDeleteColumn={handleDeleteColumn}
           canEdit={canEditSelectedFeature}
         />
       </div>

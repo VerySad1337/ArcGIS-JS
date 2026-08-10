@@ -427,15 +427,17 @@ Attribute-editing controls (`Save` / `+ Add Column`) were previously excluded fr
 
 ## Feature Attribute Selection System
 
-**Purpose:** Displays a feature's attributes in an on-map panel when the user clicks a feature on a selectable feature layer, and allows editing attribute values or adding a new attribute column.
+**Purpose:** Displays a feature's attributes in an on-map panel when the user clicks a feature on a selectable feature layer, and allows editing attribute values, adding a new attribute column, or deleting an existing one.
 
 **Key Files:**
-- `src/gis/GISMapEngine.js` – `setOnFeatureSelect`, `handleFeatureClick` (view click handling, `hitTest` against Tourist Attractions/MRT Stations/MRT Lines/Drawings layers), `resolveLayerId`, `hostedLayerById`, `buildDrawingAttributes`, `updateSelectedFeatureAttributes`, `addColumnToLayer`.
+- `src/gis/GISMapEngine.js` – `setOnFeatureSelect`, `handleFeatureClick` (view click handling, `hitTest` against Tourist Attractions/MRT Stations/MRT Lines/Drawings layers), `resolveLayerId`, `hostedLayerById`, `buildDrawingAttributes`, `updateSelectedFeatureAttributes`, `requireLayerCredential`, `addColumnToLayer`, `deleteColumnFromLayer`, plus the module-level `adminLayerUrl`/`serviceErrorMessage` helpers both schema calls share.
+
+**Schema changes go through the ADMIN catalog, at the layer level.** `addToDefinition`/`deleteFromDefinition` are only routed under `…/rest/admin/services/…/<layerId>`, with a `{"fields":[…]}` body — not the public `…/rest/services/…` path a `FeatureLayer` is constructed from, and not the service-level `{"layers":[…]}` shape `createHostedFeatureLayer` uses to add a whole new layer. Getting any part of that wrong (including passing `layerId` as the string `"0"` a URL parse yields, or omitting `length` on a string field) produces an ArcGIS Online error that names none of it — see `knowledge/features/feature-attributes.md`'s "`adminLayerUrl(layer)` — why the schema calls kept failing" for each failure mode and its misleading message.
 - `src/services/AuthService.js` – `hasPortalCredential()`, the non-prompting credential check that privileged paths gate on.
 
 **Anonymous-first:** viewing attributes never requires an account, and neither `Save` nor `+ Add Column` may trigger a sign-in. Both previously did — `getCredential` prompts unconditionally, and a 403 from `applyEdits` makes `IdentityManager` open the same modal. Editing controls are now gated on `canEdit` and the engine pre-checks with `findCredential`/`capabilities.operations.supportsUpdate`. See `knowledge/features/feature-attributes.md`'s "Never Force a Sign-In".
-- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes, with an edit mode (value inputs, Save/Cancel) and an "Add Column" form. On selecting a feature (keyed by `layerId:x:y`, not object identity, so an in-place attribute update after Save doesn't refire this), focus moves to the panel's Close button and an `Escape` keydown listener calls `onClose`.
-- `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel, `handleSaveAttributes`/`handleAddColumn` wrappers around the engine's edit APIs.
+- `src/components/FeatureAttributesPanel.jsx` – UI panel rendering the selected feature's layer title and attributes, with an edit mode (value inputs, Save/Cancel), an "Add Column" form, and a per-row `✕` that arms an in-place *Delete "&lt;name&gt;"? Delete / Keep* confirmation rather than deleting on first click. On selecting a feature (keyed by `layerId:x:y`, not object identity, so an in-place attribute update after Save doesn't refire this), focus moves to the panel's Close button and an `Escape` keydown listener calls `onClose`.
+- `src/app/ApplicationShell.jsx` – `selectedFeature` state, wiring the engine's selection callback to the panel, `handleSaveAttributes`/`handleAddColumn`/`handleDeleteColumn` wrappers around the engine's edit APIs.
 
 ## Responsive Layout System
 

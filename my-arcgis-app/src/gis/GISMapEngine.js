@@ -43,6 +43,54 @@ function colorToHex(color) {
   return "#000000";
 }
 
+// The admin-catalog URL for one layer of a hosted feature service - the only
+// route that answers the schema operations addToDefinition/deleteFromDefinition:
+//   public: <host>/arcgis/rest/services/<Service>/FeatureServer/<layerId>
+//   admin:  <host>/arcgis/rest/admin/services/<Service>/FeatureServer/<layerId>
+//
+// Three things this has to get right, each of which produced its own
+// misleading ArcGIS Online error when it didn't:
+//
+//   1. The admin prefix. addToDefinition posted to the PUBLIC layer path is
+//      not a recognized operation on ArcGIS Online; its router falls through
+//      to a generic handler and answers "Cannot perform query. Invalid query
+//      parameters." rather than a 404 or a permissions error. (Only ArcGIS
+//      Enterprise documents a public per-layer variant.)
+//   2. The layer index. `layer.url` is not a reliable place to read it from:
+//      the SDK strips a trailing "/<id>" off a constructor URL onto
+//      `layer.layerId`, but a layer built from a bare service root (which is
+//      how touristAttractions/mrtStations/mrtLines are configured) keeps its
+//      url index-free. The trailing index is therefore stripped
+//      unconditionally and re-appended from `layerId`, so both shapes
+//      normalize to the same result. Getting this wrong yields a per-layer
+//      URL carrying a service-level body (or vice versa), which ArcGIS
+//      answers with a real but unhelpful "Unable to add feature service
+//      definition."
+//   3. `layerId`'s type. Parsed off a URL it arrives as the STRING "0", and
+//      ArcGIS Online does not coerce it before its own layer lookup - it
+//      crashes internally with "Object reference not set to an instance of
+//      an object" instead of reporting a validation error. Hence Number().
+//
+// Note this is the LAYER-level endpoint (fields live on a layer). Adding a
+// whole new layer to a service is the SERVICE-level sibling, one path segment
+// up with a {"layers":[...]} body - see createHostedFeatureLayer.
+function adminLayerUrl(layer) {
+  const serviceUrl = String(layer?.url || "").replace(/\/\d+$/, "");
+  const adminServiceUrl = serviceUrl.replace("/rest/services/", "/rest/admin/services/");
+  return `${adminServiceUrl}/${Number(layer?.layerId ?? 0)}`;
+}
+
+// ArcGIS Online sometimes answers a failed definition change with an EMPTY
+// `message` and the actual explanation only in `details`. Reading
+// `message || fallback` therefore threw away the one useful string in the
+// response; the details are checked before giving up on a generic message.
+function serviceErrorMessage(error, fallback) {
+  const message = error?.message?.trim?.() || "";
+  if (message) return message;
+  const details = Array.isArray(error?.details) ? error.details.filter(Boolean).join(" ") : "";
+  return details || fallback;
+}
+
 // Materializes a renderer descriptor into whatever ArcGIS actually needs on a
 // live layer. Everything except heatmap passes straight through as plain JSON
 // (autocast handles it), which is why every other renderer mode in this file
@@ -3321,6 +3369,31 @@ export default class GISMapEngine {
     return { success: true, attributes: { ...this.selectedGraphic.attributes } };
   }
 
+  // Changing a hosted feature service's schema is an admin operation: it
+  // needs a token from a user with edit/admin privileges on the item, not
+  // just the app's public API key.
+  //
+  // getCredential() ACQUIRES a credential, which means opening the SDK's own
+  // sign-in modal whenever there isn't one - calling it unconditionally
+  // forced a login every time, on an app that is meant to work anonymously.
+  // findCredential() is the non-prompting lookup: it returns undefined
+  // instead of prompting, letting us fail with our own toast. Both the
+  // service URL and the portal are checked because an ArcGIS Online sign-in
+  // registers a portal credential that federates to the hosted service
+  // rather than a per-service one. Once one is known to exist, the
+  // getCredential() below resolves from it silently.
+  async requireLayerCredential(layer, action) {
+    const existingCredential =
+      IdentityManager.findCredential(layer.url) ||
+      IdentityManager.findCredential(`${PORTAL_URL}/sharing`);
+
+    if (!existingCredential) {
+      throw new Error(`Sign in with an account that owns this layer to ${action}.`);
+    }
+
+    return IdentityManager.getCredential(layer.url);
+  }
+
   async addColumnToLayer(layerId, fieldName, fieldType = "esriFieldTypeString", defaultValue = null) {
     if (!fieldName) throw new Error("Field name is required.");
 
@@ -3340,57 +3413,129 @@ export default class GISMapEngine {
     const layer = this.hostedLayerById(layerId);
     if (!layer) throw new Error("Layer not found.");
 
-    // Adding a field to a hosted feature service is an admin schema change:
-    // it requires a token from a user with edit/admin privileges on the item,
-    // not just the app's public API key.
-    //
-    // getCredential() ACQUIRES a credential, which means opening the SDK's
-    // own sign-in modal whenever there isn't one - so this call used to
-    // force a login unconditionally, every time, on an app that is meant to
-    // work anonymously. findCredential() is the non-prompting lookup: it
-    // returns undefined instead of prompting, letting us fail with our own
-    // toast. Both the service URL and the portal are checked because an
-    // ArcGIS Online sign-in registers a portal credential that federates to
-    // the hosted service rather than a per-service one. When a credential
-    // does exist, the getCredential() below resolves from it silently.
-    const existingCredential =
-      IdentityManager.findCredential(layer.url) ||
-      IdentityManager.findCredential(`${PORTAL_URL}/sharing`);
-
-    if (!existingCredential) {
-      throw new Error("Sign in with an account that owns this layer to add a column.");
+    // A hosted service's field name is a database column name, not free
+    // text. ArcGIS Online rejects anything else - but from inside a
+    // definition merge, so it surfaces as the same opaque "Unable to add
+    // feature service definition." every other malformed request produces.
+    // Checking here turns a guess-what-went-wrong error into a usable one.
+    // (The drawings path above deliberately skips this: those attributes are
+    // plain in-memory object keys with no service behind them.)
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(fieldName)) {
+      throw new Error(
+        `"${fieldName}" is not a valid column name. Use letters, digits and underscores, starting with a letter.`
+      );
     }
 
-    const credential = await IdentityManager.getCredential(layer.url);
-    const addToDefinitionUrl = `${layer.url}/${layer.layerId ?? 0}/addToDefinition`;
+    if ((layer.fields || []).some((f) => f?.name?.toLowerCase() === fieldName.toLowerCase())) {
+      throw new Error(`Column "${fieldName}" already exists.`);
+    }
+
+    const credential = await this.requireLayerCredential(layer, "add a column");
+
+    const field = {
+      name: fieldName,
+      type: fieldType,
+      alias: fieldName,
+      nullable: true,
+      editable: true,
+      // An empty default-value input means "no default", not "default to the
+      // empty string" - the panel's field is optional and starts blank.
+      defaultValue: defaultValue === "" ? null : defaultValue,
+      domain: null
+    };
+
+    // A string column with no declared length is rejected by the definition
+    // merge (again as the generic "Unable to add feature service
+    // definition."), because the underlying table needs a width to create
+    // the column with. 255 is ArcGIS Online's own default for a text field.
+    if (fieldType === "esriFieldTypeString") field.length = 255;
 
     const body = new FormData();
     body.append("f", "json");
     body.append("token", credential.token);
-    body.append(
-      "addToDefinition",
-      JSON.stringify({
-        fields: [
-          {
-            name: fieldName,
-            type: fieldType,
-            alias: fieldName,
-            nullable: true,
-            editable: true,
-            defaultValue
-          }
-        ]
-      })
-    );
+    body.append("addToDefinition", JSON.stringify({ fields: [field] }));
 
-    const response = await esriRequest(addToDefinitionUrl, {
+    const response = await esriRequest(`${adminLayerUrl(layer)}/addToDefinition`, {
       method: "post",
       responseType: "json",
       body
     });
 
     if (response.data?.error) {
-      throw new Error(response.data.error.message || "Failed to add column to layer.");
+      throw new Error(serviceErrorMessage(response.data.error, "Failed to add column to layer."));
+    }
+
+    await layer.refresh();
+    return { success: true };
+  }
+
+  // The inverse of addColumnToLayer, following the same two shapes: an
+  // in-memory splice for drawings, a deleteFromDefinition admin call for a
+  // hosted layer (same admin-catalog URL, same credential gate, same error
+  // surfacing - see adminLayerUrl/requireLayerCredential).
+  async deleteColumnFromLayer(layerId, fieldName) {
+    if (!fieldName) throw new Error("Field name is required.");
+
+    if (layerId === "drawings") {
+      // A drawings attribute can exist on the graphics without ever having
+      // been added as a formal column (uploaded GeoJSON properties - see
+      // drawingsFieldSchema), so a missing drawingFields entry is not on its
+      // own grounds to refuse: the key is stripped off the graphics either
+      // way, and only a key present in neither place is an error.
+      const index = this.drawingFields.findIndex((f) => f.name === fieldName);
+      const onAnyGraphic = this.drawLayer.graphics
+        .toArray()
+        .some((g) => fieldName in (g.attributes || {}));
+
+      if (index === -1 && !onAnyGraphic) {
+        throw new Error(`Column "${fieldName}" does not exist.`);
+      }
+
+      if (index !== -1) this.drawingFields.splice(index, 1);
+      this.drawLayer.graphics.forEach((g) => {
+        if (g.attributes) delete g.attributes[fieldName];
+      });
+
+      return { success: true };
+    }
+
+    const layer = this.hostedLayerById(layerId);
+    if (!layer) throw new Error("Layer not found.");
+
+    // The ObjectID/GlobalID columns are the service's own row identity, and
+    // are what applyEdits keys every update off (see
+    // updateSelectedFeatureAttributes). ArcGIS rejects deleting them anyway;
+    // refusing here keeps the user from being offered a control whose only
+    // outcome is an error.
+    if (fieldName === layer.objectIdField || fieldName === layer.globalIdField) {
+      throw new Error(`"${fieldName}" identifies each feature and cannot be deleted.`);
+    }
+
+    const credential = await this.requireLayerCredential(layer, "delete a column");
+
+    const body = new FormData();
+    body.append("f", "json");
+    body.append("token", credential.token);
+    body.append("deleteFromDefinition", JSON.stringify({ fields: [{ name: fieldName }] }));
+
+    const response = await esriRequest(`${adminLayerUrl(layer)}/deleteFromDefinition`, {
+      method: "post",
+      responseType: "json",
+      body
+    });
+
+    if (response.data?.error) {
+      throw new Error(
+        serviceErrorMessage(response.data.error, "Failed to delete column from layer.")
+      );
+    }
+
+    // layer.refresh() requeries the service, but the graphic cached from the
+    // last hitTest keeps whatever attributes it was selected with - so
+    // re-opening the panel on the same feature would still list the column
+    // that was just dropped.
+    if (this.selectedLayerId === layerId && this.selectedGraphic?.attributes) {
+      delete this.selectedGraphic.attributes[fieldName];
     }
 
     await layer.refresh();

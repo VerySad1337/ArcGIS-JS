@@ -16,6 +16,7 @@ export default function FeatureAttributesPanel({
   onClose,
   onSaveAttributes,
   onAddColumn,
+  onDeleteColumn,
   canEdit = true
 }) {
   const [editMode, setEditMode] = useState(false);
@@ -23,6 +24,7 @@ export default function FeatureAttributesPanel({
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null);
   const [selectionKey, setSelectionKey] = useState(null);
   const closeButtonRef = useRef(null);
 
@@ -36,6 +38,7 @@ export default function FeatureAttributesPanel({
     setDraft(feature?.attributes || {});
     setNewFieldName("");
     setNewFieldValue("");
+    setPendingDelete(null);
   }
 
   useEffect(() => {
@@ -72,6 +75,7 @@ export default function FeatureAttributesPanel({
   const cancelEdit = () => {
     setDraft(attributes || {});
     setEditMode(false);
+    setPendingDelete(null);
   };
 
   const handleSave = async () => {
@@ -92,6 +96,24 @@ export default function FeatureAttributesPanel({
     setNewFieldValue("");
   };
 
+  // Dropping a column destroys that value on every feature in the layer and
+  // (for a hosted layer) is not undoable from here, so the ✕ arms a
+  // confirmation in place of the row rather than deleting on first click.
+  const handleDeleteColumn = async (key) => {
+    setSaving(true);
+    try {
+      await onDeleteColumn?.(key);
+      setPendingDelete(null);
+      setDraft((d) => {
+        const remaining = { ...d };
+        delete remaining[key];
+        return remaining;
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="feature-attributes-panel" style={style}>
       <div className="feature-attributes-header">
@@ -107,20 +129,62 @@ export default function FeatureAttributesPanel({
       </div>
 
       <div className="feature-attributes-body">
-        {entries.map(([key, value]) => (
-          <div key={key} className="feature-attribute-row">
-            <span className="feature-attribute-key">{key}</span>
-            {editMode && key !== objectIdField ? (
-              <input
-                className="feature-attribute-input"
-                value={draft[key] ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-              />
-            ) : (
-              <span className="feature-attribute-value">{String(value)}</span>
-            )}
-          </div>
-        ))}
+        {entries.map(([key, value]) => {
+          const editable = editMode && key !== objectIdField;
+
+          if (editable && pendingDelete === key) {
+            return (
+              <div key={key} className="feature-attribute-row feature-attribute-confirm">
+                <span className="feature-attribute-key">Delete &quot;{key}&quot;?</span>
+                <div className="feature-attribute-confirm-actions">
+                  <button
+                    type="button"
+                    className="feature-attribute-confirm-delete"
+                    disabled={saving}
+                    onClick={() => handleDeleteColumn(key)}
+                  >
+                    Delete
+                  </button>
+                  {/* "Keep", not "Cancel": the footer already has a Cancel
+                      (which exits edit mode entirely), and two buttons named
+                      Cancel a few pixels apart doing different things is a
+                      trap - in a popup this narrow especially. */}
+                  <button type="button" disabled={saving} onClick={() => setPendingDelete(null)}>
+                    Keep
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div key={key} className="feature-attribute-row">
+              <span className="feature-attribute-key">{key}</span>
+              {editable ? (
+                <>
+                  <input
+                    className="feature-attribute-input"
+                    value={draft[key] ?? ""}
+                    onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                  />
+                  {onDeleteColumn && (
+                    <button
+                      type="button"
+                      className="feature-attribute-delete"
+                      aria-label={`Delete column ${key}`}
+                      title={`Delete column ${key}`}
+                      onClick={() => setPendingDelete(key)}
+                    >
+                      <Icon name="close" size={12} />
+                    </button>
+                  )}
+                </>
+              ) : (
+                <span className="feature-attribute-value">{String(value)}</span>
+              )}
+            </div>
+          );
+        })}
 
         {editMode && (
           <div className="feature-attributes-add-column">
@@ -136,7 +200,15 @@ export default function FeatureAttributesPanel({
               value={newFieldValue}
               onChange={(e) => setNewFieldValue(e.target.value)}
             />
-            <button type="button" onClick={handleAddColumn}>
+            {/* Blank names were always silently ignored; with nothing
+                disabled the button looked identically clickable either way,
+                which read as broken rather than inert. */}
+            <button
+              type="button"
+              disabled={!newFieldName.trim()}
+              title={!newFieldName.trim() ? "Enter a column name first" : undefined}
+              onClick={handleAddColumn}
+            >
               + Add Column
             </button>
           </div>
@@ -181,5 +253,6 @@ FeatureAttributesPanel.propTypes = {
   onClose: PropTypes.func,
   onSaveAttributes: PropTypes.func,
   onAddColumn: PropTypes.func,
+  onDeleteColumn: PropTypes.func,
   canEdit: PropTypes.bool
 };
