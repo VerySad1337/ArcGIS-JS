@@ -2432,33 +2432,60 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
     const originalCreateObjectURL = globalThis.URL.createObjectURL;
     const originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
 
+    let originalPromisePicker;
+
     beforeEach(() => {
       globalThis.URL.createObjectURL = jest.fn(() => "blob:mock-url");
       globalThis.URL.revokeObjectURL = jest.fn();
+      originalPromisePicker = window.showSaveFilePicker;
+      delete window.showSaveFilePicker;
     });
 
     afterEach(() => {
       globalThis.URL.createObjectURL = originalCreateObjectURL;
       globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
+      window.showSaveFilePicker = originalPromisePicker;
     });
 
-    test("downloads a project.json file and reports success", () => {
+    test("prompts for a filename, downloads the chosen file, and reports success", async () => {
       const engine = new GISMapEngine();
       engine.attachToView(makeView());
 
       const clickSpy = jest.fn();
       const anchor = { click: clickSpy, href: "", download: "" };
       const createElementSpy = jest.spyOn(document, "createElement").mockReturnValue(anchor);
+      const promptSpy = jest.spyOn(window, "prompt").mockReturnValue("my-project");
 
       const msg = jest.fn();
-      engine.saveProjectState(msg);
+      await engine.saveProjectState(msg);
 
+      expect(promptSpy).toHaveBeenCalled();
       expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
-      expect(anchor.download).toBe("project.json");
+      expect(anchor.download).toBe("my-project.json");
       expect(clickSpy).toHaveBeenCalled();
       expect(msg).toHaveBeenCalledWith("Project saved.", "success");
 
       createElementSpy.mockRestore();
+      promptSpy.mockRestore();
+    });
+
+    test("does nothing when the filename prompt is cancelled", async () => {
+      const engine = new GISMapEngine();
+      engine.attachToView(makeView());
+
+      const clickSpy = jest.fn();
+      const anchor = { click: clickSpy, href: "", download: "" };
+      const createElementSpy = jest.spyOn(document, "createElement").mockReturnValue(anchor);
+      const promptSpy = jest.spyOn(window, "prompt").mockReturnValue(null);
+
+      const msg = jest.fn();
+      await engine.saveProjectState(msg);
+
+      expect(clickSpy).not.toHaveBeenCalled();
+      expect(msg).not.toHaveBeenCalled();
+
+      createElementSpy.mockRestore();
+      promptSpy.mockRestore();
     });
   });
 

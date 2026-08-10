@@ -3374,8 +3374,11 @@ export default class GISMapEngine {
   }
 
   // Downloads the current session as a project file, mirroring
-  // saveDrawings's msg-callback/anchor-download convention.
-  saveProjectState(msg) {
+  // saveDrawings's msg-callback/anchor-download convention. Lets the user
+  // pick the filename/location via the File System Access API when the
+  // browser supports it (Chromium), falling back to a plain anchor download
+  // with a prompted filename otherwise (Firefox/Safari).
+  async saveProjectState(msg) {
     let state;
     try {
       state = this.buildProjectState();
@@ -3385,10 +3388,35 @@ export default class GISMapEngine {
       return;
     }
 
-    const url = URL.createObjectURL(new Blob([JSON.stringify(state)], { type: "application/json" }));
+    const json = JSON.stringify(state, null, 2);
+
+    if (typeof window !== "undefined" && window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: "project.json",
+          types: [{ description: "Project file", accept: { "application/json": [".json"] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(json);
+        await writable.close();
+        msg?.("Project saved.", "success");
+      } catch (err) {
+        if (err?.name !== "AbortError") {
+          console.error("Save project failed:", err);
+          msg?.("Could not save the project.", "error");
+        }
+      }
+      return;
+    }
+
+    let filename = window.prompt("Save project as:", "project.json");
+    if (!filename) return;
+    if (!/\.json$/i.test(filename)) filename += ".json";
+
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "project.json";
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
     msg?.("Project saved.", "success");
