@@ -3,10 +3,20 @@
 **Purpose:** Documents how the app is built and containerized for deployment.
 
 **Key Files:**
-- `Dockerfile` (repo root) – multi-stage build: `node:22-alpine` builds the Vite app in `my-arcgis-app/`, then `nginx:alpine` serves the resulting `dist/` on port 80.
+- `Dockerfile` (repo root) – multi-stage build: `node:22-alpine` builds the Vite app in `my-arcgis-app/`, then `nginx:alpine` serves the resulting `dist/` on port 80, using `nginx.conf` (below) instead of the image's default server block.
+- `nginx.conf` (repo root) – sets the caching policy the SPA needs (see "Stale-deploy 404s on 2D/3D toggle" below): `/assets/*` (Vite's content-hashed JS/CSS chunks) get `Cache-Control: public, max-age=31536000, immutable`; `index.html` gets `Cache-Control: no-cache` so it always revalidates. `location / { try_files $uri $uri/ /index.html; }` is the standard SPA fallback (the app has no client-side router today, but this costs nothing and avoids a 404 if one is added later).
 - `docker-compose.yml` (repo root) – one `arcgis-app` service that builds from the repo-root context and publishes `8080:80`. It passes `VITE_ARCGIS_API_KEY: ${VITE_ARCGIS_API_KEY}` as a build arg.
-- `.dockerignore` (repo root) – excludes `node_modules`, `dist`, `.git`, `.vscode`, `.vite`, `.scannerwork`, `coverage`, `sonar-project.properties`, and `Dockerfile` itself from the build context.
+- `.dockerignore` (repo root) – excludes `node_modules`, `dist`, `.git`, `.vscode`, `.vite`, `.scannerwork`, `coverage`, `sonar-project.properties`, and `Dockerfile` itself from the build context. `nginx.conf` is **not** excluded — it must reach the build context for `COPY nginx.conf /etc/nginx/conf.d/default.conf` to succeed.
 - `my-arcgis-app/package.json` – `build` script (`vite build`) invoked inside the Docker build stage.
+
+### Stale-deploy 404s on 2D/3D toggle (2026-08)
+
+**Symptom:** after a redeploy (`docker compose up --build`) lands while a browser tab is still open on the old build, toggling from 2D to 3D throws a wall of `Failed to load resource: 404` for `@arcgis/core`'s SceneView-only chunks (`I3SIndexInfo-*.js`, `SceneService-*.js`, `GraphicsLayerView3D-*.js`, `editingTools-*.js`, etc.), followed by `Failed to fetch dynamically imported module` and every layer failing to create a layerview.
+
+**Root cause:** Vite content-hashes every file under `dist/assets/` (the hash is part of the filename, e.g. `I3SIndexInfo-CpQp5Naa.js`), and a fresh `vite build` gives most of them new hashes. `@arcgis/core`'s 3D code path is only `import()`-ed the first time a view actually switches to `SceneView` — everything the *2D* `MapView` needs was already fetched (successfully, against the *old* build) when the page first loaded. If the container gets rebuilt with a new image in between, the already-open tab is still running the old build's JS, which still references the old chunk hashes — hashes that no longer exist once nginx is serving the new `dist/`. The 2D→3D toggle is just the first moment that stale bundle tries to fetch something it hadn't needed yet, so the failure looks 3D-specific even though the actual cause is unrelated to 3D or to this app's own code.
+- Confirmed by diffing a fresh local `npm run build` output against the hash named in the browser error: the locally rebuilt `dist/assets/I3SIndexInfo-*.js` had a different hash than the one the browser tried to fetch — proof the running server and the loaded page were from two different builds, not that the build itself was missing files.
+
+**Fix:** `nginx.conf` (above) sets `Cache-Control: no-cache` on `index.html` specifically (nginx's stock config sets no explicit caching header on it, which lets a browser apply its own heuristic caching and hold onto a stale copy for a while) so a reload always revalidates and picks up the current build's asset references, while `/assets/*` — which never changes contents for a given filename — is still cached aggressively. This does not fix an *already-open* tab that loaded before the nginx config existed or before a given redeploy; the immediate remedy there is always a hard refresh (Ctrl+Shift+R) or a fresh tab.
 
 **Build-time configuration:**
 - `VITE_ARCGIS_API_KEY` is passed as a Docker build `ARG` and baked into the static bundle at build time (Vite inlines `VITE_*` env vars at build, not runtime). It must be supplied via `--build-arg` (or a build-time `.env` consumed by Vite) — it is **not** read from the container at runtime.

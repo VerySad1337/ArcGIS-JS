@@ -285,10 +285,16 @@ describe("LayerControlPanel", () => {
   });
 
   describe("named heatmap layer rows", () => {
-    test("shows an intensity slider only while the heatmap layer is visible", () => {
+    test("the intensity slider is collapsed behind the row chevron and a Heat Intensity toggle, only while the heatmap layer is visible", async () => {
+      const user = userEvent.setup();
       const { rerender, props } = setup({
         layers: [{ id: "heatmap_abc", name: "Attraction Density", visible: true, styleGroups: [], heatmap: true, heatmapIntensity: 65 }]
       });
+
+      expect(screen.queryByText("Heat Intensity: 65")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Heat Intensity" }));
       expect(screen.getByText("Heat Intensity: 65")).toBeInTheDocument();
 
       rerender(
@@ -300,10 +306,14 @@ describe("LayerControlPanel", () => {
       expect(screen.queryByText(/Heat Intensity/)).not.toBeInTheDocument();
     });
 
-    test("moving the slider calls onUpdateHeatmapLayerIntensity with that layer's id and a number", () => {
+    test("moving the slider calls onUpdateHeatmapLayerIntensity with that layer's id and a number", async () => {
+      const user = userEvent.setup();
       const { props } = setup({
         layers: [{ id: "heatmap_abc", name: "Attraction Density", visible: true, styleGroups: [], heatmap: true, heatmapIntensity: 65 }]
       });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Heat Intensity" }));
 
       const slider = screen.getByLabelText("Heatmap intensity for Attraction Density");
       fireEvent.change(slider, { target: { value: "40" } });
@@ -319,6 +329,23 @@ describe("LayerControlPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "Remove Attraction Density" }));
       expect(props.onRemove).toHaveBeenCalledWith("heatmap_abc");
+    });
+
+    test("shows a pulsing \"Rendering…\" badge next to the name while heatmapUpdating is true, and hides it once false", () => {
+      const { rerender, props } = setup({
+        layers: [{ id: "heatmap_abc", name: "Attraction Density", visible: true, styleGroups: [], heatmap: true, heatmapIntensity: 65, heatmapUpdating: true }]
+      });
+
+      expect(screen.getByText("Rendering…")).toBeInTheDocument();
+
+      rerender(
+        <LayerControlPanel
+          {...props}
+          layers={[{ id: "heatmap_abc", name: "Attraction Density", visible: true, styleGroups: [], heatmap: true, heatmapIntensity: 65, heatmapUpdating: false }]}
+        />
+      );
+
+      expect(screen.queryByText("Rendering…")).not.toBeInTheDocument();
     });
   });
 
@@ -357,6 +384,44 @@ describe("LayerControlPanel", () => {
       symbolType: "simple-marker",
       intensity: 77
     });
+  });
+
+  test("bumping projectVersion remounts an open Heatmap Symbology section so it re-seeds from the just-loaded intensity, instead of keeping the pre-load value", async () => {
+    const user = userEvent.setup();
+    const layerWithIntensity = (intensity) => [
+      {
+        id: "touristAttractions",
+        name: "Tourist Attractions",
+        visible: true,
+        styleGroups: [
+          {
+            symbolType: "simple-marker",
+            label: "Tourist Attractions",
+            color: "#ff0000",
+            borderWidth: 1,
+            heatmapEligible: true,
+            rendererType: "heatmap",
+            rendererIntensity: intensity
+          }
+        ]
+      }
+    ];
+
+    const { rerender, props } = setup({ layers: layerWithIntensity(30), projectVersion: 1 });
+
+    await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+    await user.click(screen.getByRole("button", { name: "Symbology" }));
+    expect(screen.getByText("Heat Intensity: 30")).toBeInTheDocument();
+
+    // Simulate a project load that restored a different persisted intensity
+    // while this section is still open - the same object shape a fresh
+    // getLayers() call after loadProjectState returns, paired with the
+    // projectVersion bump ApplicationShell.loadProject performs.
+    rerender(
+      <LayerControlPanel {...props} layers={layerWithIntensity(85)} projectVersion={2} />
+    );
+
+    expect(screen.getByText("Heat Intensity: 85")).toBeInTheDocument();
   });
 
   test("clicking a layer's zoom button calls onZoomToLayer with that layer's id", async () => {

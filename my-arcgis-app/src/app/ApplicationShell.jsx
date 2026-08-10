@@ -46,6 +46,9 @@ export default function ApplicationShell() {
   const [signedInUser, setSignedInUser] = useState(null);
   const [signingIn, setSigningIn] = useState(false);
   const [sliceActive, setSliceActive] = useState(false);
+  // Bumped on every successful project load - see loadProject below and
+  // LayerControlPanel's projectVersion prop for why this exists.
+  const [projectVersion, setProjectVersion] = useState(0);
 
   useEffect(() => {
     if (!isOAuthConfigured()) return;
@@ -515,6 +518,15 @@ export default function ApplicationShell() {
       toggleViewMode(result.is3D);
     }
     refreshLayers();
+    // RendererControls (LayerControlPanel's per-style-group Symbology form)
+    // seeds its Heatmap-mode intensity (and mode/field) from props only on
+    // mount, via useState - it doesn't resync if those props change under an
+    // already-mounted instance. If a layer's Symbology > Heatmap section was
+    // left open across a project load, its slider kept showing the
+    // pre-load value instead of the one the loaded project actually applied.
+    // Bumping this forces those instances to remount and re-seed from the
+    // freshly loaded renderer state (see the key on RendererControls).
+    setProjectVersion((v) => v + 1);
   };
 
   const handleSaveAttributes = async (updates) => {
@@ -627,6 +639,7 @@ export default function ApplicationShell() {
           onClearRenderer={clearLayerRenderer}
           onUpdateRendererEntry={updateRendererEntry}
           onUpdateHeatmapLayerIntensity={updateHeatmapLayerIntensity}
+          projectVersion={projectVersion}
         />
 
         <AnalysisPanel

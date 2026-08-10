@@ -502,7 +502,8 @@ export default function LayerControlPanel({
   onSetRenderer,
   onClearRenderer,
   onUpdateRendererEntry,
-  onUpdateHeatmapLayerIntensity
+  onUpdateHeatmapLayerIntensity,
+  projectVersion
 }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragBlockIndex, setDragBlockIndex] = useState(null);
@@ -771,7 +772,8 @@ export default function LayerControlPanel({
     const isStylable = styleGroups.length > 0;
     const isFilterable = Boolean(layer.filterable);
     const isAnnotatable = Boolean(layer.annotatable);
-    const isExpandable = isStylable || isFilterable || isAnnotatable;
+    const isHeatmapLayer = Boolean(layer.heatmap) && Boolean(onUpdateHeatmapLayerIntensity);
+    const isExpandable = isStylable || isFilterable || isAnnotatable || isHeatmapLayer;
     const isExpanded = isExpandable && expandedIds[layer.id];
     const fields = fieldsById[layer.id] || [];
     const conditions = conditionsById[layer.id] || [emptyCondition()];
@@ -845,6 +847,14 @@ export default function LayerControlPanel({
             {layer.filterDescription && (
               <span className="analysis-filter-badge" title={layer.filterDescription}>
                 filtered
+              </span>
+            )}
+            {layer.heatmap && layer.heatmapUpdating && (
+              <span
+                className="analysis-filter-badge heatmap-updating-badge"
+                title="Still querying the source layer's full dataset - the heatmap will fill in as it completes."
+              >
+                Rendering…
               </span>
             )}
           </span>
@@ -949,7 +959,12 @@ export default function LayerControlPanel({
 
             {isSectionOpen(layer.id, "symbology") && styleGroups.map((group) => (
               <RendererControls
-                key={group.symbolType}
+                // projectVersion forces a remount (and a fresh useState seed
+                // from group.rendererType/rendererField/rendererIntensity)
+                // whenever a project loads - see ApplicationShell's
+                // projectVersion comment for why a plain re-render isn't
+                // enough here.
+                key={`${group.symbolType}-${projectVersion}`}
                 layerId={layer.id}
                 layerName={layer.name}
                 group={group}
@@ -1201,17 +1216,31 @@ export default function LayerControlPanel({
           </div>
         )}
 
-        {layer.heatmap && layer.visible && onUpdateHeatmapLayerIntensity && (
-          <div className="heat-slider-container">
-            <input
-              type="range"
-              min="1"
-              max="100"
-              value={layer.heatmapIntensity ?? 50}
-              aria-label={`Heatmap intensity for ${layer.name}`}
-              onChange={(e) => onUpdateHeatmapLayerIntensity(layer.id, Number(e.target.value))}
-            />
-            <div className="slider-value">Heat Intensity: {layer.heatmapIntensity ?? 50}</div>
+        {isExpanded && isHeatmapLayer && layer.visible && (
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen(layer.id, "heatmap")}
+              onClick={() => toggleSection(layer.id, "heatmap")}
+            >
+              <Icon name={isSectionOpen(layer.id, "heatmap") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Heat Intensity</span>
+            </button>
+
+            {isSectionOpen(layer.id, "heatmap") && (
+              <div className="heat-slider-container">
+                <input
+                  type="range"
+                  min="1"
+                  max="100"
+                  value={layer.heatmapIntensity ?? 50}
+                  aria-label={`Heatmap intensity for ${layer.name}`}
+                  onChange={(e) => onUpdateHeatmapLayerIntensity(layer.id, Number(e.target.value))}
+                />
+                <div className="slider-value">Heat Intensity: {layer.heatmapIntensity ?? 50}</div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1366,7 +1395,8 @@ LayerControlPanel.propTypes = {
       annotatable: PropTypes.bool,
       annotationField: PropTypes.string,
       heatmap: PropTypes.bool,
-      heatmapIntensity: PropTypes.number
+      heatmapIntensity: PropTypes.number,
+      heatmapUpdating: PropTypes.bool
     })
   ).isRequired,
   onToggle: PropTypes.func.isRequired,
@@ -1383,5 +1413,6 @@ LayerControlPanel.propTypes = {
   onSetRenderer: PropTypes.func.isRequired,
   onClearRenderer: PropTypes.func.isRequired,
   onUpdateRendererEntry: PropTypes.func.isRequired,
-  onUpdateHeatmapLayerIntensity: PropTypes.func
+  onUpdateHeatmapLayerIntensity: PropTypes.func,
+  projectVersion: PropTypes.number
 };

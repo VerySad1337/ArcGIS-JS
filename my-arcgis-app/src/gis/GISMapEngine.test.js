@@ -16,6 +16,10 @@ function makeView(hitTestResponse) {
     on: jest.fn(() => ({ remove: jest.fn() })),
     hitTest: jest.fn().mockResolvedValue(response),
     goTo: jest.fn().mockResolvedValue(undefined),
+    // Default: already-finished LayerView, so tests that don't care about
+    // the heatmap resync's timing (see resyncHeatmapRendererOnceRendered)
+    // aren't forced to simulate it. Tests that DO care override this.
+    whenLayerView: jest.fn().mockResolvedValue({ updating: false, watch: jest.fn(() => ({ remove: jest.fn() })) }),
     x: 100,
     y: 200
   };
@@ -1154,7 +1158,112 @@ describe("GISMapEngine named heatmap layers", () => {
     expect(row).toMatchObject({ name: "Attraction Density", removable: true, heatmap: true, heatmapIntensity: 70 });
   });
 
-  test("updateHeatmapLayerIntensity clones and reassigns the renderer, and persists to meta", () => {
+  // Renderer availability timing (see the identical fix/comment on portal
+  // layers, and resyncHeatmapRendererOnceRendered's own comment): a heatmap
+  // renderer assigned in the FeatureLayer constructor is computed against
+  // whatever data has arrived by that first paint, and - unlike a live
+  // simple renderer - does not keep recomputing on its own as more features
+  // stream in. The map then keeps showing that stale, undercounted surface
+  // (visibly thinner/more yellow than it should be) until something
+  // reassigns `.renderer` again - which is why it only ever "corrected
+  // itself" once a user touched the intensity slider, never just by
+  // waiting. `FeatureLayer.load()` resolving is NOT a reliable fix for
+  // this: it only means the service's metadata arrived, not that the view
+  // has actually queried/rendered the layer's features - an earlier version
+  // of this fix used `.load()` and still reproduced the bug. The real
+  // signal is the LayerView's own `updating` flag going false.
+  test("does not reassign the renderer until the LayerView's own `updating` flag goes false - `.load()`/layer construction finishing is not enough", async () => {
+    const engine = new GISMapEngine();
+    let updatingCallback;
+    const layerView = {
+      updating: true,
+      watch: jest.fn((prop, cb) => {
+        updatingCallback = cb;
+        return { remove: jest.fn() };
+      })
+    };
+    const view = makeView();
+    view.whenLayerView = jest.fn().mockResolvedValue(layerView);
+    engine.attachToView(view);
+    engine.touristAttractionLayer.geometryType = "point";
+
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 70 });
+    const layer = engine.heatmapLayers.get(id);
+    const rendererBeforeReady = layer.renderer;
+
+    // Flush the whenLayerView() promise's microtask.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(layer.renderer).toBe(rendererBeforeReady);
+
+    // The LayerView finishes its initial query/render pass.
+    layerView.updating = false;
+    updatingCallback(false);
+
+    expect(layer.renderer).not.toBe(rendererBeforeReady);
+    expect(layer.renderer.maxPixelIntensity).toBe(70);
+  });
+
+  // getLayers()'s heatmapUpdating flag (see resyncHeatmapRendererOnceRendered/
+  // heatmapLayerUpdating) is what LayerControlPanel shows a "Rendering…"
+  // indicator off of - it must be true from the moment the layer exists
+  // until the LayerView actually finishes its initial query, and it must
+  // also flip back to false and notify onDrawingsChanged when that happens,
+  // or the indicator would either never show or get stuck showing forever.
+  test("getLayers() reports heatmapUpdating true until the LayerView settles, then false, and calls onDrawingsChanged on the transition", async () => {
+    const engine = new GISMapEngine();
+    let updatingCallback;
+    const layerView = {
+      updating: true,
+      watch: jest.fn((prop, cb) => {
+        updatingCallback = cb;
+        return { remove: jest.fn() };
+      })
+    };
+    const view = makeView();
+    view.whenLayerView = jest.fn().mockResolvedValue(layerView);
+    engine.attachToView(view);
+    engine.touristAttractionLayer.geometryType = "point";
+
+    const onDrawingsChanged = jest.fn();
+    engine.setOnDrawingsChanged(onDrawingsChanged);
+
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 70 });
+    expect(engine.getLayers().find((l) => l.id === id).heatmapUpdating).toBe(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(engine.getLayers().find((l) => l.id === id).heatmapUpdating).toBe(true);
+    // attachToView's own unrelated load-timing calls (see its
+    // touristAttractionLayer/mrtStationLayer .load().then() calls) may
+    // already have fired onDrawingsChanged by this point - what matters is
+    // that settling THIS layer's resync fires at least one more.
+    const callsBeforeSettle = onDrawingsChanged.mock.calls.length;
+
+    layerView.updating = false;
+    updatingCallback(false);
+
+    expect(engine.getLayers().find((l) => l.id === id).heatmapUpdating).toBe(false);
+    expect(onDrawingsChanged.mock.calls.length).toBeGreaterThan(callsBeforeSettle);
+  });
+
+  test("heatmapUpdating settles to false even when whenLayerView never resolves a usable LayerView (e.g. the layer got removed mid-wait)", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    view.whenLayerView = jest.fn().mockResolvedValue(null);
+    engine.attachToView(view);
+    engine.touristAttractionLayer.geometryType = "point";
+
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density" });
+    expect(engine.getLayers().find((l) => l.id === id).heatmapUpdating).toBe(true);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(engine.getLayers().find((l) => l.id === id).heatmapUpdating).toBe(false);
+  });
+
+  test("updateHeatmapLayerIntensity rebuilds and reassigns the renderer, and persists to meta", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
     engine.touristAttractionLayer.geometryType = "point";
@@ -1203,6 +1312,38 @@ describe("GISMapEngine named heatmap layers", () => {
     expect(layer.url).toBe(engine.touristAttractionLayer.url);
     expect(layer.renderer.maxPixelIntensity).toBe(65);
     expect(layer.visible).toBe(false);
+  });
+
+  test("the freshly rebuilt layer on a 2D/3D reattachment (or project load) also waits for its LayerView before reassigning, same as at creation", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+    const { id } = engine.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 65 });
+
+    let updatingCallback;
+    const layerView = {
+      updating: true,
+      watch: jest.fn((prop, cb) => {
+        updatingCallback = cb;
+        return { remove: jest.fn() };
+      })
+    };
+    const view = makeView();
+    view.whenLayerView = jest.fn().mockResolvedValue(layerView);
+    engine.attachToView(view);
+
+    const rebuilt = engine.heatmapLayers.get(id);
+    const rendererBeforeReady = rebuilt.renderer;
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(rebuilt.renderer).toBe(rendererBeforeReady);
+
+    layerView.updating = false;
+    updatingCallback(false);
+
+    expect(rebuilt.renderer).not.toBe(rendererBeforeReady);
+    expect(rebuilt.renderer.maxPixelIntensity).toBe(65);
   });
 });
 
@@ -2441,6 +2582,49 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
       expect(loader.stopLayer.graphics).toHaveLength(2);
     });
 
+    // Regression (2026-08): every heatmap in the engine reached ArcGIS as a
+    // plain object, whose maxPixelIntensity/minPixelIntensity the SDK silently
+    // drops in favour of an auto-calculated density (see GISMapEngine's
+    // toLiveRenderer). Only updateHeatmapLayerIntensity happened to use the
+    // one shape that works, so a heatmap rendered as a single washed-out blob
+    // around the densest cluster on every path where the user had NOT dragged
+    // the intensity slider - most visibly after "Load Project", where nothing
+    // touches the slider at all, leaving the intensity the panel reported
+    // disagreeing with what the map actually drew.
+    test("applies each restored heatmap layer's persisted intensity to the actual renderer, with no slider interaction", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      saver.touristAttractionLayer.geometryType = "point";
+      saver.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 12 });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      await loader.loadProjectState(makeFile(savedJson));
+
+      const layers = [...loader.heatmapLayers.values()];
+      expect(layers).toHaveLength(1);
+      expect(layers[0].renderer.type).toBe("heatmap");
+      expect(layers[0].renderer.maxPixelIntensity).toBe(12);
+    });
+
+    // Same root cause, the in-place Heatmap renderer mode rather than a named
+    // layer: drawLayer.renderer is assigned straight from the restored
+    // layerRenderers descriptor, so it needs the same materialization.
+    test("applies a restored `drawings` heatmap renderer's intensity to drawLayer, not an auto-calculated density", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      await saver.setLayerAdvancedRenderer("drawings", { type: "heatmap", intensity: 33 });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      await loader.loadProjectState(makeFile(savedJson));
+
+      expect(loader.drawLayer.renderer.type).toBe("heatmap");
+      expect(loader.drawLayer.renderer.maxPixelIntensity).toBe(33);
+    });
+
     test("navigates to the saved extent when a view is attached", async () => {
       const saver = new GISMapEngine();
       const savedView = makeView();
@@ -2459,6 +2643,73 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
       );
     });
 
+    // Regression test for the bug actually reported: a named heatmap
+    // layer's renderer looked right on `getLayers()` after a project load,
+    // but the map itself stayed undercounted (thin/yellow, not red) until a
+    // user touched the intensity slider. root cause: attachToView's own
+    // heatmap resync fires once its OWN (redundant, same-position) internal
+    // goTo settles - but loadProjectState does a SECOND, later goTo of its
+    // own (to the project's actually-saved extent, asserted above), which
+    // attachToView has no way to know is coming. A heatmap's kernel-density
+    // surface is computed per current view extent, so resyncing only before
+    // that second navigation left the renderer reflecting the wrong
+    // (pre-navigation) extent. `view.whenLayerView` must not be called for
+    // the heatmap layer until AFTER `view.goTo(savedExtent)` has resolved.
+    test("resyncs a named heatmap layer's renderer again after navigating to the project's saved extent, not just once at attach time", async () => {
+      const saver = new GISMapEngine();
+      const savedView = makeView();
+      savedView.extent = { type: "extent", xmin: 0, ymin: 0, xmax: 10, ymax: 10 };
+      saver.attachToView(savedView);
+      saver.touristAttractionLayer.geometryType = "point";
+      saver.createHeatmapLayer("touristAttractions", { name: "Density", intensity: 65 });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      const view = makeView();
+      const callOrder = [];
+      let resolveGoTo;
+      view.goTo = jest.fn(() => {
+        callOrder.push("goTo");
+        return new Promise((resolve) => {
+          resolveGoTo = resolve;
+        });
+      });
+      view.whenLayerView = jest.fn(() => {
+        callOrder.push("whenLayerView");
+        return Promise.resolve({ updating: false, watch: jest.fn(() => ({ remove: jest.fn() })) });
+      });
+      loader.attachToView(view);
+      await Promise.resolve();
+      await Promise.resolve();
+      view.whenLayerView.mockClear();
+      callOrder.length = 0;
+
+      const loadPromise = loader.loadProjectState(makeFile(savedJson));
+      // Let the load run up through issuing its goTo call and whatever
+      // attachToView's own (redundant, no-navigation-needed) internal
+      // resync does on its own - that one is legitimate and expected to
+      // fire early, before this goTo. What matters is that at least one
+      // MORE whenLayerView call happens after goTo, not that none happen
+      // before it.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(view.goTo).toHaveBeenCalled();
+      const goToIndex = callOrder.indexOf("goTo");
+      const whenLayerViewCallsBeforeGoToResolves = view.whenLayerView.mock.calls.length;
+
+      resolveGoTo();
+      await loadPromise;
+      // Flush the post-navigation resync's own whenLayerView().then() chain.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(view.whenLayerView.mock.calls.length).toBeGreaterThan(whenLayerViewCallsBeforeGoToResolves);
+      // At least one whenLayerView call happened strictly after goTo was
+      // issued, i.e. this is not just attachToView's own early resync.
+      expect(callOrder.lastIndexOf("whenLayerView")).toBeGreaterThan(goToIndex);
+    });
+
     test("round-trips a generated Unique Values renderer so it re-applies without requerying", async () => {
       const saver = new GISMapEngine();
       saver.attachToView(makeView());
@@ -2475,6 +2726,60 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
 
       expect(loader.touristAttractionLayer.renderer.type).toBe("unique-value");
       expect(loader.touristAttractionLayer.renderer.field).toBe("CATEGORY");
+    });
+
+    // drawLayer is a single persistent GraphicsLayer instance that outlives a
+    // project load (unlike touristAttractions/mrtStations/mrtLines/portal
+    // layers, which are freshly reconstructed every attachToView via
+    // resolveSeedRenderer), and a heatmap renderer is assigned straight to
+    // its .renderer property rather than baked into each graphic's own
+    // .symbol - so restoring drawings' graphics alone doesn't bring a
+    // drawings heatmap back. Without re-syncing .renderer from the restored
+    // layerRenderers Map, getLayers()'s reported rendererIntensity (read
+    // straight from that Map) would say one thing while the map actually
+    // rendered another.
+    test("restores a drawings heatmap renderer's intensity onto the live layer, not just onto getLayers()'s reported value", async () => {
+      const saver = new GISMapEngine();
+      saver.attachToView(makeView());
+      saver.drawLayer.add(
+        new Graphic({
+          geometry: { type: "point", x: 10, y: 20 },
+          symbol: { type: "simple-marker", color: "blue", size: 9 }
+        })
+      );
+      await saver.setLayerAdvancedRenderer("drawings", { type: "heatmap", symbolType: "simple-marker", intensity: 77 });
+      const savedJson = JSON.stringify(saver.buildProjectState());
+
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      await loader.loadProjectState(makeFile(savedJson));
+
+      expect(loader.drawLayer.renderer.type).toBe("heatmap");
+      expect(loader.drawLayer.renderer.maxPixelIntensity).toBe(77);
+      const drawingsLayer = loader.getLayers().find((l) => l.id === "drawings");
+      expect(drawingsLayer.styleGroups[0].rendererIntensity).toBe(77);
+    });
+
+    // The inverse case: loading a project with no drawings heatmap must not
+    // leave a previous session's heatmap renderer visually applied even
+    // though layerRenderers (and therefore getLayers()'s reported state) no
+    // longer has one.
+    test("clears a stale drawings heatmap renderer left over from before the load when the loaded project has none", async () => {
+      const loader = new GISMapEngine();
+      loader.attachToView(makeView());
+      loader.drawLayer.add(
+        new Graphic({
+          geometry: { type: "point", x: 10, y: 20 },
+          symbol: { type: "simple-marker", color: "blue", size: 9 }
+        })
+      );
+      await loader.setLayerAdvancedRenderer("drawings", { type: "heatmap", symbolType: "simple-marker", intensity: 60 });
+      expect(loader.drawLayer.renderer.type).toBe("heatmap");
+
+      const emptyState = { version: 1, is3D: false, layerOrder: ["drawings"] };
+      await loader.loadProjectState(makeFile(JSON.stringify(emptyState)));
+
+      expect(loader.drawLayer.renderer).toBeNull();
     });
   });
 });

@@ -7,6 +7,7 @@ import {
   MRT_LINE_FEATURE_LAYER_URL,
   PORTAL_URL
 } from "../config/ArcGISConfiguration";
+import HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import Slice from "@arcgis/core/widgets/Slice";
 import { geodesicBuffer } from "@arcgis/core/geometry/geometryEngine";
@@ -40,6 +41,39 @@ function colorToHex(color) {
     return `#${color.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
   }
   return "#000000";
+}
+
+// Materializes a renderer descriptor into whatever ArcGIS actually needs on a
+// live layer. Everything except heatmap passes straight through as plain JSON
+// (autocast handles it), which is why every other renderer mode in this file
+// assigns descriptors directly.
+//
+// Heatmap cannot. As of @arcgis/core 5.x a HeatmapRenderer's thresholds are
+// stored as `maxDensity`/`minDensity`; `maxPixelIntensity`/`minPixelIntensity`
+// - the knob this app's intensity slider drives, and the pair that stays
+// stable across zoom levels - are deprecated aliases that convert into them.
+// Those aliases are silently DROPPED when supplied as constructor properties
+// or through autocast from a plain object: the layer keeps the SDK's own
+// auto-calculated density instead of the requested intensity, so every heatmap
+// rendered as one washed-out blob around the single densest cluster rather
+// than the requested per-point hotspots. They only take effect as
+// post-construction property assignments, hence the two lines below.
+//
+// This is why the bug only ever showed up on a path the user hadn't touched
+// the intensity slider on (a project load, a 2D/3D switch, a freshly created
+// layer): `updateHeatmapLayerIntensity` already assigns the alias as a
+// property on a cloned instance, which is exactly the shape that works, so
+// moving the slider incidentally repaired the layer.
+function toLiveRenderer(rendererJson) {
+  if (rendererJson?.type !== "heatmap") return rendererJson;
+
+  const renderer = new HeatmapRenderer({
+    radius: rendererJson.radius,
+    colorStops: rendererJson.colorStops
+  });
+  renderer.maxPixelIntensity = rendererJson.maxPixelIntensity;
+  renderer.minPixelIntensity = rendererJson.minPixelIntensity;
+  return renderer;
 }
 
 const UPLOAD_SYMBOL_TYPE_BY_GEOMETRY = {
@@ -132,6 +166,17 @@ export default class GISMapEngine {
   // "heatmap_<id>" id, same id space as layerOrder/portalLayers.
   heatmapLayers = new Map();
   heatmapLayerMeta = new Map();
+
+  // Tracks whether each named heatmap layer's LayerView is still on its
+  // initial query/render pass - true from the moment the layer exists until
+  // resyncHeatmapRendererOnceRendered's own watch sees `updating` go false.
+  // getLayers() surfaces this as `heatmapUpdating` so LayerControlPanel can
+  // show a "Rendering…" indicator instead of leaving a thin/incomplete-
+  // looking heatmap with no explanation - see that method's comment for why
+  // this can take several real seconds (a live network query against the
+  // source feature service), not something further fixable by the resync
+  // logic itself.
+  heatmapLayerUpdating = new Map();
 
   // User-saved named route-result layers (see createRouteResultLayer/
   // removeRouteResultLayer) - lets a user snapshot the current route (with
@@ -391,7 +436,10 @@ export default class GISMapEngine {
     const rendererJson = advanced ? toArcGISRenderer(advanced) : baseRenderer;
 
     const haloEntry = this.haloState.get(id);
-    if (!haloEntry || rendererJson?.symbol?.type !== "simple-marker") return rendererJson;
+    // A heatmap has no top-level `.symbol`, so it always takes this branch -
+    // and toLiveRenderer is what turns it into a renderer that honours the
+    // persisted intensity instead of an auto-calculated density.
+    if (!haloEntry || rendererJson?.symbol?.type !== "simple-marker") return toLiveRenderer(rendererJson);
 
     return {
       ...rendererJson,
@@ -400,6 +448,81 @@ export default class GISMapEngine {
         size: haloEntry.size
       })
     };
+  }
+
+  // Reassigns a heatmap FeatureLayer's renderer once its LayerView has
+  // actually finished its initial query/render pass (LayerView.updating
+  // going false), forcing ArcGIS to recompute the kernel-density surface
+  // against the complete dataset instead of leaving whatever partial
+  // surface it had at construction time. `view.whenLayerView(layer)` is the
+  // ArcGIS-documented way to get a layer's LayerView once it exists (the
+  // layer must already be added to `view.map`); `updating` is that
+  // LayerView's own "still fetching/rendering" flag. Fire-and-forget by
+  // design, same as reapplyPersistedFilters/reapplyPersistedAnnotations -
+  // attachToView/createHeatmapLayer must not block on it, and a view/layer
+  // that gets detached or removed mid-wait should just silently drop the
+  // reassignment rather than throw.
+  //
+  // `id` (optional - only named heatmap layers have one in heatmapLayerMeta)
+  // drives heatmapLayerUpdating, which getLayers() surfaces as
+  // `heatmapUpdating` so the panel can show a "Rendering…" indicator instead
+  // of a silently-incomplete-looking heatmap. It's set true synchronously
+  // here (covering the real gap between a layer being constructed and this
+  // method ever getting called) and flipped false once settled - on success
+  // OR failure, since a rejected whenLayerView (e.g. the layer got removed
+  // mid-wait) shouldn't leave the row stuck showing "Rendering…" forever.
+  resyncHeatmapRendererOnceRendered(view, layer, intensity, radius, id) {
+    if (id) this.heatmapLayerUpdating.set(id, true);
+
+    if (!view?.whenLayerView) {
+      if (id) this.heatmapLayerUpdating.set(id, false);
+      return;
+    }
+
+    const settle = () => {
+      if (id) {
+        this.heatmapLayerUpdating.set(id, false);
+        this.onDrawingsChanged?.();
+      }
+    };
+
+    view.whenLayerView(layer).then((layerView) => {
+      // `view` is whatever was current when this call was kicked off, not
+      // necessarily what's current now - this resolves asynchronously, and
+      // another attachToView (a fast 2D/3D toggle, or a project load
+      // arriving mid-flight) can make `this.currentView` move on before
+      // this promise settles. Without this check, a stale call bound to an
+      // old, no-longer-attached view would still reassign the CURRENT
+      // heatmapLayers entry the moment its own (already-resolved, since
+      // real work stopped happening on that view) whenLayerView promise
+      // settles - overwriting a still-in-flight resync that's correctly
+      // waiting on the actually-current view's real render state.
+      if (!layerView || this.currentView !== view) {
+        settle();
+        return;
+      }
+
+      const reassign = () => {
+        if (this.currentView !== view) {
+          settle();
+          return;
+        }
+        layer.renderer = toLiveRenderer(buildHeatmapRenderer(intensity, radius).renderer);
+        settle();
+      };
+
+      if (layerView.updating === false) {
+        reassign();
+        return;
+      }
+
+      const handle = layerView.watch("updating", (updating) => {
+        if (!updating) {
+          handle.remove();
+          reassign();
+        }
+      });
+    }).catch(settle);
   }
 
   attachToView(view) {
@@ -547,9 +670,14 @@ export default class GISMapEngine {
         visible: meta.visible,
         outFields: ["*"],
         opacity: 0.8,
-        renderer: buildHeatmapRenderer(meta.intensity, meta.radius).renderer
+        renderer: toLiveRenderer(buildHeatmapRenderer(meta.intensity, meta.radius).renderer)
       });
       this.heatmapLayers.set(id, rebuilt);
+      // Marked true here (not just inside resyncAllHeatmapRenderers's own
+      // later call) so a getLayers() read between now and that call - e.g.
+      // an immediate refresh before this tick's async work fires - can't
+      // see a stale `false` left over from this id's previous instance.
+      this.heatmapLayerUpdating.set(id, true);
     });
 
     // Named route-result layers (see createRouteResultLayer) are
@@ -616,9 +744,45 @@ export default class GISMapEngine {
     // setLayerAnnotation needs recomputing against the new instance.
     this.reapplyPersistedAnnotations();
 
-    if (previousExtent) {
-      view.goTo(previousExtent).catch(() => {});
-    }
+    // Renderer availability timing: a heatmap renderer assigned in the
+    // FeatureLayer constructor (above) is computed against whatever data has
+    // arrived by that first paint, and - unlike a live simple renderer - it
+    // does not keep recomputing on its own as more features stream in
+    // afterward. The map then keeps showing that stale, undercounted density
+    // surface (visibly thinner/more yellow than it should be) until
+    // something reassigns `.renderer` again. `FeatureLayer.load()` resolving
+    // is NOT that signal - it only means the service's metadata (fields,
+    // geometryType, ...) has arrived, not that the view has actually
+    // queried/rendered the layer's features at its FINAL extent.
+    //
+    // This must run after `view.goTo(previousExtent)` below is issued, not
+    // before it (an earlier version of this fix ran it here, before the
+    // goTo) - a heatmap's kernel-density surface is computed per current
+    // view extent, and `loadProjectState` (the caller for a project load)
+    // does a SECOND, separate `goTo` of its own after attachToView returns,
+    // to the project's actually-saved extent. Resyncing before either goTo
+    // caught only the LayerView's *first* settle - at whatever extent the
+    // view happened to be at when attachToView started, not the final one -
+    // and there is nothing that ran a second time to catch the real,
+    // final-extent settle. That's why the map only ever "corrected itself"
+    // once a user touched the intensity slider afterward (at which point the
+    // view had already finished moving): nothing else re-triggered the
+    // resync once the view's real destination was reached. See
+    // loadProjectState's own resyncAllHeatmapRenderers call for the other
+    // half of this fix.
+    const navigated = previousExtent ? view.goTo(previousExtent).catch(() => {}) : Promise.resolve();
+    navigated.then(() => this.resyncAllHeatmapRenderers(view));
+  }
+
+  // Kicks off resyncHeatmapRendererOnceRendered for every named heatmap
+  // layer currently attached - see that method's comment for what it does
+  // and why. Pulled out so both attachToView's tail (above) and
+  // loadProjectState (after ITS OWN, later extent navigation) can call it.
+  resyncAllHeatmapRenderers(view) {
+    this.heatmapLayerMeta.forEach((meta, id) => {
+      const layer = this.heatmapLayers.get(id);
+      if (layer) this.resyncHeatmapRendererOnceRendered(view, layer, meta.intensity, meta.radius, id);
+    });
   }
 
   handleFeatureClick(event) {
@@ -1488,7 +1652,7 @@ export default class GISMapEngine {
       return;
     }
     const layer = this.buildLayerMap()[id];
-    if (layer) layer.renderer = toArcGISRenderer(descriptor);
+    if (layer) layer.renderer = toLiveRenderer(toArcGISRenderer(descriptor));
   }
 
   // Evaluates the active drawings advanced renderer (if any) against one
@@ -1799,7 +1963,11 @@ export default class GISMapEngine {
     // nothing to edit beyond the intensity it was created with) and
     // `heatmap: true` plus `heatmapIntensity` so LayerControlPanel can show
     // the same intensity slider the old hardcoded heat layer used to have,
-    // scoped to just this one named layer.
+    // scoped to just this one named layer. `heatmapUpdating` (see
+    // resyncHeatmapRendererOnceRendered/heatmapLayerUpdating) lets the panel
+    // show a "Rendering…" indicator while the LayerView's initial query
+    // against the source feature service is still in flight, instead of
+    // silently showing an incomplete-looking heatmap with no explanation.
     this.heatmapLayers.forEach((layer, id) => {
       const meta = this.heatmapLayerMeta.get(id);
       lookup[id] = {
@@ -1809,6 +1977,7 @@ export default class GISMapEngine {
         removable: true,
         heatmap: true,
         heatmapIntensity: meta?.intensity ?? 50,
+        heatmapUpdating: this.heatmapLayerUpdating.get(id) ?? false,
         styleGroups: []
       };
     });
@@ -2092,19 +2261,37 @@ export default class GISMapEngine {
       visible: meta.visible,
       outFields: ["*"],
       opacity: 0.8,
-      renderer: buildHeatmapRenderer(intensity, radius).renderer
+      renderer: toLiveRenderer(buildHeatmapRenderer(intensity, radius).renderer)
     });
     this.heatmapLayers.set(id, layer);
 
     if (this.currentMap) this.currentMap.add(layer);
+    // See resyncHeatmapRendererOnceRendered's comment for why this needs the
+    // LayerView's own `updating` flag rather than `layer.load()` - the layer
+    // must already be on the map (just above) before `whenLayerView` can
+    // resolve.
+    if (this.currentView) {
+      this.resyncHeatmapRendererOnceRendered(this.currentView, layer, intensity, radius, id);
+    } else {
+      // No attached view yet to resync against - nothing will ever flip
+      // heatmapLayerUpdating back to false in that case, so don't leave it
+      // stuck true (a later attachToView reconstructs this layer fresh
+      // anyway, going through the normal resyncAllHeatmapRenderers path).
+      this.heatmapLayerUpdating.set(id, false);
+    }
 
     return { id, name: trimmedName };
   }
 
-  // Adjusts an existing named heatmap layer's intensity (same clone-then-
-  // reassign pattern setLayerStyle/resolveSeedRenderer use elsewhere), and
-  // persists it to heatmapLayerMeta so the value survives a 2D/3D
-  // reattachment instead of resetting to whatever it was created with.
+  // Adjusts an existing named heatmap layer's intensity, and persists it to
+  // heatmapLayerMeta so the value survives a 2D/3D reattachment instead of
+  // resetting to whatever it was created with. Rebuilds through the same
+  // buildHeatmapRenderer + toLiveRenderer path every other heatmap assignment
+  // in this file goes through, rather than cloning whatever renderer happens
+  // to be live: the clone-and-mutate variant this used to do only worked
+  // because mutating maxPixelIntensity as a property is the one shape the SDK
+  // honours (see toLiveRenderer), which made this method the accidental
+  // repair path for every other site's silently-dropped intensity.
   updateHeatmapLayerIntensity(id, intensity) {
     const meta = this.heatmapLayerMeta.get(id);
     if (!meta) return;
@@ -2112,9 +2299,7 @@ export default class GISMapEngine {
 
     const layer = this.heatmapLayers.get(id);
     if (!layer) return;
-    const r = layer.renderer.clone();
-    r.maxPixelIntensity = intensity;
-    layer.renderer = r;
+    layer.renderer = toLiveRenderer(buildHeatmapRenderer(intensity, meta.radius).renderer);
   }
 
   // Removes a named heatmap layer entirely, the same remove-not-hide
@@ -2128,6 +2313,7 @@ export default class GISMapEngine {
 
     this.heatmapLayers.delete(id);
     this.heatmapLayerMeta.delete(id);
+    this.heatmapLayerUpdating.delete(id);
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
@@ -3249,6 +3435,25 @@ export default class GISMapEngine {
     this.layerFilters = new Map(Object.entries(state.layerFilters || {}));
     this.layerAnnotations = new Map(Object.entries(state.layerAnnotations || {}));
     this.layerRenderers = new Map(Object.entries(state.layerRenderers || {}));
+
+    // Heatmap is the one advanced-renderer mode assigned straight to
+    // drawLayer.renderer as a whole layer property (see applyRendererToLayer)
+    // rather than baked into each graphic's own .symbol like Unique
+    // Values/Class Breaks are - so restoring drawings' graphics below (via
+    // graphicFromJSON) is enough to bring those two modes back, but heatmap
+    // needs its own resync. touristAttractions/mrtStations/mrtLines/portal
+    // layers don't have this problem: they're freshly reconstructed every
+    // attachToView through resolveSeedRenderer, which already reads the
+    // just-restored layerRenderers Map. drawLayer is instead a single
+    // persistent GraphicsLayer instance that outlives a project load, so
+    // without this its .renderer stayed whatever it was in the *previous*
+    // session - showing no heatmap (or the wrong intensity) on the map while
+    // getLayers()'s reported rendererIntensity (read straight from the Map)
+    // already showed the just-loaded project's real value.
+    const drawingsRenderer = this.layerRenderers.get("drawings");
+    this.drawLayer.renderer =
+      drawingsRenderer?.type === "heatmap" ? toLiveRenderer(toArcGISRenderer(drawingsRenderer)) : null;
+
     this.haloState = new Map(Object.entries(state.haloState || {}));
     this.drawingFields = Array.isArray(state.drawingFields) ? [...state.drawingFields] : [];
 
@@ -3294,11 +3499,17 @@ export default class GISMapEngine {
     if (this.currentView) {
       this.attachToView(this.currentView);
       if (state.extent) {
-        try {
-          await this.currentView.goTo(state.extent);
-        } catch {
-          // Ignore navigation failures (e.g. an interrupted animation).
-        }
+        await this.currentView.goTo(state.extent).catch(() => {});
+        // See resyncAllHeatmapRenderers/attachToView's comment: attachToView
+        // just above already resyncs each heatmap layer's renderer once its
+        // own (redundant, same-position) internal goTo settles, but this
+        // goTo - to the project's actually-saved extent - is a SECOND,
+        // later navigation attachToView has no way to know is coming. A
+        // heatmap's kernel-density surface is computed per current view
+        // extent, so without re-triggering the resync here too, the
+        // renderer would only ever reflect whatever was visible before this
+        // navigation, not the saved project's real extent.
+        this.resyncAllHeatmapRenderers(this.currentView);
       }
     }
 

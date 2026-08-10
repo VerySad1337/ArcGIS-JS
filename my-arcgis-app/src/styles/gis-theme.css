@@ -1717,6 +1717,20 @@ input[type="range"] {
   padding: 1px 8px;
 }
 
+/* Signals a named heatmap layer's LayerView is still on its initial query
+   against the source feature service (see GISMapEngine's
+   resyncHeatmapRendererOnceRendered/heatmapLayerUpdating) - the pulse is
+   the only cue this is an active, still-changing state rather than a
+   static label like "filtered". */
+.heatmap-updating-badge {
+  animation: heatmap-updating-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes heatmap-updating-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 .analysis-active-filter {
   display: flex;
   align-items: center;
