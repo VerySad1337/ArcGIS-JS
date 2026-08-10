@@ -214,6 +214,75 @@ describe("FeatureAttributesPanel", () => {
     expect(onSaveAttributes).toHaveBeenCalledWith({ OBJECTID: 1 });
   });
 
+  test("offers Delete Feature only in edit mode, and only with a handler", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<FeatureAttributesPanel feature={baseFeature} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("button", { name: "Delete Feature" })).not.toBeInTheDocument();
+
+    rerender(<FeatureAttributesPanel feature={baseFeature} onDeleteFeature={jest.fn()} />);
+    expect(screen.getByRole("button", { name: "Delete Feature" })).toBeInTheDocument();
+  });
+
+  test("hides Delete Feature entirely when the user can't edit the layer", () => {
+    render(
+      <FeatureAttributesPanel feature={baseFeature} onDeleteFeature={jest.fn()} canEdit={false} />
+    );
+    expect(screen.queryByRole("button", { name: "Delete Feature" })).not.toBeInTheDocument();
+  });
+
+  test("deleting the feature asks for confirmation first", async () => {
+    // A hosted-layer delete removes the whole point/line/polygon server-side
+    // with no undo from here, so it must not fire on one click next to Save.
+    const user = userEvent.setup();
+    const onDeleteFeature = jest.fn().mockResolvedValue(undefined);
+    render(<FeatureAttributesPanel feature={baseFeature} onDeleteFeature={onDeleteFeature} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete Feature" }));
+
+    expect(onDeleteFeature).not.toHaveBeenCalled();
+    expect(screen.getByText("Delete this feature?")).toBeInTheDocument();
+    // It replaces only the control it belongs to, like the column
+    // confirmation - Save/Cancel stay where the user left them.
+    expect(screen.queryByRole("button", { name: "Delete Feature" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onDeleteFeature).toHaveBeenCalled();
+  });
+
+  test("keeping the feature restores the footer and calls nothing", async () => {
+    const user = userEvent.setup();
+    const onDeleteFeature = jest.fn();
+    render(<FeatureAttributesPanel feature={baseFeature} onDeleteFeature={onDeleteFeature} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete Feature" }));
+    await user.click(screen.getByRole("button", { name: "Keep" }));
+
+    expect(onDeleteFeature).not.toHaveBeenCalled();
+    expect(screen.queryByText("Delete this feature?")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+
+  test("cancelling edit mode disarms a pending feature delete", async () => {
+    const user = userEvent.setup();
+    const onDeleteFeature = jest.fn();
+    render(<FeatureAttributesPanel feature={baseFeature} onDeleteFeature={onDeleteFeature} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete Feature" }));
+    // Cancel stays reachable while the confirmation is armed.
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.queryByText("Delete this feature?")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Feature" })).toBeInTheDocument();
+    expect(onDeleteFeature).not.toHaveBeenCalled();
+  });
+
   test("preserves edit mode across an attribute update for the same feature (same click position)", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<FeatureAttributesPanel feature={baseFeature} />);

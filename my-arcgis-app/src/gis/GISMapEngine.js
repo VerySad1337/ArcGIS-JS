@@ -3369,6 +3369,72 @@ export default class GISMapEngine {
     return { success: true, attributes: { ...this.selectedGraphic.attributes } };
   }
 
+  // Deletes the currently selected feature itself - the whole point/line/
+  // polygon, not one of its columns (deleteColumnFromLayer is that, and drops
+  // the column from every feature in the layer instead). Same two shapes every
+  // other feature-level operation here has: an in-memory removal for the local
+  // drawings layer, an authenticated applyEdits({ deleteFeatures }) against a
+  // hosted/portal FeatureLayer, gated by the same advertised-capability check
+  // (supportsDelete) and findCredential -> throw -> getCredential sequence
+  // updateSelectedFeatureAttributes/addFeatureToHostedLayer use, for the same
+  // "never force a sign-in" reason documented on both.
+  //
+  // The selection is cleared on success either way: the graphic the attribute
+  // panel is showing no longer exists, so leaving it cached would let a
+  // subsequent Save/Add Column act on a deleted row.
+  async deleteSelectedFeature() {
+    if (!this.selectedGraphic || !this.selectedLayerId) {
+      throw new Error("No feature selected.");
+    }
+
+    if (this.selectedLayerId === "drawings") {
+      this.drawLayer.remove(this.selectedGraphic);
+      this.selectedGraphic = null;
+      this.selectedLayerId = null;
+      // drawLayer's set of graphics changed shape, so derived UI (the layer
+      // panel's per-symbol-type style groups) must be re-read - the same
+      // signal a completed sketch fires.
+      this.onDrawingsChanged?.();
+      return { success: true };
+    }
+
+    const layer = this.hostedLayerById(this.selectedLayerId);
+    if (!layer) throw new Error("Layer not found.");
+
+    if (layer.capabilities?.operations?.supportsDelete === false) {
+      throw new Error(
+        `"${layer.title}" does not allow deleting features. Sign in with an account that can edit it.`
+      );
+    }
+
+    // applyEdits keys a delete off the row's own identity. A graphic selected
+    // from a layer whose objectIdField isn't in its fetched attributes has
+    // nothing to key off, and sending `undefined` would delete nothing while
+    // still reporting success.
+    const objectId = this.selectedGraphic.attributes?.[layer.objectIdField];
+    if (objectId === undefined || objectId === null) {
+      throw new Error("This feature has no object id, so it cannot be deleted.");
+    }
+
+    await this.requireLayerCredential(layer, "delete a feature");
+
+    const result = await layer.applyEdits({ deleteFeatures: [{ objectId }] });
+    const deleteResult = result.deleteFeatureResults?.[0];
+
+    if (deleteResult?.error) {
+      throw new Error(deleteResult.error.message || "Failed to delete feature.");
+    }
+
+    this.selectedGraphic = null;
+    this.selectedLayerId = null;
+
+    // Without this the deleted feature keeps drawing from the layer view's
+    // already-queried cache, so the map still shows a row the service no
+    // longer has.
+    await layer.refresh();
+    return { success: true, objectId };
+  }
+
   // Changing a hosted feature service's schema is an admin operation: it
   // needs a token from a user with edit/admin privileges on the item, not
   // just the app's public API key.

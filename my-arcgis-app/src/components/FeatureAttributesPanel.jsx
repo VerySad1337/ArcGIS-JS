@@ -17,6 +17,7 @@ export default function FeatureAttributesPanel({
   onSaveAttributes,
   onAddColumn,
   onDeleteColumn,
+  onDeleteFeature,
   canEdit = true
 }) {
   const [editMode, setEditMode] = useState(false);
@@ -25,6 +26,7 @@ export default function FeatureAttributesPanel({
   const [newFieldValue, setNewFieldValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [pendingFeatureDelete, setPendingFeatureDelete] = useState(false);
   const [selectionKey, setSelectionKey] = useState(null);
   const closeButtonRef = useRef(null);
 
@@ -39,6 +41,7 @@ export default function FeatureAttributesPanel({
     setNewFieldName("");
     setNewFieldValue("");
     setPendingDelete(null);
+    setPendingFeatureDelete(false);
   }
 
   useEffect(() => {
@@ -76,6 +79,7 @@ export default function FeatureAttributesPanel({
     setDraft(attributes || {});
     setEditMode(false);
     setPendingDelete(null);
+    setPendingFeatureDelete(false);
   };
 
   const handleSave = async () => {
@@ -109,6 +113,20 @@ export default function FeatureAttributesPanel({
         delete remaining[key];
         return remaining;
       });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Deleting the feature removes the whole point/line/polygon from its layer -
+  // for a hosted layer that is a server-side delete with no undo from here -
+  // so it takes the same arm-then-confirm step a column delete does, rather
+  // than firing on a single click next to Save.
+  const handleDeleteFeature = async () => {
+    setSaving(true);
+    try {
+      await onDeleteFeature?.();
+      setPendingFeatureDelete(false);
     } finally {
       setSaving(false);
     }
@@ -173,7 +191,10 @@ export default function FeatureAttributesPanel({
                       className="feature-attribute-delete"
                       aria-label={`Delete column ${key}`}
                       title={`Delete column ${key}`}
-                      onClick={() => setPendingDelete(key)}
+                      onClick={() => {
+                        setPendingFeatureDelete(false);
+                        setPendingDelete(key);
+                      }}
                     >
                       <Icon name="close" size={12} />
                     </button>
@@ -229,6 +250,49 @@ export default function FeatureAttributesPanel({
             <button type="button" disabled={saving} onClick={cancelEdit}>
               Cancel
             </button>
+            {/* Like the per-column confirmation, this replaces the control it
+                belongs to rather than the whole footer, so Save/Cancel stay
+                where the user left them. */}
+            {onDeleteFeature && !pendingFeatureDelete && (
+              <button
+                type="button"
+                className="feature-attributes-delete-feature"
+                disabled={saving}
+                onClick={() => {
+                  // Only one confirmation is ever armed at a time, so two
+                  // identical Delete/Keep pairs can't sit in the popup at once.
+                  setPendingDelete(null);
+                  setPendingFeatureDelete(true);
+                }}
+              >
+                Delete Feature
+              </button>
+            )}
+            {onDeleteFeature && pendingFeatureDelete && (
+              <div className="feature-attributes-confirm-feature">
+                <span>Delete this feature?</span>
+                <div className="feature-attribute-confirm-actions">
+                  <button
+                    type="button"
+                    className="feature-attribute-confirm-delete"
+                    disabled={saving}
+                    onClick={handleDeleteFeature}
+                  >
+                    Delete
+                  </button>
+                  {/* "Keep", not "Cancel", for the same reason the column
+                      confirmation uses it: the footer's own Cancel exits
+                      edit mode entirely. */}
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => setPendingFeatureDelete(false)}
+                  >
+                    Keep
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
         {canEdit && !editMode && (
@@ -254,5 +318,6 @@ FeatureAttributesPanel.propTypes = {
   onSaveAttributes: PropTypes.func,
   onAddColumn: PropTypes.func,
   onDeleteColumn: PropTypes.func,
+  onDeleteFeature: PropTypes.func,
   canEdit: PropTypes.bool
 };

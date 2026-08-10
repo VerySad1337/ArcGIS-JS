@@ -17,6 +17,10 @@ class GraphicsCollection {
   addMany(items) {
     this.items.push(...items);
   }
+  remove(item) {
+    const index = this.items.indexOf(item);
+    if (index !== -1) this.items.splice(index, 1);
+  }
   removeAll() {
     this.items = [];
   }
@@ -41,6 +45,9 @@ class GraphicsLayer {
       g.layer = this;
     });
     this.graphics.addMany(graphics);
+  }
+  remove(graphic) {
+    this.graphics.remove(graphic);
   }
   removeAll() {
     this.graphics.removeAll();

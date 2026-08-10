@@ -670,6 +670,22 @@ export default function ApplicationShell() {
     }
   };
 
+  // Deleting the selected feature itself, not one of its columns. The graphic
+  // the panel was showing no longer exists, so the popup is closed rather than
+  // left pointing at a deleted row; refreshLayers() picks up the drawings
+  // layer's now-changed style groups when the feature was a local drawing.
+  const handleDeleteFeature = async () => {
+    if (!selectedFeature) return;
+    try {
+      await engineRef.current.deleteSelectedFeature();
+      setSelectedFeature(null);
+      refreshLayers();
+      showToast("Feature deleted.", "success");
+    } catch (err) {
+      showToast(err.message || "Failed to delete feature.", "error");
+    }
+  };
+
   return (
     <div className="app">
       <button
@@ -820,6 +836,7 @@ export default function ApplicationShell() {
           onSaveAttributes={handleSaveAttributes}
           onAddColumn={handleAddColumn}
           onDeleteColumn={handleDeleteColumn}
+          onDeleteFeature={handleDeleteFeature}
           canEdit={canEditSelectedFeature}
         />
       </div>

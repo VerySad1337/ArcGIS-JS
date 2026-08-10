@@ -1807,6 +1807,7 @@ input[type="range"] {
 
 .feature-attributes-footer{
   display:flex;
+  flex-wrap:wrap;
   gap:8px;
   padding:10px 14px;
   border-top:1px solid rgba(56, 189, 248, 0.15);
@@ -1830,6 +1831,48 @@ input[type="range"] {
 .feature-attributes-footer button:disabled{
   opacity:0.6;
   cursor:default;
+}
+
+/* Deleting the feature itself is destructive and, for a hosted layer, not
+   undoable from here - so it gets its own full-width line below Save/Cancel
+   in the same red treatment as the column-delete confirmation, rather than
+   sitting beside them as an equal-weight action. */
+.feature-attributes-footer .feature-attributes-delete-feature{
+  flex-basis:100%;
+  background:rgba(248, 113, 113, 0.15);
+  border-color:rgba(248, 113, 113, 0.55);
+  color:#fca5a5;
+}
+
+.feature-attributes-footer .feature-attributes-delete-feature:hover{
+  background:rgba(248, 113, 113, 0.28);
+}
+
+/* Takes the Delete Feature button's own full-width line while armed, so the
+   confirmation sits exactly where the control it replaces was. */
+.feature-attributes-confirm-feature{
+  display:flex;
+  flex-basis:100%;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  color:var(--text-muted);
+  font-size:var(--text-sm);
+}
+
+/* The confirmation reuses the column-delete buttons, which would otherwise
+   pick up .feature-attributes-footer button's full-width accent styling. */
+.feature-attributes-footer .feature-attribute-confirm-actions button{
+  flex:0 0 auto;
+  background:transparent;
+  padding:2px 8px;
+  font-size:12px;
+}
+
+.feature-attributes-footer .feature-attribute-confirm-actions .feature-attribute-confirm-delete{
+  background:rgba(248, 113, 113, 0.15);
+  border-color:rgba(248, 113, 113, 0.55);
+  color:#fca5a5;
 }
 
 /* Shown in place of the Edit button when the current user can't write to

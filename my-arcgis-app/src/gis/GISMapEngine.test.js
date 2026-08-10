@@ -1553,6 +1553,149 @@ describe("GISMapEngine.updateSelectedFeatureAttributes", () => {
   });
 });
 
+describe("GISMapEngine.deleteSelectedFeature", () => {
+  test("throws when nothing is selected", async () => {
+    const engine = new GISMapEngine();
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow("No feature selected.");
+  });
+
+  test("removes a drawings graphic in memory and clears the selection", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    const onDrawingsChanged = jest.fn();
+    engine.setOnDrawingsChanged(onDrawingsChanged);
+
+    const graphic = { symbol: { type: "simple-fill" }, attributes: { name: "plot" } };
+    const other = { symbol: { type: "simple-marker" }, attributes: { name: "keep" } };
+    engine.drawLayer.add(graphic);
+    engine.drawLayer.add(other);
+    engine.selectedGraphic = graphic;
+    engine.selectedLayerId = "drawings";
+
+    await expect(engine.deleteSelectedFeature()).resolves.toEqual({ success: true });
+
+    expect(engine.drawLayer.graphics.toArray()).toEqual([other]);
+    expect(engine.selectedGraphic).toBeNull();
+    expect(engine.selectedLayerId).toBeNull();
+    expect(onDrawingsChanged).toHaveBeenCalled();
+  });
+
+  test("throws when the hosted layer can't be resolved", async () => {
+    const engine = new GISMapEngine();
+    engine.selectedGraphic = { attributes: { OBJECTID: 1 } };
+    engine.selectedLayerId = "touristAttractions";
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow("Layer not found.");
+  });
+
+  test("refuses a layer that doesn't advertise delete support", async () => {
+    // Same reasoning as updateSelectedFeatureAttributes' supportsUpdate gate:
+    // letting applyEdits return 403 makes IdentityManager open its own
+    // sign-in modal, which reads as the app demanding a login.
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7 } };
+    engine.touristAttractionLayer.title = "Tourist Attractions";
+    engine.touristAttractionLayer.capabilities = { operations: { supportsDelete: false } };
+
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow(
+      '"Tourist Attractions" does not allow deleting features.'
+    );
+    expect(engine.touristAttractionLayer.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test("does not force a sign-in when nobody is signed in", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7 } };
+    IdentityManager.findCredential.mockReturnValue(undefined);
+
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow(
+      "Sign in with an account that owns this layer to delete a feature."
+    );
+    expect(IdentityManager.getCredential).not.toHaveBeenCalled();
+    expect(engine.touristAttractionLayer.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test("refuses a graphic with no object id rather than deleting nothing silently", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { name: "no id here" } };
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow(
+      "This feature has no object id, so it cannot be deleted."
+    );
+    expect(engine.touristAttractionLayer.applyEdits).not.toHaveBeenCalled();
+  });
+
+  test("deletes a hosted feature by object id, clears the selection, and refreshes", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7, name: "Merlion" } };
+    engine.touristAttractionLayer.objectIdField = "OBJECTID";
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    engine.touristAttractionLayer.applyEdits.mockResolvedValue({ deleteFeatureResults: [{}] });
+
+    const result = await engine.deleteSelectedFeature();
+
+    expect(engine.touristAttractionLayer.applyEdits).toHaveBeenCalledWith({
+      deleteFeatures: [{ objectId: 7 }]
+    });
+    expect(result).toEqual({ success: true, objectId: 7 });
+    expect(engine.selectedGraphic).toBeNull();
+    expect(engine.selectedLayerId).toBeNull();
+    expect(engine.touristAttractionLayer.refresh).toHaveBeenCalled();
+  });
+
+  test("throws the service error message and keeps the selection when the delete fails", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7 } };
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    engine.touristAttractionLayer.applyEdits.mockResolvedValue({
+      deleteFeatureResults: [{ error: { message: "Not authorized" } }]
+    });
+
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow("Not authorized");
+    expect(engine.selectedGraphic).not.toBeNull();
+    expect(engine.touristAttractionLayer.refresh).not.toHaveBeenCalled();
+  });
+
+  test("falls back to a generic message when the service error has none", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.selectedLayerId = "touristAttractions";
+    engine.selectedGraphic = { attributes: { OBJECTID: 7 } };
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+    engine.touristAttractionLayer.applyEdits.mockResolvedValue({
+      deleteFeatureResults: [{ error: {} }]
+    });
+
+    await expect(engine.deleteSelectedFeature()).rejects.toThrow("Failed to delete feature.");
+  });
+
+  test("deletes from a portal-added layer through the same path", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await engine.addPortalLayer({ id: "abc", title: "My Polygons", url: "https://x/FeatureServer/0" });
+
+    const portalLayer = engine.portalLayers.get("portal_abc");
+    portalLayer.objectIdField = "OBJECTID";
+    portalLayer.applyEdits.mockResolvedValue({ deleteFeatureResults: [{}] });
+    engine.selectedLayerId = "portal_abc";
+    engine.selectedGraphic = { attributes: { OBJECTID: 12 } };
+    IdentityManager.findCredential.mockReturnValue({ token: "mock-token" });
+
+    await expect(engine.deleteSelectedFeature()).resolves.toEqual({ success: true, objectId: 12 });
+    expect(portalLayer.applyEdits).toHaveBeenCalledWith({ deleteFeatures: [{ objectId: 12 }] });
+  });
+});
+
 describe("GISMapEngine.addColumnToLayer", () => {
   test("requires a field name", async () => {
     const engine = new GISMapEngine();
