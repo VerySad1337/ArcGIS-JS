@@ -869,6 +869,9 @@ describe("GISMapEngine portal layers", () => {
       name: "Parks",
       visible: true,
       removable: true,
+      renamable: true,
+      createdAt: expect.any(Number),
+      layerType: "Feature Layer",
       styleGroups: [],
       filterable: true,
       filterDescription: null,
@@ -1033,6 +1036,31 @@ describe("GISMapEngine portal layers", () => {
     engine.attachToView(makeView());
     expect(() => engine.removePortalLayer("touristAttractions")).not.toThrow();
     expect(engine.touristAttractionLayer).toBeTruthy();
+  });
+
+  test("renameLayer updates a portal layer's title in meta, the live layer, and getLayers()", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    const id = await engine.addPortalLayer(portalItem);
+
+    engine.renameLayer(id, "  Renamed Parks  ");
+
+    expect(engine.portalLayerMeta.get(id).title).toBe("Renamed Parks");
+    expect(engine.portalLayers.get(id).title).toBe("Renamed Parks");
+    expect(engine.getLayers().find((l) => l.id === id).name).toBe("Renamed Parks");
+  });
+
+  test("renameLayer throws on a blank name", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    const id = await engine.addPortalLayer(portalItem);
+    expect(() => engine.renameLayer(id, "   ")).toThrow();
+  });
+
+  test("renameLayer throws for a fixed layer with no *LayerMeta entry", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    expect(() => engine.renameLayer("touristAttractions", "New Name")).toThrow();
   });
 });
 

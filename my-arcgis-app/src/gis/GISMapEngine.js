@@ -1973,6 +1973,15 @@ export default class GISMapEngine {
     const isDrawTarget = (layer) =>
       Boolean(layer) && this.hasEditCredential(layer) && layer.capabilities?.operations?.supportsAdd === true;
 
+    // Human-readable "Type" for the Layers card's expandable Details section
+    // (see knowledge/index.md's Layer Details/Rename section) - only the
+    // five user-created layer kinds get one, since only they have the
+    // per-layer identity (a geometry type, or a fixed kind like "Heatmap")
+    // worth surfacing as a standalone fact.
+    const GEOMETRY_TYPE_LABEL = { point: "Point", polyline: "Line", polygon: "Polygon" };
+    const geometryTypeLabel = (geometryType) =>
+      GEOMETRY_TYPE_LABEL[GISMapEngine.normalizeDrawGeometryType(geometryType)] || "Feature Layer";
+
     const lookup = {
       touristAttractions: {
         id: "touristAttractions",
@@ -2067,6 +2076,9 @@ export default class GISMapEngine {
         name: meta?.title || "Portal Layer",
         visible: layer.visible,
         removable: true,
+        renamable: true,
+        createdAt: meta?.createdAt,
+        layerType: geometryTypeLabel(layer.geometryType),
         styleGroups: portalSymbol
           ? [this.attachRendererInfo(this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer"), id, undefined, portalIsPoint)]
           : [],
@@ -2097,6 +2109,10 @@ export default class GISMapEngine {
         name: meta?.title || "Heatmap",
         visible: layer.visible,
         removable: true,
+        renamable: true,
+        createdAt: meta?.createdAt,
+        layerType: "Heatmap",
+        source: "analysis",
         heatmap: true,
         heatmapIntensity: meta?.intensity ?? 50,
         heatmapUpdating: this.heatmapLayerUpdating.get(id) ?? false,
@@ -2124,6 +2140,11 @@ export default class GISMapEngine {
         name: meta?.title || "Route",
         visible: layer.visible,
         removable: true,
+        renamable: true,
+        createdAt: meta?.createdAt,
+        layerType: "Route",
+        source: "analysis",
+        featureCount: layer.graphics.length,
         styleGroups: lineGraphic
           ? [this.attachRendererInfo(this.symbolToStyleGroup(lineGraphic.symbol, "Route"), id)]
           : []
@@ -2144,6 +2165,11 @@ export default class GISMapEngine {
         name: meta?.title || "Search Result",
         visible: layer.visible,
         removable: true,
+        renamable: true,
+        createdAt: meta?.createdAt,
+        layerType: "Point",
+        source: "search",
+        featureCount: layer.graphics.length,
         styleGroups: markerGraphic
           ? [this.attachRendererInfo(this.symbolToStyleGroup(markerGraphic.symbol, "Marker"), id)]
           : []
@@ -2164,6 +2190,11 @@ export default class GISMapEngine {
         name: meta?.title || "Buffer",
         visible: layer.visible,
         removable: true,
+        renamable: true,
+        createdAt: meta?.createdAt,
+        layerType: "Polygon",
+        source: "analysis",
+        featureCount: layer.graphics.length,
         styleGroups: polygonGraphic
           ? [this.attachRendererInfo(this.symbolToStyleGroup(polygonGraphic.symbol, "Buffer"), id)]
           : []
@@ -2287,7 +2318,7 @@ export default class GISMapEngine {
     // layer via setLayerStyle, the resulting renderer is written back here so
     // it survives a 2D/3D reattachment, the same way touristAttractionRenderer/
     // mrtStationRenderer/mrtLineRenderer persist style for the fixed layers.
-    const meta = { title: item.title || "Portal Layer", url: item.url, visible: true, renderer: null };
+    const meta = { title: item.title || "Portal Layer", url: item.url, visible: true, renderer: null, createdAt: Date.now() };
     this.portalLayerMeta.set(layerId, meta);
     this.layerOrder = [...this.layerOrder, layerId];
 
@@ -2560,7 +2591,7 @@ export default class GISMapEngine {
 
     const sourceLayer = this.buildLayerMap()[sourceId];
     const id = `heatmap_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
-    const meta = { title: trimmedName, url: sourceLayer.url, sourceId, intensity, radius, visible: true };
+    const meta = { title: trimmedName, url: sourceLayer.url, sourceId, intensity, radius, visible: true, createdAt: Date.now() };
     this.heatmapLayerMeta.set(id, meta);
     this.layerOrder = [...this.layerOrder, id];
 
@@ -2645,7 +2676,8 @@ export default class GISMapEngine {
       route: this.graphicToJSON(this.routeGraphic),
       start: this.graphicToJSON(this.startGraphic),
       end: this.graphicToJSON(this.endGraphic),
-      visible: true
+      visible: true,
+      createdAt: Date.now()
     };
     this.namedRouteLayerMeta.set(id, meta);
 
@@ -2690,7 +2722,8 @@ export default class GISMapEngine {
     const meta = {
       title: trimmedName,
       marker: this.graphicToJSON(this.searchGraphic),
-      visible: true
+      visible: true,
+      createdAt: Date.now()
     };
     this.namedSearchLayerMeta.set(id, meta);
 
@@ -2745,7 +2778,8 @@ export default class GISMapEngine {
     const meta = {
       title: trimmedName,
       polygon: this.graphicToJSON(this.bufferGraphic),
-      visible: true
+      visible: true,
+      createdAt: Date.now()
     };
     this.namedBufferLayerMeta.set(id, meta);
 
@@ -2772,6 +2806,34 @@ export default class GISMapEngine {
     this.namedBufferLayers.delete(id);
     this.namedBufferLayerMeta.delete(id);
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
+  }
+
+  // Renames one of the user-created layers (portal / named heatmap / named
+  // route-result / named search-result / named buffer-result). Deliberately
+  // scoped to just these five: the fixed layers (Tourist Attractions, MRT
+  // Stations/Lines, Drawings) have no `*LayerMeta` entry to rewrite a
+  // `title` onto, and letting them be renamed would mean the id-to-label
+  // mapping other subsystems key off (heatmap source dropdown, draw-target
+  // dropdown, etc.) no longer matched what the app calls them elsewhere.
+  // Also updates the live layer's own `.title` where the layer type exposes
+  // one (FeatureLayer/GraphicsLayer both do), purely cosmetic since nothing
+  // else reads it - `getLayers()`'s `name` field (read from meta.title) is
+  // the actual source of truth the UI renders.
+  renameLayer(id, name) {
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) throw new Error("Layer name can't be empty.");
+
+    const meta =
+      this.portalLayerMeta.get(id) ||
+      this.heatmapLayerMeta.get(id) ||
+      this.namedRouteLayerMeta.get(id) ||
+      this.namedSearchLayerMeta.get(id) ||
+      this.namedBufferLayerMeta.get(id);
+    if (!meta) throw new Error("This layer can't be renamed.");
+
+    meta.title = trimmedName;
+    const layer = this.buildLayerMap()[id];
+    if (layer) layer.title = trimmedName;
   }
 
   // Zooms/pans the current view to the extent of one layer's content, so a

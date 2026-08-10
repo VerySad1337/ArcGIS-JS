@@ -414,6 +414,20 @@ function emptyCondition() {
   return { field: "", operator: "", value: "" };
 }
 
+// "Today"/"Yesterday"/calendar-date, matching how most consumer apps phrase
+// a recent creation time rather than a raw timestamp - the Details section
+// only needs a rough sense of "when", not to-the-second precision.
+function formatCreatedAt(timestamp) {
+  if (!timestamp) return null;
+  const created = new Date(timestamp);
+  const now = new Date();
+  const oneDay = 24 * 60 * 60 * 1000;
+  const dayDiff = Math.floor((new Date(now.toDateString()) - new Date(created.toDateString())) / oneDay);
+  if (dayDiff === 0) return "Today";
+  if (dayDiff === 1) return "Yesterday";
+  return created.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 // A layer's position after removing `removedIndex` from the array it came
 // from - splice(from, 1) shifts everything after `removedIndex` down by
 // one, so a neighbor's post-removal index differs from its original index
@@ -493,6 +507,7 @@ export default function LayerControlPanel({
   onStyleChange,
   onZoomToLayer,
   onRemove,
+  onRename,
   onGetLayerFields,
   onApplyFilter,
   onClearFilter,
@@ -505,9 +520,17 @@ export default function LayerControlPanel({
   onUpdateHeatmapLayerIntensity,
   projectVersion
 }) {
+  // Open by default (unlike PortalLayerPanel's collapsed-by-default), since
+  // the layer list is the always-relevant "what's on the map" view rather
+  // than an occasional tool - but still collapsible via the same
+  // panel-title-toggle chevron pattern, for a user who wants to reclaim
+  // sidebar space once they're done arranging layers.
+  const [isOpen, setIsOpen] = useState(true);
   const [dragIndex, setDragIndex] = useState(null);
   const [dragBlockIndex, setDragBlockIndex] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [openSectionsById, setOpenSectionsById] = useState({});
   const [fieldsById, setFieldsById] = useState({});
   const [conditionsById, setConditionsById] = useState({});
@@ -767,13 +790,28 @@ export default function LayerControlPanel({
     });
   };
 
+  const startRename = (layer) => {
+    if (!layer.renamable || !onRename) return;
+    setRenamingId(layer.id);
+    setRenameDraft(layer.name);
+  };
+
+  const commitRename = (layer) => {
+    const trimmed = renameDraft.trim();
+    setRenamingId(null);
+    if (trimmed && trimmed !== layer.name) onRename(layer.id, trimmed);
+  };
+
+  const cancelRename = () => setRenamingId(null);
+
   const renderLayerRow = (layer, index, topLevelBlockIndex) => {
     const styleGroups = layer.styleGroups ?? [];
     const isStylable = styleGroups.length > 0;
     const isFilterable = Boolean(layer.filterable);
     const isAnnotatable = Boolean(layer.annotatable);
     const isHeatmapLayer = Boolean(layer.heatmap) && Boolean(onUpdateHeatmapLayerIntensity);
-    const isExpandable = isStylable || isFilterable || isAnnotatable || isHeatmapLayer;
+    const hasDetails = Boolean(layer.renamable);
+    const isExpandable = isStylable || isFilterable || isAnnotatable || isHeatmapLayer || hasDetails;
     const isExpanded = isExpandable && expandedIds[layer.id];
     const fields = fieldsById[layer.id] || [];
     const conditions = conditionsById[layer.id] || [emptyCondition()];
@@ -843,7 +881,35 @@ export default function LayerControlPanel({
           </button>
 
           <span className="layer-name">
-            {layer.name}
+            {renamingId === layer.id ? (
+              <input
+                type="text"
+                className="layer-name-input"
+                value={renameDraft}
+                autoFocus
+                aria-label={`Rename ${layer.name}`}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={() => commitRename(layer)}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitRename(layer);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelRename();
+                  }
+                }}
+              />
+            ) : (
+              <span
+                className="layer-name-text"
+                title={layer.renamable ? "Double-click to rename" : undefined}
+                onDoubleClick={() => startRename(layer)}
+              >
+                {layer.name}
+              </span>
+            )}
             {layer.editable !== undefined && (
               <span
                 className={`analysis-filter-badge ${layer.editable ? "layer-editable-badge" : "layer-readonly-badge"}`}
@@ -856,6 +922,18 @@ export default function LayerControlPanel({
                 }
               >
                 {layer.editable ? "Editable" : "Read-only"}
+              </span>
+            )}
+            {layer.source && (
+              <span
+                className="analysis-filter-badge layer-source-badge"
+                title={
+                  layer.source === "analysis"
+                    ? "Created from an analysis tool (Heatmap/Route/Buffer), not a hosted or portal service - editable/read-only doesn't apply."
+                    : "Saved from a search result - editable/read-only doesn't apply."
+                }
+              >
+                {layer.source === "analysis" ? "Analysis" : "Search"}
               </span>
             )}
             {layer.filterDescription && (
@@ -1257,6 +1335,37 @@ export default function LayerControlPanel({
             )}
           </div>
         )}
+
+        {isExpanded && hasDetails && (
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen(layer.id, "details")}
+              onClick={() => toggleSection(layer.id, "details")}
+            >
+              <Icon name={isSectionOpen(layer.id, "details") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Details</span>
+            </button>
+
+            {isSectionOpen(layer.id, "details") && (
+              <dl className="layer-details-list">
+                <div className="layer-details-row">
+                  <dt>Created</dt>
+                  <dd>{formatCreatedAt(layer.createdAt) ?? "—"}</dd>
+                </div>
+                <div className="layer-details-row">
+                  <dt>Type</dt>
+                  <dd>{layer.layerType ?? "—"}</dd>
+                </div>
+                <div className="layer-details-row">
+                  <dt>Features</dt>
+                  <dd>{typeof layer.featureCount === "number" ? layer.featureCount : "—"}</dd>
+                </div>
+              </dl>
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -1265,40 +1374,50 @@ export default function LayerControlPanel({
 
   return (
     <div className="panel-card">
-      <div className="panel-title">LAYERS</div>
+      <button
+        type="button"
+        className="panel-title panel-title-toggle"
+        onClick={() => setIsOpen((open) => !open)}
+        aria-expanded={isOpen}
+      >
+        <span>LAYERS</span>
+        <Icon name={isOpen ? "chevronUp" : "chevronDown"} />
+      </button>
 
-      {visibleLayers.length === 0 && (
-        <p className="layer-empty-state">Layers will appear here once the map finishes loading.</p>
-      )}
+      {isOpen && (
+        <>
+          {visibleLayers.length === 0 && (
+            <p className="layer-empty-state">Layers will appear here once the map finishes loading.</p>
+          )}
 
-      {visibleLayers.length > 1 && (
-        <p className="layer-order-note">
-          Drag to reorder. The layer at the bottom of this list is drawn on top of the others on the map.
-        </p>
-      )}
+          {visibleLayers.length > 1 && (
+            <p className="layer-order-note">
+              Drag to reorder. The layer at the bottom of this list is drawn on top of the others on the map.
+            </p>
+          )}
 
-      {visibleLayers.length > 0 && (
-        <form
-          className="layer-group-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            addGroup();
-          }}
-        >
-          <input
-            type="text"
-            value={newGroupName}
-            onChange={(e) => setNewGroupName(e.target.value)}
-            placeholder="New group name"
-            aria-label="New group name"
-          />
-          <button type="submit" className="gis-button-secondary" disabled={!newGroupName.trim()}>
-            + Add Group
-          </button>
-        </form>
-      )}
+          {visibleLayers.length > 0 && (
+            <form
+              className="layer-group-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                addGroup();
+              }}
+            >
+              <input
+                type="text"
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                placeholder="New group name"
+                aria-label="New group name"
+              />
+              <button type="submit" className="gis-button-secondary" disabled={!newGroupName.trim()}>
+                + Add Group
+              </button>
+            </form>
+          )}
 
-      {blocks.map((block, blockIndex) =>
+          {blocks.map((block, blockIndex) =>
         block.type === "layer" ? (
           renderLayerRow(block.layer, block.index, blockIndex)
         ) : (
@@ -1392,6 +1511,8 @@ export default function LayerControlPanel({
           </div>
         )
       )}
+        </>
+      )}
     </div>
   );
 }
@@ -1410,7 +1531,12 @@ LayerControlPanel.propTypes = {
       annotationField: PropTypes.string,
       heatmap: PropTypes.bool,
       heatmapIntensity: PropTypes.number,
-      heatmapUpdating: PropTypes.bool
+      heatmapUpdating: PropTypes.bool,
+      renamable: PropTypes.bool,
+      createdAt: PropTypes.number,
+      layerType: PropTypes.string,
+      featureCount: PropTypes.number,
+      source: PropTypes.oneOf(["analysis", "search"])
     })
   ).isRequired,
   onToggle: PropTypes.func.isRequired,
@@ -1418,6 +1544,7 @@ LayerControlPanel.propTypes = {
   onStyleChange: PropTypes.func.isRequired,
   onZoomToLayer: PropTypes.func.isRequired,
   onRemove: PropTypes.func,
+  onRename: PropTypes.func,
   onGetLayerFields: PropTypes.func.isRequired,
   onApplyFilter: PropTypes.func.isRequired,
   onClearFilter: PropTypes.func.isRequired,

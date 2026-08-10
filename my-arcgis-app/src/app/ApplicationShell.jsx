@@ -493,6 +493,19 @@ export default function ApplicationShell() {
     refreshLayers();
   };
 
+  // Rename is scoped to the same five user-created layer kinds removeLayer
+  // dispatches over (engine.renameLayer itself checks which *LayerMeta the
+  // id belongs to, so no id-prefix branching is needed here) - throw-and-
+  // toast, same convention as createHeatmapLayer/addPortalLayer.
+  const renameLayer = (id, name) => {
+    try {
+      engineRef.current.renameLayer(id, name);
+      refreshLayers();
+    } catch (err) {
+      showToast(err.message || "Failed to rename layer.", "error");
+    }
+  };
+
   const handleSignIn = async () => {
     setSigningIn(true);
     try {
@@ -713,6 +726,7 @@ export default function ApplicationShell() {
           onStyleChange={updateLayerStyle}
           onZoomToLayer={zoomToLayer}
           onRemove={removeLayer}
+          onRename={renameLayer}
           onGetLayerFields={getLayerFields}
           onApplyFilter={applyLayerFilter}
           onClearFilter={clearLayerFilter}
