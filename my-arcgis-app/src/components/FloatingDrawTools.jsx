@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 
@@ -8,12 +8,21 @@ const DRAW_STATUS_LABEL = {
   polygon: "Drawing polygon…"
 };
 
+// Every draw tool this app can offer, tagged with the geometryType it
+// produces so it can be filtered against the selected draw target's own
+// geometryType (see ALL_TOOLS.filter below). "line"'s key stays "line" for
+// existing test/CSS-hook compatibility even though the geometry type it
+// draws is SketchViewModel's "polyline".
+const ALL_TOOLS = [
+  { key: "point", icon: "point", label: "Point", geometryType: "point" },
+  { key: "polygon", icon: "polygon", label: "Polygon", geometryType: "polygon" },
+  { key: "line", icon: "line", label: "Line", geometryType: "polyline" }
+];
+
 export default function FloatingDrawTools({
   drawPoint,
   drawLine,
   drawPolygon,
-  saveGeoJSON,
-  uploadGeoJSON,
   activeDrawType,
   onCancelDraw,
   drawTargetLayerId,
@@ -22,7 +31,6 @@ export default function FloatingDrawTools({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
-  const uploadInputRef = useRef(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -35,26 +43,25 @@ export default function FloatingDrawTools({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
-  const handleFileUpload = ({ target }) => {
-    const file = target.files?.[0];
-    if (!file) return;
-    uploadGeoJSON(file);
-    target.value = "";
-    setIsOpen(false);
-  };
-
   const runAndClose = (action) => () => {
     action();
     setIsOpen(false);
   };
 
-  const tools = [
-    { key: "point", icon: "point", label: "Point", onClick: runAndClose(drawPoint) },
-    { key: "polygon", icon: "polygon", label: "Polygon", onClick: runAndClose(drawPolygon) },
-    { key: "line", icon: "line", label: "Line", onClick: runAndClose(drawLine) },
-    { key: "save", icon: "save", label: "Save GeoJSON", onClick: runAndClose(saveGeoJSON) },
-    { key: "upload", icon: "upload", label: "Upload GeoJSON", isUpload: true }
-  ];
+  const actionByGeometryType = {
+    point: runAndClose(drawPoint),
+    polygon: runAndClose(drawPolygon),
+    polyline: runAndClose(drawLine)
+  };
+
+  // The selected target's own geometryType (null when nothing is selected
+  // yet, or an unrecognized/not-yet-loaded target) means "no restriction" -
+  // show every tool. Otherwise show only the one tool matching that
+  // geometry, since a hosted/portal feature layer only ever accepts its own
+  // single geometry type.
+  const selectedTarget = drawTargetOptions?.find((option) => option.id === drawTargetLayerId);
+  const geometryType = selectedTarget?.geometryType ?? null;
+  const tools = geometryType ? ALL_TOOLS.filter((tool) => tool.geometryType === geometryType) : ALL_TOOLS;
 
   return (
     <div
@@ -62,8 +69,32 @@ export default function FloatingDrawTools({
       ref={containerRef}
     >
       <div className="fab-tool-stack">
-        {drawTargetOptions && drawTargetOptions.length > 1 && (
-          <label className="draw-target-select">
+        {tools.map((tool, i) => {
+          const style = {
+            transitionDelay: isOpen ? `${(tools.length - 1 - i) * 30}ms` : "0ms"
+          };
+
+          return (
+            <button
+              key={tool.key}
+              type="button"
+              className="fab-tool"
+              style={style}
+              title={tool.label}
+              tabIndex={isOpen ? 0 : -1}
+              onClick={actionByGeometryType[tool.geometryType]}
+            >
+              <Icon name={tool.icon} />
+              <span className="fab-tool-label">{tool.label}</span>
+            </button>
+          );
+        })}
+
+        {drawTargetOptions && drawTargetOptions.length > 0 && (
+          <label
+            className="draw-target-bar"
+            style={{ transitionDelay: isOpen ? `${tools.length * 30}ms` : "0ms" }}
+          >
             <span>Draw into</span>
             <select
               value={drawTargetLayerId}
@@ -71,6 +102,7 @@ export default function FloatingDrawTools({
               aria-label="Layer to draw new features into"
               tabIndex={isOpen ? 0 : -1}
             >
+              {!drawTargetLayerId && <option value="">Select a layer…</option>}
               {drawTargetOptions.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.name}
@@ -79,52 +111,6 @@ export default function FloatingDrawTools({
             </select>
           </label>
         )}
-
-        {tools.map((tool, i) => {
-          const style = {
-            transitionDelay: isOpen ? `${(tools.length - 1 - i) * 30}ms` : "0ms"
-          };
-
-          if (tool.isUpload) {
-            return (
-              <Fragment key={tool.key}>
-                <button
-                  type="button"
-                  className="fab-tool fab-upload"
-                  style={style}
-                  title={tool.label}
-                  tabIndex={isOpen ? 0 : -1}
-                  onClick={() => uploadInputRef.current?.click()}
-                >
-                  <Icon name={tool.icon} />
-                  <span className="fab-tool-label">{tool.label}</span>
-                </button>
-                <input
-                  ref={uploadInputRef}
-                  hidden
-                  type="file"
-                  accept=".geojson,.json"
-                  tabIndex={-1}
-                  onChange={handleFileUpload}
-                />
-              </Fragment>
-            );
-          }
-
-          return (
-            <button
-              key={tool.key}
-              className="fab-tool"
-              style={style}
-              title={tool.label}
-              tabIndex={isOpen ? 0 : -1}
-              onClick={tool.onClick}
-            >
-              <Icon name={tool.icon} />
-              <span className="fab-tool-label">{tool.label}</span>
-            </button>
-          );
-        })}
       </div>
 
       {activeDrawType && (
@@ -142,6 +128,7 @@ export default function FloatingDrawTools({
       )}
 
       <button
+        type="button"
         className="fab-main"
         aria-expanded={isOpen}
         aria-label={isOpen ? "Close drawing tools" : "Open drawing tools"}
@@ -157,13 +144,15 @@ FloatingDrawTools.propTypes = {
   drawPoint: PropTypes.func.isRequired,
   drawLine: PropTypes.func.isRequired,
   drawPolygon: PropTypes.func.isRequired,
-  saveGeoJSON: PropTypes.func.isRequired,
-  uploadGeoJSON: PropTypes.func.isRequired,
   activeDrawType: PropTypes.oneOf(["point", "polyline", "polygon"]),
   onCancelDraw: PropTypes.func,
   drawTargetLayerId: PropTypes.string,
   drawTargetOptions: PropTypes.arrayOf(
-    PropTypes.shape({ id: PropTypes.string, name: PropTypes.string })
+    PropTypes.shape({
+      id: PropTypes.string,
+      name: PropTypes.string,
+      geometryType: PropTypes.oneOf(["point", "polyline", "polygon", null])
+    })
   ),
   onChangeDrawTarget: PropTypes.func
 };

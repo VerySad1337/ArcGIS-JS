@@ -53,13 +53,18 @@ jest.mock("../components/LayerControlPanel", () => (props) => (
 
 jest.mock("../components/PortalLayerPanel", () => (props) => (
   <div data-testid="portal-layer-panel">
-    <span data-testid="signed-in-user">{props.signedInUser?.fullName ?? ""}</span>
     <button onClick={() => props.onSearch("parks")}>search-portal</button>
     <button
       onClick={() => props.onAddLayer({ id: "abc", title: "Parks", url: "https://example.com/Parks/FeatureServer" })}
     >
       add-portal-layer
     </button>
+  </div>
+));
+
+jest.mock("../components/CreateFeatureLayerPanel", () => (props) => (
+  <div data-testid="create-feature-layer-panel">
+    <span data-testid="signed-in-user">{props.signedInUser?.fullName ?? ""}</span>
   </div>
 ));
 
@@ -77,12 +82,8 @@ jest.mock("../components/FloatingDrawTools", () => (props) => (
     <button onClick={props.drawPoint}>draw-point</button>
     <button onClick={props.drawLine}>draw-line</button>
     <button onClick={props.drawPolygon}>draw-polygon</button>
-    <button onClick={props.saveGeoJSON}>save-geojson</button>
-    <button
-      onClick={() => props.uploadGeoJSON({ name: "test.geojson" })}
-    >
-      upload-geojson
-    </button>
+    <span data-testid="draw-target-layer-id">{props.drawTargetLayerId}</span>
+    <button onClick={() => props.onChangeDrawTarget("portal_abc")}>change-draw-target</button>
   </div>
 ));
 
@@ -253,25 +254,6 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("draw-polygon"));
     expect(engine.startPolygonDraw).toHaveBeenCalled();
-  });
-
-  test("save GeoJSON forwards the toast callback to the engine", async () => {
-    const user = userEvent.setup();
-    render(<ApplicationShell />);
-    const engine = getEngineInstance();
-
-    await user.click(screen.getByText("save-geojson"));
-    expect(engine.saveDrawings).toHaveBeenCalledWith(expect.any(Function));
-  });
-
-  test("uploading a file calls engine.uploadGeoJSON and refreshes layers", async () => {
-    const user = userEvent.setup();
-    render(<ApplicationShell />);
-    const engine = getEngineInstance();
-    engine.uploadGeoJSON.mockResolvedValue(undefined);
-
-    await user.click(screen.getByText("upload-geojson"));
-    expect(engine.uploadGeoJSON).toHaveBeenCalledWith({ name: "test.geojson" }, expect.any(Function));
   });
 
   test("selecting a feature shows the attributes panel; saving updates it and shows a toast", async () => {

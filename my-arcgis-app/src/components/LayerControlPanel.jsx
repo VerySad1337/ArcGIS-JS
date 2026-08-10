@@ -844,6 +844,20 @@ export default function LayerControlPanel({
 
           <span className="layer-name">
             {layer.name}
+            {layer.editable !== undefined && (
+              <span
+                className={`analysis-filter-badge ${layer.editable ? "layer-editable-badge" : "layer-readonly-badge"}`}
+                title={
+                  layer.editable
+                    ? "You can edit this layer's features (add and/or update), and it can be picked as a draw target."
+                    : layer.id === "drawings"
+                      ? undefined
+                      : "Read-only for the current identity - either the service doesn't allow editing, or you need to sign in with an account that can."
+                }
+              >
+                {layer.editable ? "Editable" : "Read-only"}
+              </span>
+            )}
             {layer.filterDescription && (
               <span className="analysis-filter-badge" title={layer.filterDescription}>
                 filtered

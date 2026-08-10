@@ -418,7 +418,7 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     );
   });
 
-  test("getLayers excludes route/stops/searchResult (they have no Layers-card row) and returns the other 4 in layerOrder", () => {
+  test("getLayers excludes route/stops/searchResult/drawings (they have no Layers-card row) and returns the other 3 in layerOrder", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
 
@@ -426,27 +426,12 @@ describe("GISMapEngine.symbolToStyleGroup / getLayers", () => {
     expect(layers.map((l) => l.id)).toEqual([
       "touristAttractions",
       "mrtStations",
-      "mrtLines",
-      "drawings"
+      "mrtLines"
     ]);
     expect(layers.find((l) => l.id === "route")).toBeUndefined();
     expect(layers.find((l) => l.id === "searchResult")).toBeUndefined();
+    expect(layers.find((l) => l.id === "drawings")).toBeUndefined();
     expect(layers.find((l) => l.id === "touristAttractions").styleGroups).toHaveLength(1);
-    expect(layers.find((l) => l.id === "drawings").styleGroups).toEqual([]);
-  });
-
-  test("getLayers produces one drawings style group per distinct symbol type present", () => {
-    const engine = new GISMapEngine();
-    engine.attachToView(makeView());
-    engine.drawLayer.add({ symbol: { type: "simple-marker", color: {} } });
-    engine.drawLayer.add({ symbol: { type: "simple-marker", color: {} } });
-    engine.drawLayer.add({ symbol: { type: "simple-line", color: {}, width: 1 } });
-
-    const drawings = engine.getLayers().find((l) => l.id === "drawings");
-    expect(drawings.styleGroups.map((g) => g.symbolType).sort()).toEqual([
-      "simple-line",
-      "simple-marker"
-    ]);
   });
 
   test("createRouteResultLayer snapshots the current route into a new, named Layers-card row", () => {
@@ -889,7 +874,9 @@ describe("GISMapEngine portal layers", () => {
       filterDescription: null,
       annotatable: true,
       annotationField: null,
-      canBeDrawTarget: false
+      editable: false,
+      canBeDrawTarget: false,
+      geometryType: null
     });
 
     const view2 = makeView();
@@ -1436,180 +1423,6 @@ describe("GISMapEngine draw-tool starters", () => {
       engine.startLineDraw();
       engine.startPolygonDraw();
     }).not.toThrow();
-  });
-});
-
-describe("GISMapEngine.getDrawnFeatures / hasDrawings", () => {
-  test("collects drawing, route, and stop graphics", () => {
-    const engine = new GISMapEngine();
-    engine.attachToView(makeView());
-    expect(engine.hasDrawings()).toBe(false);
-
-    engine.drawLayer.add({ symbol: {} });
-    engine.drawRoute({ type: "polyline" });
-    engine.drawStops({ type: "point" }, { type: "point" });
-
-    const features = engine.getDrawnFeatures();
-    expect(features).toHaveLength(4);
-    expect(engine.hasDrawings()).toBe(true);
-  });
-});
-
-describe("GISMapEngine.toGeoJSONGeometry", () => {
-  test("converts point/polyline/polygon geometries and returns null otherwise", () => {
-    const engine = new GISMapEngine();
-    expect(engine.toGeoJSONGeometry(null)).toBeNull();
-    expect(engine.toGeoJSONGeometry({ type: "point", x: 1, y: 2 })).toEqual({
-      type: "Point",
-      coordinates: [1, 2]
-    });
-    expect(engine.toGeoJSONGeometry({ type: "polyline", paths: [[[0, 0], [1, 1]]] })).toEqual({
-      type: "LineString",
-      coordinates: [[0, 0], [1, 1]]
-    });
-    expect(engine.toGeoJSONGeometry({ type: "polyline" })).toEqual({ type: "LineString", coordinates: [] });
-    expect(engine.toGeoJSONGeometry({ type: "polygon", rings: [[[0, 0]]] })).toEqual({
-      type: "Polygon",
-      coordinates: [[[0, 0]]]
-    });
-    expect(engine.toGeoJSONGeometry({ type: "polygon" })).toEqual({ type: "Polygon", coordinates: [] });
-    expect(engine.toGeoJSONGeometry({ type: "unknown" })).toBeNull();
-  });
-});
-
-describe("GISMapEngine.saveDrawings", () => {
-  const originalCreateObjectURL = globalThis.URL.createObjectURL;
-  const originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
-
-  beforeEach(() => {
-    globalThis.URL.createObjectURL = jest.fn(() => "blob:mock-url");
-    globalThis.URL.revokeObjectURL = jest.fn();
-  });
-
-  afterEach(() => {
-    globalThis.URL.createObjectURL = originalCreateObjectURL;
-    globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
-  });
-
-  test("reports 'draw something' when there are no features", () => {
-    const engine = new GISMapEngine();
-    const msg = jest.fn();
-    engine.saveDrawings(msg);
-    expect(msg).toHaveBeenCalledWith("Please draw something, before saving", "error");
-    expect(globalThis.URL.createObjectURL).not.toHaveBeenCalled();
-  });
-
-  test("builds and downloads a GeoJSON FeatureCollection when features exist", () => {
-    const engine = new GISMapEngine();
-    engine.attachToView(makeView());
-    engine.drawLayer.add({ symbol: {}, geometry: { type: "point", x: 5, y: 6 } });
-
-    const clickSpy = jest.fn();
-    const anchor = { click: clickSpy, href: "", download: "" };
-    const createElementSpy = jest.spyOn(document, "createElement").mockReturnValue(anchor);
-
-    const msg = jest.fn();
-    engine.saveDrawings(msg);
-
-    expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
-    expect(anchor.download).toBe("drawings.geojson");
-    expect(clickSpy).toHaveBeenCalled();
-    expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
-    expect(msg).toHaveBeenCalledWith("GeoJSON downloaded", "success");
-
-    createElementSpy.mockRestore();
-  });
-});
-
-function makeFile(contents) {
-  return { name: "test.geojson", text: jest.fn().mockResolvedValue(JSON.stringify(contents)) };
-}
-
-describe("GISMapEngine.uploadGeoJSON", () => {
-  test("returns early when there is no file", async () => {
-    const engine = new GISMapEngine();
-    await expect(engine.uploadGeoJSON(null)).resolves.toBeUndefined();
-  });
-
-  test("returns early when the engine isn't attached to a view", async () => {
-    const engine = new GISMapEngine();
-    await engine.uploadGeoJSON(makeFile({ features: [] }));
-    expect(engine.drawLayer.graphics).toHaveLength(0);
-  });
-
-  test("blocks the upload with a message when unsaved drawings already exist", async () => {
-    const engine = new GISMapEngine();
-    engine.attachToView(makeView());
-    engine.drawLayer.add({ symbol: {} });
-    const msg = jest.fn();
-
-    await engine.uploadGeoJSON(makeFile({ features: [] }), msg);
-
-    expect(msg).toHaveBeenCalledWith(
-      "Please save your current drawing and refresh the page before uploading",
-      "error"
-    );
-    expect(engine.drawLayer.graphics).toHaveLength(1);
-  });
-
-  test("converts Point/LineString/Polygon features into graphics and pans the view", async () => {
-    const engine = new GISMapEngine();
-    const view = makeView();
-    engine.attachToView(view);
-
-    const file = makeFile({
-      features: [
-        { type: "Feature", geometry: { type: "Point", coordinates: [1, 2] }, properties: { a: 1 } },
-        { type: "Feature", geometry: { type: "LineString", coordinates: [[0, 0], [1, 1]] }, properties: {} },
-        { type: "Feature", geometry: { type: "Polygon", coordinates: [[[0, 0]]] }, properties: {} }
-      ]
-    });
-
-    await engine.uploadGeoJSON(file);
-
-    expect(engine.drawLayer.graphics).toHaveLength(3);
-    const [pointGraphic, lineGraphic, polygonGraphic] = engine.drawLayer.graphics.toArray();
-    expect(pointGraphic.geometry).toEqual({ type: "point", x: 1, y: 2, spatialReference: { wkid: 3857 } });
-    expect(pointGraphic.symbol.type).toBe("simple-marker");
-    expect(pointGraphic.attributes).toEqual({ a: 1 });
-    expect(lineGraphic.symbol.type).toBe("simple-line");
-    expect(polygonGraphic.symbol.type).toBe("simple-fill");
-    expect(engine.uploadedLayers).toHaveLength(1);
-    expect(engine.uploadedLayers[0].name).toBe("test.geojson");
-    expect(view.goTo).toHaveBeenCalledWith([pointGraphic, lineGraphic, polygonGraphic]);
-  });
-
-  test("skips features with unsupported geometry types instead of creating a null-geometry graphic", async () => {
-    const engine = new GISMapEngine();
-    engine.attachToView(makeView());
-    const msg = jest.fn();
-    const file = makeFile({
-      features: [
-        { type: "Feature", geometry: { type: "MultiPoint" }, properties: {} },
-        { type: "Feature", geometry: { type: "Point", coordinates: [1, 2] }, properties: {} }
-      ]
-    });
-
-    await engine.uploadGeoJSON(file, msg);
-
-    expect(engine.drawLayer.graphics).toHaveLength(1);
-    expect(engine.drawLayer.graphics.toArray()[0].geometry).not.toBeNull();
-    expect(msg).toHaveBeenCalledWith(
-      expect.stringContaining("1 unsupported feature(s) skipped"),
-      "success"
-    );
-  });
-
-  test("logs and swallows errors, e.g. malformed JSON", async () => {
-    const engine = new GISMapEngine();
-    engine.attachToView(makeView());
-    const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
-    const file = { name: "bad.geojson", text: jest.fn().mockResolvedValue("not json") };
-
-    await expect(engine.uploadGeoJSON(file)).resolves.toBeUndefined();
-    expect(consoleErrorSpy).toHaveBeenCalledWith("Upload failed:", expect.any(Error));
-
-    consoleErrorSpy.mockRestore();
   });
 });
 
@@ -2784,8 +2597,6 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
 
       expect(loader.drawLayer.renderer.type).toBe("heatmap");
       expect(loader.drawLayer.renderer.maxPixelIntensity).toBe(77);
-      const drawingsLayer = loader.getLayers().find((l) => l.id === "drawings");
-      expect(drawingsLayer.styleGroups[0].rendererIntensity).toBe(77);
     });
 
     // The inverse case: loading a project with no drawings heatmap must not

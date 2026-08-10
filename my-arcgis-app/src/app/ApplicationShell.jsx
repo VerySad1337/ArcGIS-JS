@@ -5,6 +5,7 @@ import ViewModeToggle from "../components/ViewModeToggle";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
+import CreateFeatureLayerPanel from "../components/CreateFeatureLayerPanel";
 import AccountButton from "../components/AccountButton";
 import AnalysisPanel from "../components/AnalysisPanel";
 import GISMapEngine from "../gis/GISMapEngine";
@@ -27,9 +28,13 @@ export default function ApplicationShell() {
   const [selectedFeature, setSelectedFeature] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeDrawType, setActiveDrawType] = useState(null);
-  // Which layer a completed sketch is persisted to - "drawings" (default,
-  // local-only) or a hosted/portal layer id (see GISMapEngine.setDrawTarget).
-  const [drawTargetLayerId, setDrawTargetLayerId] = useState("drawings");
+  // Which layer a completed sketch is persisted to - "" (default, no
+  // explicit choice yet - draws fall back to the local "Drawings" scratch
+  // layer via GISMapEngine's own "drawings" default), "drawings" (chosen
+  // explicitly), or a hosted/portal layer id (see GISMapEngine.setDrawTarget).
+  // Auto-selection of the topmost editable layer happens in the effect
+  // below, once `layers` reports at least one canBeDrawTarget candidate.
+  const [drawTargetLayerId, setDrawTargetLayerId] = useState("");
   const [hasInteracted, setHasInteracted] = useState(false);
   const [isRouting, setIsRouting] = useState(false);
   // Explicit state (rather than deriving Boolean(engineRef.current?.searchGraphic)
@@ -54,12 +59,23 @@ export default function ApplicationShell() {
   // LayerControlPanel's projectVersion prop for why this exists.
   const [projectVersion, setProjectVersion] = useState(0);
 
+  const refreshLayers = () => {
+    const updated = engineRef.current.getLayers();
+    setLayers([...updated]);
+  };
+
   useEffect(() => {
     if (!isOAuthConfigured()) return;
     // Restores a prior session (IdentityManager persists credentials across
     // reloads) without prompting the user again; resolves to null when
-    // there's nothing to restore.
-    checkSignInStatus().then(setSignedInUser);
+    // there's nothing to restore. Also refreshes the layer list so a
+    // restored session's editable/canBeDrawTarget flags (which read the
+    // current credential - see GISMapEngine.hasEditCredential) aren't stuck
+    // showing signed-out state until some unrelated action refreshes them.
+    checkSignInStatus().then((user) => {
+      setSignedInUser(user);
+      refreshLayers();
+    });
   }, []);
 
   useEffect(() => {
@@ -90,11 +106,6 @@ export default function ApplicationShell() {
   const dismissToast = () => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
-  };
-
-  const refreshLayers = () => {
-    const updated = engineRef.current.getLayers();
-    setLayers([...updated]);
   };
 
   const toggleViewMode = (next) => {
@@ -325,39 +336,33 @@ export default function ApplicationShell() {
   // layer added via portal search - same throw-and-toast convention as
   // addPortalLayer.
   const createHostedFeatureLayer = async ({ name, geometryType, fields }) => {
-    // Temporary diagnostic (2026-08): the engine call and refreshLayers()
-    // are split into two try/catches, each with its own console.error tag,
-    // so a failure can be pinned to a specific step - the toast alone can't
-    // tell "the REST calls actually failed" apart from "they succeeded but
-    // getLayers()/refreshLayers() blew up afterward reading the new layer".
-    let newLayerId;
     try {
-      newLayerId = await engineRef.current.createHostedFeatureLayer({ name, geometryType, fields });
-    } catch (err) {
-      console.error("createHostedFeatureLayer: engine call failed:", err);
-      showToast(err.message || "Failed to create feature layer.", "error");
-      return;
-    }
-    try {
+      await engineRef.current.createHostedFeatureLayer({ name, geometryType, fields });
       refreshLayers();
       showToast(`Created hosted layer "${name}".`, "success");
     } catch (err) {
-      console.error("createHostedFeatureLayer: refreshLayers() failed after layer", newLayerId, "was created:", err);
-      showToast(
-        `Layer "${name}" was created, but the layer list couldn't refresh (${err.message || "unknown error"}). Reload the page.`,
-        "error"
-      );
+      showToast(err.message || "Failed to create feature layer.", "error");
     }
   };
 
-  // Which layer FloatingDrawTools' "Draw into" selector offers: "Drawings"
-  // plus any layer getLayers() reports as accepting new features (see
-  // GISMapEngine's canBeDrawTarget). Derived from the already-computed
-  // `layers` state, no extra engine round trip needed.
-  const drawTargetOptions = [
-    { id: "drawings", name: "Drawings" },
-    ...layers.filter((l) => l.canBeDrawTarget).map((l) => ({ id: l.id, name: l.name }))
-  ];
+  // Which layer FloatingDrawTools' "Draw into" selector offers: every layer
+  // getLayers() reports as accepting new features (see GISMapEngine's
+  // canBeDrawTarget), each carrying its own geometryType so FloatingDrawTools
+  // can show only the one matching draw tool. Derived from the already-
+  // computed `layers` state, no extra engine round trip needed.
+  //
+  // "Drawings" is deliberately NOT offered here (2026-08) - it remains
+  // GISMapEngine's internal local-scratch fallback (SketchViewModel always
+  // sketches onto drawLayer first regardless of target, and a failed push to
+  // a hosted layer still leaves the graphic there - see Draw Target Routing
+  // in knowledge/features/drawing-system.md), but a user can no longer
+  // explicitly choose to leave a drawing local-only. When this list is
+  // empty (no editable feature class available), FloatingDrawTools hides
+  // the selector entirely and drawing still falls back to the local layer
+  // via GISMapEngine.activeDrawTargetLayerId's own "drawings" default.
+  const drawTargetOptions = layers
+    .filter((l) => l.canBeDrawTarget)
+    .map((l) => ({ id: l.id, name: l.name, geometryType: l.geometryType }));
 
   const setDrawTarget = (layerId) => {
     try {
@@ -367,6 +372,21 @@ export default function ApplicationShell() {
       showToast(err.message || "Failed to set draw target.", "error");
     }
   };
+
+  // "Draw into" starts with nothing explicitly chosen (drawTargetLayerId ===
+  // ""). Once the layer list reports one or more editable feature classes
+  // (canBeDrawTarget), auto-select the one drawn on top of the map instead
+  // of leaving the picker empty - `layers` is already ordered bottom-to-top
+  // (see LayerControlPanel's ordering note), so the topmost candidate is the
+  // last match in that filtered list. Only runs while nothing has been
+  // chosen yet, so it never overrides a user's own selection.
+  useEffect(() => {
+    if (drawTargetLayerId) return;
+    const editableLayers = layers.filter((l) => l.canBeDrawTarget);
+    if (editableLayers.length < 1) return;
+    const topmost = editableLayers[editableLayers.length - 1];
+    setDrawTarget(topmost.id);
+  }, [layers, drawTargetLayerId]);
 
   // Named Heatmap Layers: the discoverable, "add to the layers card" way to
   // run heatmap analysis (see GISMapEngine's "Named Heatmap Layers"
@@ -479,6 +499,12 @@ export default function ApplicationShell() {
       const user = await signIn();
       setSignedInUser(user);
       if (user) showToast(`Signed in as ${user.fullName}.`, "success");
+      // getLayers()'s editable/canBeDrawTarget flags read the current
+      // IdentityManager credential (see hasEditCredential) - without this,
+      // the Layers card's editable badges and the "Draw into" dropdown stay
+      // stuck showing pre-sign-in state until some unrelated action happens
+      // to trigger the next refresh.
+      refreshLayers();
     } catch (err) {
       showToast(err.message || "Sign-in failed or was cancelled.", "error");
     } finally {
@@ -490,6 +516,7 @@ export default function ApplicationShell() {
     signOut();
     setSignedInUser(null);
     showToast("Signed out.", "success");
+    refreshLayers();
   };
 
   // Combines map-feature search (Tourist Attractions/MRT Stations/MRT
@@ -544,16 +571,6 @@ export default function ApplicationShell() {
   const cancelDraw = () => {
     engineRef.current.cancelDraw();
   };
-
-  const uploadGeoJSON=async(file)=>{
-  if(!file)return;
-  setHasInteracted(true);
-  console.log("Uploading:", file.name);
-  await engineRef.current.uploadGeoJSON(file, showToast);
-  setLayers([...engineRef.current.getLayers()]);
-  };
-
-  const saveGeoJSON = () => {engineRef.current.saveDrawings(showToast);};
 
   // Project Persistence (Save/Load Project) - the ArcGIS Pro ".aprx" analog.
   // saveProjectState/loadProjectState do the actual serialization (see
@@ -730,6 +747,9 @@ export default function ApplicationShell() {
         <PortalLayerPanel
           onSearch={searchPortal}
           onAddLayer={addPortalLayer}
+        />
+
+        <CreateFeatureLayerPanel
           onCreateLayer={createHostedFeatureLayer}
           signedInUser={signedInUser}
         />
@@ -755,8 +775,6 @@ export default function ApplicationShell() {
           drawPoint={drawPoint}
           drawLine={drawLine}
           drawPolygon={drawPolygon}
-          saveGeoJSON={saveGeoJSON}
-          uploadGeoJSON={uploadGeoJSON}
           activeDrawType={activeDrawType}
           onCancelDraw={cancelDraw}
           drawTargetLayerId={drawTargetLayerId}

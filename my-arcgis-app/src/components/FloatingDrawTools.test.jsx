@@ -7,8 +7,9 @@ function setup(overrides = {}) {
     drawPoint: jest.fn(),
     drawLine: jest.fn(),
     drawPolygon: jest.fn(),
-    saveGeoJSON: jest.fn(),
-    uploadGeoJSON: jest.fn(),
+    drawTargetLayerId: "drawings",
+    drawTargetOptions: [{ id: "drawings", name: "Drawings", geometryType: null }],
+    onChangeDrawTarget: jest.fn(),
     ...overrides
   };
   const utils = render(<FloatingDrawTools {...props} />);
@@ -42,36 +43,6 @@ describe("FloatingDrawTools", () => {
     expect(props.drawLine).toHaveBeenCalled();
   });
 
-  test("Save GeoJSON button invokes saveGeoJSON", async () => {
-    const user = userEvent.setup();
-    const { props } = setup();
-
-    await user.click(screen.getByRole("button", { name: "Open drawing tools" }));
-    await user.click(screen.getByTitle("Save GeoJSON"));
-    expect(props.saveGeoJSON).toHaveBeenCalled();
-  });
-
-  test("selecting a file calls uploadGeoJSON with that file, resets the input, and closes the fan", async () => {
-    const { container, props } = setup();
-    const fileInput = container.querySelector('input[type="file"]');
-    const file = new File(["{}"], "drawing.geojson", { type: "application/json" });
-
-    await userEvent.setup().upload(fileInput, file);
-
-    expect(props.uploadGeoJSON).toHaveBeenCalledWith(file);
-    expect(fileInput.value).toBe("");
-  });
-
-  test("does nothing when the file input change fires with no selected file", () => {
-    const { container, props } = setup();
-    const fileInput = container.querySelector('input[type="file"]');
-
-    Object.defineProperty(fileInput, "files", { value: [], configurable: true });
-    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(props.uploadGeoJSON).not.toHaveBeenCalled();
-  });
-
   test("clicking outside the fan closes it", async () => {
     const user = userEvent.setup();
     const { container } = setup();
@@ -87,14 +58,17 @@ describe("FloatingDrawTools", () => {
     const { rerender } = setup({ activeDrawType: null });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
-    rerender(<FloatingDrawTools {...{
-      drawPoint: jest.fn(),
-      drawLine: jest.fn(),
-      drawPolygon: jest.fn(),
-      saveGeoJSON: jest.fn(),
-      uploadGeoJSON: jest.fn(),
-      activeDrawType: "polygon"
-    }} />);
+    rerender(
+      <FloatingDrawTools
+        drawPoint={jest.fn()}
+        drawLine={jest.fn()}
+        drawPolygon={jest.fn()}
+        drawTargetLayerId="drawings"
+        drawTargetOptions={[{ id: "drawings", name: "Drawings", geometryType: null }]}
+        onChangeDrawTarget={jest.fn()}
+        activeDrawType="polygon"
+      />
+    );
 
     expect(screen.getByRole("status")).toHaveTextContent("Drawing polygon…");
   });
@@ -106,5 +80,102 @@ describe("FloatingDrawTools", () => {
 
     await user.click(screen.getByRole("button", { name: "Cancel drawing" }));
     expect(onCancelDraw).toHaveBeenCalled();
+  });
+
+  test("the \"Draw into\" selector is part of the fan and present in the DOM even before it's opened", () => {
+    const { container } = setup({
+      drawTargetOptions: [
+        { id: "drawings", name: "Drawings", geometryType: null },
+        { id: "portal_abc", name: "Site Inspections", geometryType: "point" }
+      ]
+    });
+
+    // Present but visually/interactively hidden until the fan opens - CSS
+    // (.fab-container.open .draw-target-bar) drives the actual show/hide,
+    // which jsdom doesn't apply, so the DOM-presence + tabIndex/open-class
+    // checks below are what's assertable here.
+    expect(screen.getByLabelText("Layer to draw new features into")).toBeInTheDocument();
+    expect(screen.getByLabelText("Layer to draw new features into")).toHaveAttribute("tabIndex", "-1");
+    expect(container.querySelector(".fab-container")).not.toHaveClass("open");
+  });
+
+  test("opening the fan makes the \"Draw into\" selector focusable", async () => {
+    const user = userEvent.setup();
+    const { container } = setup({
+      drawTargetOptions: [
+        { id: "drawings", name: "Drawings", geometryType: null },
+        { id: "portal_abc", name: "Site Inspections", geometryType: "point" }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Open drawing tools" }));
+
+    expect(container.querySelector(".fab-container")).toHaveClass("open");
+    expect(screen.getByLabelText("Layer to draw new features into")).toHaveAttribute("tabIndex", "0");
+  });
+
+  test("changing the selector calls onChangeDrawTarget with the picked layer id", async () => {
+    const user = userEvent.setup();
+    const { props } = setup({
+      drawTargetOptions: [
+        { id: "drawings", name: "Drawings", geometryType: null },
+        { id: "portal_abc", name: "Site Inspections", geometryType: "point" }
+      ]
+    });
+
+    await user.selectOptions(screen.getByLabelText("Layer to draw new features into"), "portal_abc");
+
+    expect(props.onChangeDrawTarget).toHaveBeenCalledWith("portal_abc");
+  });
+
+  test("selecting a point-geometry target shows only the Point tool", async () => {
+    const user = userEvent.setup();
+    setup({
+      drawTargetLayerId: "portal_abc",
+      drawTargetOptions: [
+        { id: "drawings", name: "Drawings", geometryType: null },
+        { id: "portal_abc", name: "Site Inspections", geometryType: "point" }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Open drawing tools" }));
+
+    expect(screen.getByTitle("Point")).toBeInTheDocument();
+    expect(screen.queryByTitle("Line")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Polygon")).not.toBeInTheDocument();
+  });
+
+  test("selecting a polyline-geometry target shows only the Line tool", async () => {
+    const user = userEvent.setup();
+    setup({
+      drawTargetLayerId: "portal_lines",
+      drawTargetOptions: [
+        { id: "drawings", name: "Drawings", geometryType: null },
+        { id: "portal_lines", name: "Trails", geometryType: "polyline" }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Open drawing tools" }));
+
+    expect(screen.getByTitle("Line")).toBeInTheDocument();
+    expect(screen.queryByTitle("Point")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Polygon")).not.toBeInTheDocument();
+  });
+
+  test("selecting Drawings (no geometry restriction) shows all three tools", async () => {
+    const user = userEvent.setup();
+    setup({
+      drawTargetLayerId: "drawings",
+      drawTargetOptions: [
+        { id: "drawings", name: "Drawings", geometryType: null },
+        { id: "portal_abc", name: "Site Inspections", geometryType: "point" }
+      ]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Open drawing tools" }));
+
+    expect(screen.getByTitle("Point")).toBeInTheDocument();
+    expect(screen.getByTitle("Line")).toBeInTheDocument();
+    expect(screen.getByTitle("Polygon")).toBeInTheDocument();
   });
 });

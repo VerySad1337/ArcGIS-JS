@@ -76,16 +76,6 @@ function toLiveRenderer(rendererJson) {
   return renderer;
 }
 
-const UPLOAD_SYMBOL_TYPE_BY_GEOMETRY = {
-  Point: "simple-marker",
-  LineString: "simple-line"
-};
-
-const UPLOAD_SYMBOL_COLOR_BY_GEOMETRY = {
-  Point: "red",
-  LineString: "blue"
-};
-
 export default class GISMapEngine {
   currentMap = null;
   currentView = null;
@@ -263,8 +253,6 @@ export default class GISMapEngine {
   // is inactive; it is bound directly to the live SceneView, so it cannot
   // survive a 2D/3D reattachment and is torn down in detachFromView.
   sliceWidget = null;
-
-  uploadedLayers = [];
 
   onFeatureSelect = null;
   clickHandle = null;
@@ -669,9 +657,9 @@ export default class GISMapEngine {
     if (this.bufferGraphic) this.bufferLayer.add(this.bufferGraphic);
 
     if (existingDrawings.length) {
-      // Defensively drop any graphic with no geometry (e.g. left over from
-      // an unsupported-type GeoJSON upload prior to the fix in
-      // uploadGeoJSON). A null-geometry graphic in drawLayer makes the
+      // Defensively drop any graphic with no geometry (a leftover hazard
+      // from the since-removed GeoJSON upload feature, kept as a general
+      // safety net). A null-geometry graphic in drawLayer makes the
       // ArcGIS LayerView throw while building the Drawings layer's render
       // batch on every reattach, which hides every drawing - not just the
       // bad one - each time the view is rebuilt (e.g. every 2D/3D switch).
@@ -693,17 +681,34 @@ export default class GISMapEngine {
         visible: meta.visible,
         outFields: ["*"]
       });
+      // Load is now unconditional (2026-08 fix), not just when a persisted
+      // style needs reapplying. `layer.capabilities` - which getLayers()'s
+      // isEditable/isDrawTarget (canBeDrawTarget/editable, and the "Draw
+      // into" dropdown) depend on - is only populated once .load() resolves;
+      // a portal layer with no custom renderer/halo previously never had
+      // .load() called on it at all during a rebuild, so it silently stayed
+      // "not editable"/ineligible as a draw target forever after every 2D/3D
+      // switch or project load, even when the service genuinely supports
+      // editing. This mirrors the identical load-timing fix already applied
+      // to touristAttractionLayer/mrtStationLayer for heatmap eligibility -
+      // see knowledge/index.md's Heatmap System "Load-timing follow-up".
+      //
       // A persisted style (see setLayerStyle's portal-layer branch) is not
-      // carried by a fresh FeatureLayer instance, so it must be reapplied
-      // once the layer loads and its own renderer is available to clone the
+      // carried by a fresh FeatureLayer instance, so it's reapplied once the
+      // layer loads and its own renderer is available to clone the
       // geometry-appropriate shape from. resolveSeedRenderer additionally
       // layers in an active advanced renderer (layerRenderers) and/or halo
       // (haloState), same precedence as the three fixed hosted layers above.
-      if (meta.renderer || this.layerRenderers.has(id) || this.haloState.has(id)) {
-        rebuilt.load().then(() => {
-          rebuilt.renderer = this.resolveSeedRenderer(id, meta.renderer);
-        }).catch(() => {});
-      }
+      const hasPersistedStyle = meta.renderer || this.layerRenderers.has(id) || this.haloState.has(id);
+      rebuilt.load().then(() => {
+        if (hasPersistedStyle) rebuilt.renderer = this.resolveSeedRenderer(id, meta.renderer);
+        // Refresh signal so getLayers()'s now-populated capabilities (and
+        // any UI reading them, e.g. the Layers card's editable badge / the
+        // "Draw into" dropdown) update without needing an unrelated action
+        // to trigger the next refresh - reusing the same "please re-read
+        // layer state" callback attachToView's other load-timing fixes use.
+        this.onDrawingsChanged?.();
+      }).catch(() => {});
       this.portalLayers.set(id, rebuilt);
     });
 
@@ -930,8 +935,8 @@ export default class GISMapEngine {
   // given distance/unit and adds the resulting polygon to drawLayer. Works
   // in both 2D and 3D. msg is the shell's showToast, invoked here (rather
   // than thrown) since there is no calling code that needs to branch on
-  // success/failure beyond telling the user, matching zoomToLayer/
-  // uploadGeoJSON's msg-callback convention.
+  // success/failure beyond telling the user, matching zoomToLayer's
+  // msg-callback convention.
   bufferSelectedFeature(distance, unit = "meters", msg) {
     if (!this.selectedGraphic?.geometry) {
       msg?.("Select a feature on the map first.", "error");
@@ -1030,7 +1035,15 @@ export default class GISMapEngine {
   }
 
   getFilterableLayers() {
+    // Sourced from getLayers()'s own name for every id it still returns
+    // (the fixed hosted layers, portal layers) - but "drawings" (2026-08)
+    // no longer has a Layers-card row, so it's no longer in that list.
+    // Filter/Aggregate for drawings is a separate subsystem from the Layers
+    // card display, so it keeps its own hardcoded name here instead of
+    // silently losing "drawings" from filterableLayerIds()'s deliberate
+    // inclusion the moment its card row went away.
     const byId = new Map(this.getLayers().filter(Boolean).map((l) => [l.id, l.name]));
+    byId.set("drawings", "Drawings");
     return this.filterableLayerIds()
       .filter((id) => byId.has(id))
       .map((id) => ({ id, name: byId.get(id) }));
@@ -1710,9 +1723,8 @@ export default class GISMapEngine {
   // advanced renderer is active (leaves the graphic's current symbol alone)
   // or when it's scoped to a different symbolType - mirrors
   // applyDrawingsFilterToGraphic's no-op-when-inactive behavior, and is
-  // called from the same three spots that method is: setLayerAdvancedRenderer
-  // (via applyRendererToLayer), the sketchVM "create" complete handler, and
-  // uploadGeoJSON.
+  // called from the same spots that method is: setLayerAdvancedRenderer (via
+  // applyRendererToLayer) and the sketchVM "create" complete handler.
   applyDrawingsRendererToGraphic(graphic) {
     const descriptor = this.layerRenderers.get("drawings");
     if (!descriptor) return;
@@ -1880,6 +1892,35 @@ export default class GISMapEngine {
     return geometryType === "point" || geometryType === "multipoint";
   }
 
+  // Collapses a live layer's own geometryType (already normalized by the SDK
+  // to its lowercase shorthand - see isPointGeometry's comment) down to the
+  // three shapes SketchViewModel/FloatingDrawTools actually draw:
+  // "point"/"polyline"/"polygon". `multipoint` counts as "point" (a
+  // multipoint-typed service still accepts single-point sketches one at a
+  // time, same as a plain point service); anything else (multipatch/mesh,
+  // or not yet loaded) returns null, which FloatingDrawTools treats as "no
+  // geometry restriction" the same as the local drawings layer.
+  static normalizeDrawGeometryType(geometryType) {
+    if (geometryType === "point" || geometryType === "multipoint") return "point";
+    if (geometryType === "polyline") return "polyline";
+    if (geometryType === "polygon") return "polygon";
+    return null;
+  }
+
+  // Non-prompting check for whether the current identity could write to a
+  // hosted/portal FeatureLayer, reusing the exact findCredential pattern
+  // addColumnToLayer/addFeatureToHostedLayer already gate their real writes
+  // with (service URL first, falling back to the portal sharing root, since
+  // an ArcGIS Online sign-in registers a portal-level credential that
+  // federates to the service rather than a per-service one). Read-only -
+  // never calls getCredential, so it never prompts a sign-in just to
+  // compute a badge/dropdown-eligibility flag.
+  hasEditCredential(layer) {
+    return Boolean(
+      IdentityManager.findCredential(layer.url) || IdentityManager.findCredential(`${PORTAL_URL}/sharing`)
+    );
+  }
+
   getLayers() {
     const l = this.layerOrder;
 
@@ -1916,6 +1957,22 @@ export default class GISMapEngine {
       });
     }
 
+    // Shared "can this layer accept an edit right now" computation for the
+    // Layers card's editable/read-only badge and the "Draw into" dropdown's
+    // eligibility list. A layer is editable only when BOTH the service
+    // itself advertises the capability (supportsUpdate/supportsAdd) AND the
+    // current identity actually holds a matching credential
+    // (hasEditCredential) - a Query-only service, or an anonymous session
+    // against an otherwise-editable one, are both correctly "not editable"
+    // rather than only failing once a save/draw is actually attempted.
+    const isEditable = (layer) =>
+      Boolean(layer) &&
+      this.hasEditCredential(layer) &&
+      (layer.capabilities?.operations?.supportsUpdate === true ||
+        layer.capabilities?.operations?.supportsAdd === true);
+    const isDrawTarget = (layer) =>
+      Boolean(layer) && this.hasEditCredential(layer) && layer.capabilities?.operations?.supportsAdd === true;
+
     const lookup = {
       touristAttractions: {
         id: "touristAttractions",
@@ -1928,7 +1985,9 @@ export default class GISMapEngine {
         filterDescription: this.getLayerFilterDescription("touristAttractions"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("touristAttractions"),
-        canBeDrawTarget: this.touristAttractionLayer?.capabilities?.operations?.supportsAdd === true
+        editable: isEditable(this.touristAttractionLayer),
+        canBeDrawTarget: isDrawTarget(this.touristAttractionLayer),
+        geometryType: GISMapEngine.normalizeDrawGeometryType(this.touristAttractionLayer?.geometryType)
       },
       mrtStations: {
         id: "mrtStations",
@@ -1941,7 +2000,9 @@ export default class GISMapEngine {
         filterDescription: this.getLayerFilterDescription("mrtStations"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("mrtStations"),
-        canBeDrawTarget: this.mrtStationLayer?.capabilities?.operations?.supportsAdd === true
+        editable: isEditable(this.mrtStationLayer),
+        canBeDrawTarget: isDrawTarget(this.mrtStationLayer),
+        geometryType: GISMapEngine.normalizeDrawGeometryType(this.mrtStationLayer?.geometryType)
       },
       mrtLines: {
         id: "mrtLines",
@@ -1954,7 +2015,9 @@ export default class GISMapEngine {
         filterDescription: this.getLayerFilterDescription("mrtLines"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("mrtLines"),
-        canBeDrawTarget: this.mrtLineLayer?.capabilities?.operations?.supportsAdd === true
+        editable: isEditable(this.mrtLineLayer),
+        canBeDrawTarget: isDrawTarget(this.mrtLineLayer),
+        geometryType: GISMapEngine.normalizeDrawGeometryType(this.mrtLineLayer?.geometryType)
       },
       drawings: {
         id: "drawings",
@@ -1962,7 +2025,10 @@ export default class GISMapEngine {
         visible: this.drawLayer?.visible,
         styleGroups: drawingsGroups,
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("drawings")
+        filterDescription: this.getLayerFilterDescription("drawings"),
+        // Local, in-memory graphics layer - always editable, signed in or
+        // not, same reasoning as ApplicationShell's canEditSelectedFeature.
+        editable: true
       },
     };
 
@@ -2008,7 +2074,9 @@ export default class GISMapEngine {
         filterDescription: this.getLayerFilterDescription(id),
         annotatable: true,
         annotationField: this.getLayerAnnotationField(id),
-        canBeDrawTarget: layer.capabilities?.operations?.supportsAdd === true
+        editable: isEditable(layer),
+        canBeDrawTarget: isDrawTarget(layer),
+        geometryType: GISMapEngine.normalizeDrawGeometryType(layer.geometryType)
       };
     });
 
@@ -2112,8 +2180,17 @@ export default class GISMapEngine {
     // Search card (createSearchResultLayer), or the Buffer section
     // (createBufferResultLayer) instead, which each produce an ordinary
     // card row like any other layer.
+    //
+    // `drawings` is excluded the same way (2026-08): drawing is now always
+    // expected to target a real hosted/portal feature layer (see the
+    // "Draw into" selector in FloatingDrawTools), so the local scratch
+    // GraphicsLayer that SketchViewModel still binds to internally isn't a
+    // user-facing layer with its own card row anymore. It remains a full
+    // `layerOrder`/`buildLayerMap` member and a valid `setDrawTarget("drawings")`
+    // target - only its Layers-card row is gone, matching the
+    // route/stops/searchResult/buffer precedent above.
     return l
-      .filter((id) => id !== "route" && id !== "stops" && id !== "searchResult" && id !== "buffer")
+      .filter((id) => id !== "route" && id !== "stops" && id !== "searchResult" && id !== "buffer" && id !== "drawings")
       .map((id) => lookup[id]);
   }
 
@@ -2188,17 +2265,8 @@ export default class GISMapEngine {
       });
       // ArcGIS REST reports authorization failures as HTTP 200 with an error
       // body, so a resolved promise is not on its own proof of access.
-      if (response?.data?.error) {
-        // Temporary diagnostic (2026-08): this branch normally just returns
-        // false silently; logging the actual error body here so a
-        // freshly-created layer's "not (yet) accessible" reason is visible
-        // instead of collapsing to one generic downstream message.
-        console.warn("canAccessPortalService: error body for", url, response.data.error);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.warn("canAccessPortalService: request threw for", url, err);
+      return !response?.data?.error;
+    } catch {
       return false;
     }
   }
@@ -2967,154 +3035,6 @@ export default class GISMapEngine {
   startPolygonDraw(){ this.activeDrawType = "polygon"; this.sketchVM?.create("polygon"); }
   cancelDraw() { this.sketchVM?.cancel(); }
 
-  getDrawnFeatures() {
-    const f = [];
-
-    if (this.drawLayer) f.push(...this.drawLayer.graphics.toArray());
-    if (this.routeGraphic) f.push(this.routeGraphic);
-    if (this.startGraphic) f.push(this.startGraphic);
-    if (this.endGraphic) f.push(this.endGraphic);
-
-    return f;
-  }
-
-  hasDrawings() {
-    return this.getDrawnFeatures().length > 0;
-  }
-
-  toGeoJSONGeometry(g) {
-    if (!g) return null;
-
-    if (g.type === "point") return { type: "Point", coordinates: [g.x, g.y] };
-    if (g.type === "polyline") return { type: "LineString", coordinates: g.paths?.[0] || [] };
-    if (g.type === "polygon") return { type: "Polygon", coordinates: g.rings || [] };
-
-    return null;
-  }
-
-  saveDrawings(msg) {
-    const f = this.getDrawnFeatures();
-    if (!f.length) return msg?.("Please draw something, before saving", "error");
-
-    const geojson = {
-      type: "FeatureCollection",
-      features: f.map(x => ({
-        type: "Feature",
-        geometry: this.toGeoJSONGeometry(x.geometry),
-        properties: {}
-      }))
-    };
-
-    const url = URL.createObjectURL(new Blob([JSON.stringify(geojson)], { type: "application/json" }));
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "drawings.geojson";
-    a.click();
-
-    URL.revokeObjectURL(url);
-    msg?.("GeoJSON downloaded", "success");
-  }
-
-  async uploadGeoJSON(file, msg) {
-  if (!file || !this.currentMap || !this.currentView) return;
-
-  try {
-    // 🚨 BLOCK UPLOAD IF UNSAVED DRAWINGS EXIST
-    if (this.drawLayer?.graphics?.length > 0) {
-      msg?.("Please save your current drawing and refresh the page before uploading", "error");
-      return;
-    }
-
-    const geojson = JSON.parse(await file.text());
-
-    const graphics = geojson.features
-      .map(f => {
-        const g = f.geometry;
-
-        let geometry = null;
-
-        if (g.type === "Point") {
-          geometry = {
-            type: "point",
-            x: g.coordinates[0],
-            y: g.coordinates[1],
-            spatialReference: { wkid: 3857 }
-          };
-        }
-
-        if (g.type === "LineString") {
-          geometry = {
-            type: "polyline",
-            paths: [g.coordinates],
-            spatialReference: { wkid: 3857 }
-          };
-        }
-
-        if (g.type === "Polygon") {
-          geometry = {
-            type: "polygon",
-            rings: g.coordinates,
-            spatialReference: { wkid: 3857 }
-          };
-        }
-
-        // Unsupported geometry types (e.g. MultiPoint/MultiLineString/
-        // MultiPolygon) have no conversion above and would otherwise produce
-        // a Graphic with geometry: null. Adding that to drawLayer doesn't
-        // fail quietly - the ArcGIS LayerView throws while building the
-        // Drawings layerview's render batch, which kills rendering for every
-        // graphic on the layer (not just this one), and the failure recurs
-        // on every future attachToView (2D/3D switch) since the bad graphic
-        // stays in drawLayer. Skip it instead of creating it.
-        if (!geometry) return null;
-
-        return new Graphic({
-          geometry,
-          attributes: this.buildDrawingAttributes(f.properties || {}),
-          symbol: {
-            type: UPLOAD_SYMBOL_TYPE_BY_GEOMETRY[g.type] ?? "simple-fill",
-            color: UPLOAD_SYMBOL_COLOR_BY_GEOMETRY[g.type] ?? [0, 120, 255, 0.3],
-            size: g.type === "Point" ? 8 : undefined,
-            width: g.type === "LineString" ? 2 : undefined
-          }
-        });
-      })
-      .filter(Boolean);
-
-    const skippedCount = geojson.features.length - graphics.length;
-
-    // Respect any active drawings filter (see setLayerFilter) for newly
-    // uploaded graphics too, so uploading into an already-filtered view
-    // doesn't silently show features the user just asked to hide.
-    graphics.forEach((g) => {
-      this.applyDrawingsFilterToGraphic(g);
-      this.applyDrawingsRendererToGraphic(g);
-    });
-
-    this.drawLayer.addMany(graphics);
-
-    this.uploadedLayers.push({
-      id: `upload_${Date.now()}`,
-      name: file.name,
-      layer: this.drawLayer
-    });
-
-    // A bare GraphicsLayer isn't a valid goTo target (see zoomToLayer); the
-    // uploaded graphics array is.
-    await this.currentView.goTo(graphics);
-
-    const skippedNote = skippedCount > 0
-      ? ` (${skippedCount} unsupported feature(s) skipped)`
-      : "";
-    msg?.(`Uploaded ${graphics.length} feature(s) from "${file.name}".${skippedNote}`, "success");
-
-  } catch (err) {
-    console.error("Upload failed:", err);
-    msg?.("Upload failed: the file could not be read as valid GeoJSON.", "error");
-  }
-}
-
   // Global feature search: queries every hosted FeatureLayer's string fields
   // for a case-insensitive substring match, plus the local drawings layer's
   // in-memory attributes. Field names come from the layer's own schema (not
@@ -3421,11 +3341,9 @@ export default class GISMapEngine {
   // The ArcGIS Pro ".aprx" analog: a single downloadable JSON snapshot of
   // every piece of engine-owned session state, re-uploadable later (a new
   // browser session, a different machine) to pick up exactly where the user
-  // left off, the same way saveDrawings/uploadGeoJSON round-trip drawings
-  // alone but for the whole map - layer order/visibility, Simple/Advanced
-  // symbology, halo, filters, annotations, portal layers, drawings (with
-  // attributes, unlike saveDrawings), route/stops, the search marker, and
-  // the current camera extent/2D-3D mode.
+  // left off - layer order/visibility, Simple/Advanced symbology, halo,
+  // filters, annotations, portal layers, drawings (with attributes), route/
+  // stops, the search marker, and the current camera extent/2D-3D mode.
   //
   // Every field this reads already documents itself elsewhere as the actual
   // source of truth for its concern (touristAttractionRenderer/layerFilters/
@@ -3521,11 +3439,10 @@ export default class GISMapEngine {
     return plain;
   }
 
-  // Plain-JSON snapshot of a geometry, covering the same point/polyline/
-  // polygon/extent shapes uploadGeoJSON already hand-builds - kept
-  // consistent with that existing pattern (an explicit JS-API-dialect
-  // `type` tag) rather than each geometry's own `.toJSON()`, for the same
-  // dialect reason as symbols above.
+  // Plain-JSON snapshot of a geometry, covering the point/polyline/polygon/
+  // extent shapes this file works with - an explicit JS-API-dialect `type`
+  // tag rather than each geometry's own `.toJSON()`, for the same dialect
+  // reason as symbols above.
   geometryToPlainJSON(geometry) {
     if (!geometry) return null;
     const spatialReference = geometry.spatialReference
@@ -3614,11 +3531,12 @@ export default class GISMapEngine {
     };
   }
 
-  // Downloads the current session as a project file, mirroring
-  // saveDrawings's msg-callback/anchor-download convention. Lets the user
-  // pick the filename/location via the File System Access API when the
-  // browser supports it (Chromium), falling back to a plain anchor download
-  // with a prompted filename otherwise (Firefox/Safari).
+  // Downloads the current session as a project file, using the same
+  // msg-callback/anchor-download convention every other engine download
+  // uses. Lets the user pick the filename/location via the File System
+  // Access API when the browser supports it (Chromium), falling back to a
+  // plain anchor download with a prompted filename otherwise (Firefox/
+  // Safari).
   async saveProjectState(msg) {
     let state;
     try {
