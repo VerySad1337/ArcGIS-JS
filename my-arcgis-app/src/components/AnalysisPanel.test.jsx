@@ -237,6 +237,166 @@ describe("AnalysisPanel", () => {
     });
   });
 
+  describe("Reverse Geocode section", () => {
+    test("is not rendered when onReverseGeocode is not provided", async () => {
+      const user = userEvent.setup();
+      render(<AnalysisPanel onBuffer={jest.fn()} onToggleSlice={jest.fn()} />);
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      expect(screen.queryByRole("button", { name: "Reverse Geocode" })).not.toBeInTheDocument();
+    });
+
+    test("shows a hint instead of the Look Up button when nothing is selected", async () => {
+      const user = userEvent.setup();
+      render(<AnalysisPanel onBuffer={jest.fn()} onToggleSlice={jest.fn()} onReverseGeocode={jest.fn()} />);
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Reverse Geocode" }));
+
+      expect(screen.getByText(/Select a point feature on the map first/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Look Up Address" })).not.toBeInTheDocument();
+    });
+
+    test("shows the same hint when the selected feature has no point (a line/polygon selection)", async () => {
+      const user = userEvent.setup();
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          onReverseGeocode={jest.fn()}
+          selectedFeature={{ layerId: "mrtLines", attributes: {}, point: null }}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Reverse Geocode" }));
+
+      expect(screen.getByText(/Select a point feature on the map first/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Look Up Address" })).not.toBeInTheDocument();
+    });
+
+    test("looks up the selected point feature's own coordinates and displays the resolved address, block, and postal code", async () => {
+      const user = userEvent.setup();
+      const onReverseGeocode = jest.fn().mockResolvedValue({
+        address: "168 Bishan Street 13, Singapore",
+        postalCode: "570168",
+        block: "168"
+      });
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          onReverseGeocode={onReverseGeocode}
+          selectedFeature={{
+            layerId: "touristAttractions",
+            attributes: {},
+            point: { latitude: 1.2834, longitude: 103.8607 }
+          }}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Reverse Geocode" }));
+
+      expect(screen.getByText(/1.283400, 103.860700/)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Look Up Address" }));
+
+      expect(onReverseGeocode).toHaveBeenCalledWith(1.2834, 103.8607);
+      expect(await screen.findByText(/168 Bishan Street 13, Singapore/)).toBeInTheDocument();
+      expect(screen.getByText(/^Block: 168$/)).toBeInTheDocument();
+      expect(screen.getByText(/570168/)).toBeInTheDocument();
+    });
+
+    test("labels a resolved point with no real block number as 'Nearest Block: N/A' instead of a bare block value", async () => {
+      const user = userEvent.setup();
+      const onReverseGeocode = jest.fn().mockResolvedValue({
+        address: "Tampines Street 81, Tampines West, Tampines, Singapore",
+        postalCode: "521823",
+        block: ""
+      });
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          onReverseGeocode={onReverseGeocode}
+          selectedFeature={{
+            layerId: "touristAttractions",
+            attributes: {},
+            point: { latitude: 1.348016, longitude: 103.93286 }
+          }}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Reverse Geocode" }));
+      await user.click(screen.getByRole("button", { name: "Look Up Address" }));
+
+      expect(await screen.findByText(/Tampines Street 81, Tampines West/)).toBeInTheDocument();
+      expect(screen.getByText("Nearest Block: N/A")).toBeInTheDocument();
+    });
+
+    test("shows an error hint when the lookup finds nothing", async () => {
+      const user = userEvent.setup();
+      const onReverseGeocode = jest.fn().mockResolvedValue(null);
+      render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          onReverseGeocode={onReverseGeocode}
+          selectedFeature={{
+            layerId: "touristAttractions",
+            attributes: {},
+            point: { latitude: 1.2834, longitude: 103.8607 }
+          }}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Reverse Geocode" }));
+      await user.click(screen.getByRole("button", { name: "Look Up Address" }));
+
+      expect(await screen.findByText("Couldn't find an address for that location.")).toBeInTheDocument();
+    });
+
+    test("clears a stale result when the selection changes", async () => {
+      const user = userEvent.setup();
+      const onReverseGeocode = jest.fn().mockResolvedValue({ address: "Some Address", postalCode: "123456" });
+      const { rerender } = render(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          onReverseGeocode={onReverseGeocode}
+          selectedFeature={{
+            layerId: "touristAttractions",
+            attributes: {},
+            point: { latitude: 1.2834, longitude: 103.8607 }
+          }}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "ANALYSIS" }));
+      await user.click(screen.getByRole("button", { name: "Reverse Geocode" }));
+      await user.click(screen.getByRole("button", { name: "Look Up Address" }));
+      expect(await screen.findByText(/Some Address/)).toBeInTheDocument();
+
+      rerender(
+        <AnalysisPanel
+          onBuffer={jest.fn()}
+          onToggleSlice={jest.fn()}
+          onReverseGeocode={onReverseGeocode}
+          selectedFeature={{
+            layerId: "touristAttractions",
+            attributes: {},
+            point: { latitude: 1.35, longitude: 103.9 }
+          }}
+        />
+      );
+
+      expect(screen.queryByText(/Some Address/)).not.toBeInTheDocument();
+    });
+  });
+
   describe("Route Search — Add to Layers", () => {
     test("is not rendered when onCreateRouteLayer is not provided", async () => {
       const user = userEvent.setup();

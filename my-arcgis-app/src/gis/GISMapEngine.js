@@ -150,6 +150,16 @@ export default class GISMapEngine {
   routeVisible = true;
   searchVisible = true;
 
+  // Satellite imagery basemap toggle (Esri World Imagery, "hybrid" = imagery
+  // + reference labels). Persisted as a field, not just a live map.basemap
+  // flip, because a 2D/3D switch swaps `view.map` for a fresh WebMap/
+  // WebScene instance built from that item's own basemap - see attachToView,
+  // which reapplies this on every reattach. originalBasemap is the just-
+  // attached map's own configured basemap, captured once per attach so
+  // turning satellite off can revert to it instead of a hardcoded default.
+  satelliteVisible = false;
+  originalBasemap = null;
+
   layerOrder = [
     "route",
     "stops",
@@ -207,6 +217,10 @@ export default class GISMapEngine {
   touristAttractionLayer = null;
   mrtStationLayer = null;
   mrtLineLayer = null;
+
+  // Global 3D buildings massing, added to a SceneView only while
+  // satelliteVisible is on - see syncSceneEnhancements.
+  buildingsLayer = null;
 
   // User-added layers picked from an ArcGIS portal search (see
   // addPortalLayer/removePortalLayer). portalLayers holds the live
@@ -621,7 +635,22 @@ export default class GISMapEngine {
     this.currentMap = map;
     this.currentView = view;
 
+    // Basemap is independent of the operational layers rebuilt below.
+    // Capture the freshly attached map/scene item's own basemap before
+    // touching anything, then reapply an active satellite toggle to this
+    // new instance - see the satelliteVisible field comment for why this
+    // can't just live on the map instance itself.
+    this.originalBasemap = map.basemap;
+    if (this.satelliteVisible) {
+      map.basemap = "hybrid";
+    }
+
     map.removeAll();
+
+    // The buildings layer (if any) belonged to the outgoing map instance,
+    // which removeAll() just emptied and which a 2D/3D switch is about to
+    // discard entirely - the field must not go on pointing at it.
+    this.buildingsLayer = null;
 
     this.routeLayer = new GraphicsLayer({ title: "Route Layer", visible: this.routeVisible });
     this.stopLayer  = new GraphicsLayer({ title: "Stop Layer",  visible: this.routeVisible });
@@ -903,6 +932,63 @@ export default class GISMapEngine {
     // half of this fix.
     const navigated = previousExtent ? view.goTo(previousExtent).catch(() => {}) : Promise.resolve();
     navigated.then(() => this.resyncAllHeatmapRenderers(view));
+
+    // Reapplies the satellite toggle's 3D buildings/elevation enhancements
+    // to this freshly (re)built map - see syncSceneEnhancements. A no-op on
+    // a MapView (2D) or when satelliteVisible is off.
+    this.syncSceneEnhancements();
+  }
+
+  // Adds Esri's global OpenStreetMap 3D Buildings layer and boosts ground
+  // elevation exaggeration while the current view is a SceneView (3D) AND
+  // satelliteVisible is on - imagery draped over plain terrain with no
+  // building massing and default (1x) relief reads as "flat" next to a
+  // WebScene's own authored 3D content, which attachToView's map.removeAll()
+  // strips just like every other pre-existing operational layer. Reverts
+  // both the moment satellite is toggled off or the view leaves 3D.
+  //
+  // Called from both attachToView's tail (so a 2D->3D switch while satellite
+  // is already on picks it back up) and setSatelliteBasemap (so toggling
+  // satellite while already in 3D takes effect immediately).
+  //
+  // SceneLayer is dynamically imported, mirroring GISMapView's lazy
+  // <arcgis-scene> import, so a session that never enters 3D never pays for
+  // the 3D layer bundle. Fire-and-forget: if the view has since detached or
+  // satellite was toggled back off before the import resolves, the stale
+  // result is discarded rather than added to a map nobody asked for anymore.
+  syncSceneEnhancements() {
+    const view = this.currentView;
+    const map = this.currentMap;
+    if (!view || !map || view.type !== "3d") return;
+
+    const active = this.satelliteVisible;
+
+    if (map.ground?.layers) {
+      map.ground.layers.forEach((layer) => {
+        layer.exaggeration = active ? 1.5 : 1;
+      });
+    }
+
+    if (!active) {
+      if (this.buildingsLayer) {
+        map.remove(this.buildingsLayer);
+        this.buildingsLayer = null;
+      }
+      return;
+    }
+
+    if (this.buildingsLayer) return;
+
+    import("@arcgis/core/layers/SceneLayer")
+      .then(({ default: SceneLayer }) => {
+        if (!this.satelliteVisible || this.currentMap !== map || this.buildingsLayer) return;
+        this.buildingsLayer = new SceneLayer({
+          url: "https://basemaps3d.arcgis.com/arcgis/rest/services/OpenStreetMap3DBuildings/SceneServer",
+          title: "3D Buildings"
+        });
+        map.add(this.buildingsLayer);
+      })
+      .catch(() => {});
   }
 
   // Kicks off resyncHeatmapRendererOnceRendered for every named heatmap
@@ -945,7 +1031,8 @@ export default class GISMapEngine {
             objectIdField: layer?.objectIdField || null,
             attributes: result.graphic.attributes,
             x: event.x,
-            y: event.y
+            y: event.y,
+            point: GISMapEngine.pointFromGeometry(result.graphic.geometry)
           });
         } else {
           this.selectedGraphic = null;
@@ -1492,6 +1579,17 @@ export default class GISMapEngine {
     if (this.stopLayer) this.stopLayer.visible = v;
   }
 
+  // Switches the current map/scene to Esri's World Imagery satellite
+  // basemap ("hybrid" = imagery + reference labels), or back to the
+  // attached item's own configured basemap. See the satelliteVisible field
+  // comment for why this is persisted rather than a one-off live mutation.
+  setSatelliteBasemap(enabled) {
+    this.satelliteVisible = enabled;
+    if (!this.currentMap) return;
+    this.currentMap.basemap = enabled ? "hybrid" : this.originalBasemap;
+    this.syncSceneEnhancements();
+  }
+
   // ---------------------------------------------------------------------
   // Advanced Renderer System (Unique Values / Class Breaks)
   //
@@ -1966,6 +2064,18 @@ export default class GISMapEngine {
   // actually contains, the same way it already does for portal layers.
   static isPointGeometry(geometryType) {
     return geometryType === "point" || geometryType === "multipoint";
+  }
+
+  // Extracts a plain { latitude, longitude } from a selected graphic's own
+  // geometry, or null for anything that isn't a single point (a line/polygon
+  // selection, or no geometry at all) - the shared gate the Reverse Geocode
+  // tool (AnalysisPanel) uses to know whether the current selection is
+  // eligible, without the shell needing to import/inspect ArcGIS Geometry
+  // objects itself (selectedGraphic never leaves the engine otherwise - see
+  // Feature Attribute Selection in knowledge/architecture.md).
+  static pointFromGeometry(geometry) {
+    if (!geometry || geometry.type !== "point") return null;
+    return { latitude: geometry.latitude, longitude: geometry.longitude };
   }
 
   // Collapses a live layer's own geometryType (already normalized by the SDK
@@ -3311,7 +3421,8 @@ export default class GISMapEngine {
       objectIdField: result.objectIdField,
       attributes: result.attributes,
       x: screenPoint.x,
-      y: screenPoint.y
+      y: screenPoint.y,
+      point: GISMapEngine.pointFromGeometry(result.graphic?.geometry ?? result.geometry)
     });
   }
 

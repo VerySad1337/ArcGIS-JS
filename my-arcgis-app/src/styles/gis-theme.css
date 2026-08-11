@@ -455,6 +455,22 @@ arcgis-scene,
   color: white;
 }
 
+/* Satellite is a basemap toggle, independent of the 2D/3D view-mode pair
+   (both can be pressed at once - e.g. "3D + Satellite"), so it's set off
+   with a divider and given its own accent color rather than sharing the
+   2D/3D pair's blue "selected" look, which would otherwise read as a
+   same-group mutually-exclusive choice and make "2D + Satellite both lit
+   blue" look like a bug instead of two independent states. */
+.view-mode-satellite-btn {
+  border-left: 1px solid rgba(56, 189, 248, 0.18);
+  margin-left: var(--space-1);
+  padding-left: calc(var(--space-2) + var(--space-1));
+}
+
+.view-mode-satellite-btn[aria-pressed="true"] {
+  background: linear-gradient(90deg, #15803d, #16a34a);
+}
+
 /* =========================
    ROUTE INPUT
 ========================= */

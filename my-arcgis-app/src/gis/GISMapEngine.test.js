@@ -203,8 +203,30 @@ describe("GISMapEngine.handleFeatureClick", () => {
       objectIdField: "OBJECTID",
       attributes: { OBJECTID: 1, name: "Test" },
       x: 10,
-      y: 20
+      y: 20,
+      point: null
     });
+  });
+
+  test("includes the selected graphic's own point when its geometry is a point (Reverse Geocode's selection gate)", async () => {
+    const engine = new GISMapEngine();
+    const graphic = {
+      attributes: { OBJECTID: 1, name: "Test" },
+      geometry: { type: "point", latitude: 1.2834, longitude: 103.8607 },
+      layer: null
+    };
+    const view = makeView({ results: [{ graphic }] });
+    engine.attachToView(view);
+    graphic.layer = engine.touristAttractionLayer;
+
+    const onFeatureSelect = jest.fn();
+    engine.setOnFeatureSelect(onFeatureSelect);
+
+    await view.on.mock.calls[0][1]({ x: 10, y: 20 });
+
+    expect(onFeatureSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ point: { latitude: 1.2834, longitude: 103.8607 } })
+    );
   });
 
   test("ignores hitTest results without attributes and clears selection when nothing hit", async () => {
@@ -3039,5 +3061,94 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
 
       expect(loader.drawLayer.renderer).toBeNull();
     });
+  });
+});
+
+describe("GISMapEngine satellite basemap + 3D scene enhancements", () => {
+  function makeSceneView(groundLayers = [{ exaggeration: 1 }]) {
+    const view = makeView();
+    view.type = "3d";
+    view.map.ground = { layers: groundLayers };
+    return view;
+  }
+
+  test("setSatelliteBasemap swaps the map's basemap and reverts it to what it was before", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    view.map.basemap = "topo-vector";
+    engine.attachToView(view);
+
+    engine.setSatelliteBasemap(true);
+    expect(view.map.basemap).toBe("hybrid");
+
+    engine.setSatelliteBasemap(false);
+    expect(view.map.basemap).toBe("topo-vector");
+  });
+
+  test("is a no-op for buildings/exaggeration on a 2D MapView", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+
+    engine.setSatelliteBasemap(true);
+
+    expect(engine.buildingsLayer).toBeNull();
+    expect(view.map.add).not.toHaveBeenCalledWith(expect.objectContaining({ title: "3D Buildings" }));
+  });
+
+  test("boosts ground exaggeration and adds a 3D buildings layer on a SceneView when satellite is enabled", async () => {
+    const engine = new GISMapEngine();
+    const groundLayer = { exaggeration: 1 };
+    const view = makeSceneView([groundLayer]);
+    engine.attachToView(view);
+
+    engine.setSatelliteBasemap(true);
+    expect(groundLayer.exaggeration).toBe(1.5);
+
+    // The buildings layer is added via a dynamically imported module -
+    // let that microtask/promise chain resolve.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(engine.buildingsLayer).not.toBeNull();
+    expect(view.map.add).toHaveBeenCalledWith(engine.buildingsLayer);
+  });
+
+  test("removes the buildings layer and resets exaggeration when satellite is turned back off", async () => {
+    const engine = new GISMapEngine();
+    const groundLayer = { exaggeration: 1 };
+    const view = makeSceneView([groundLayer]);
+    engine.attachToView(view);
+
+    engine.setSatelliteBasemap(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const buildings = engine.buildingsLayer;
+    expect(buildings).not.toBeNull();
+
+    engine.setSatelliteBasemap(false);
+
+    expect(groundLayer.exaggeration).toBe(1);
+    expect(engine.buildingsLayer).toBeNull();
+    expect(view.map.remove).toHaveBeenCalledWith(buildings);
+  });
+
+  test("re-adds the buildings layer after a 2D/3D reattach while satellite stays on", async () => {
+    const engine = new GISMapEngine();
+    const groundLayer = { exaggeration: 1 };
+    const view = makeSceneView([groundLayer]);
+    engine.attachToView(view);
+    engine.setSatelliteBasemap(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(engine.buildingsLayer).not.toBeNull();
+
+    // Simulate the 2D/3D switch's fresh map/view (attachToView nulls the
+    // stale buildingsLayer reference since it belonged to the old map).
+    const nextGroundLayer = { exaggeration: 1 };
+    const nextView = makeSceneView([nextGroundLayer]);
+    engine.attachToView(nextView);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(nextGroundLayer.exaggeration).toBe(1.5);
+    expect(engine.buildingsLayer).not.toBeNull();
+    expect(nextView.map.add).toHaveBeenCalledWith(engine.buildingsLayer);
   });
 });

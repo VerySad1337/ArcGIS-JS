@@ -21,4 +21,23 @@ describe("ViewModeToggle", () => {
     await user.click(screen.getByRole("button", { name: "2D" }));
     expect(setIs3D).toHaveBeenCalledWith(false);
   });
+
+  test("satellite button reflects state and toggles it", async () => {
+    const user = userEvent.setup();
+    const onToggleSatelliteBasemap = jest.fn();
+    render(
+      <ViewModeToggle
+        is3D={false}
+        setIs3D={jest.fn()}
+        satelliteBasemap={false}
+        onToggleSatelliteBasemap={onToggleSatelliteBasemap}
+      />
+    );
+
+    const satelliteBtn = screen.getByRole("button", { name: "Satellite imagery basemap" });
+    expect(satelliteBtn).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(satelliteBtn);
+    expect(onToggleSatelliteBasemap).toHaveBeenCalledWith(true);
+  });
 });

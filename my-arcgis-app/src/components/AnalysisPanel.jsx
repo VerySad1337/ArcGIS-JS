@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
 import RouteInput from "./RouteInput";
@@ -105,7 +105,8 @@ function AnalysisPanel({
   hasBuffer,
   onCreateBufferLayer,
   layers,
-  onCreateHeatmapLayer
+  onCreateHeatmapLayer,
+  onReverseGeocode
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [openSections, setOpenSections] = useState({});
@@ -118,6 +119,16 @@ function AnalysisPanel({
   const [heatmapSourceId, setHeatmapSourceId] = useState("");
   const [heatmapName, setHeatmapName] = useState("");
   const [creatingHeatmap, setCreatingHeatmap] = useState(false);
+  const [rgResult, setRgResult] = useState(null);
+  const [rgLoading, setRgLoading] = useState(false);
+
+  // A new/changed/cleared selection invalidates whatever address was looked
+  // up for the previous one, the same "stale result shouldn't linger" reason
+  // GlobalSearchPanel clears its own state after a save (see
+  // knowledge/index.md's Global Search System).
+  useEffect(() => {
+    setRgResult(null);
+  }, [selectedFeature]);
 
   const isSectionOpen = (section) => Boolean(openSections[section]);
   const toggleSection = (section) => {
@@ -193,6 +204,30 @@ function AnalysisPanel({
       setHeatmapName("");
     } finally {
       setCreatingHeatmap(false);
+    }
+  };
+
+  // Reverse geocode: look up the street address and postal code for the
+  // currently-selected map feature's own point (onReverseGeocode ->
+  // ApplicationShell.handleReverseGeocode -> GeocodingService.reverseGeocodeLocation).
+  // Reuses the same click-to-select flow Buffer already gates on
+  // (selectedFeature, from GISMapEngine's onFeatureSelect callback) rather
+  // than a separate lat/long entry form, restricted to point geometry - a
+  // line/polygon selection has no single coordinate to reverse-geocode.
+  // This is a read-only lookup, not a map mutation, so - unlike
+  // Buffer/Route/Heatmap - there is no engine call and no "Add to Layers"
+  // follow-up; the result is just displayed inline in this section.
+  const selectedPoint = selectedFeature?.point ?? null;
+
+  const handleReverseGeocode = async () => {
+    if (!selectedPoint || !onReverseGeocode) return;
+    setRgLoading(true);
+    setRgResult(null);
+    try {
+      const result = await onReverseGeocode(selectedPoint.latitude, selectedPoint.longitude);
+      setRgResult(result ?? { error: true });
+    } finally {
+      setRgLoading(false);
     }
   };
 
@@ -297,6 +332,57 @@ function AnalysisPanel({
               </div>
             )}
           </div>
+
+          {onReverseGeocode && (
+            <div className="layer-section">
+              <button
+                type="button"
+                className="layer-section-toggle"
+                aria-expanded={isSectionOpen("reverseGeocode")}
+                onClick={() => toggleSection("reverseGeocode")}
+              >
+                <Icon name={isSectionOpen("reverseGeocode") ? "chevronUp" : "chevronDown"} size={14} />
+                <span>Reverse Geocode</span>
+              </button>
+
+              {isSectionOpen("reverseGeocode") && (
+                <div className="analysis-tool-section">
+                  {!selectedPoint ? (
+                    <p className="analysis-tool-hint">
+                      Select a point feature on the map first (a marker on Tourist Attractions, MRT
+                      Stations, a point drawing, or a point-geometry portal layer).
+                    </p>
+                  ) : (
+                    <>
+                      <p className="analysis-tool-hint">
+                        Selected point: {selectedPoint.latitude.toFixed(6)}, {selectedPoint.longitude.toFixed(6)}
+                      </p>
+                      <button
+                        type="button"
+                        className="gis-button"
+                        disabled={rgLoading}
+                        onClick={handleReverseGeocode}
+                      >
+                        {rgLoading ? "Looking up…" : "Look Up Address"}
+                      </button>
+
+                      {rgResult && (
+                        rgResult.error ? (
+                          <p className="analysis-tool-hint">Couldn't find an address for that location.</p>
+                        ) : (
+                          <div className="layer-aggregate-results">
+                            <span>Address: {rgResult.address || "Unknown"}</span>
+                            <span>{rgResult.block ? `Block: ${rgResult.block}` : "Nearest Block: N/A"}</span>
+                            <span>Postal Code: {rgResult.postalCode || "N/A"}</span>
+                          </div>
+                        )
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="layer-section">
             <button
@@ -411,7 +497,8 @@ AnalysisPanel.propTypes = {
   hasBuffer: PropTypes.bool,
   onCreateBufferLayer: PropTypes.func,
   layers: PropTypes.array,
-  onCreateHeatmapLayer: PropTypes.func
+  onCreateHeatmapLayer: PropTypes.func,
+  onReverseGeocode: PropTypes.func
 };
 
 // Memoized: ApplicationShell re-renders on any of its own state changes

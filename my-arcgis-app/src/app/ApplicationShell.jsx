@@ -10,7 +10,7 @@ import AccountButton from "../components/AccountButton";
 import AnalysisPanel from "../components/AnalysisPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
-import { geocodeAddress } from "../services/GeocodingService";
+import { geocodeAddress, reverseGeocodeLocation } from "../services/GeocodingService";
 import { searchPortalLayers } from "../services/PortalService";
 import { isOAuthConfigured, checkSignInStatus, signIn, signOut } from "../services/AuthService";
 import { WEBMAP_ID, WEBSCENE_ID } from "../config/ArcGISConfiguration";
@@ -20,6 +20,7 @@ import Icon from "../components/Icon";
 
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
+  const [satelliteBasemap, setSatelliteBasemap] = useState(false);
   const [routeOn, setRouteOn] = useState(true);
   const [layers, setLayers] = useState([]);
   const engineRef = useRef(new GISMapEngine());
@@ -136,6 +137,11 @@ export default function ApplicationShell() {
     setIs3D(next);
   }, [is3D, activeDrawType, sliceActive, showToast]);
 
+  const toggleSatelliteBasemap = useCallback((next) => {
+    engineRef.current.setSatelliteBasemap(next);
+    setSatelliteBasemap(next);
+  }, []);
+
   const handleViewReady = useCallback((view) => {
     engineRef.current.setOnFeatureSelect(setSelectedFeature);
     engineRef.current.setOnDrawingsChanged(refreshLayers);
@@ -173,6 +179,20 @@ export default function ApplicationShell() {
       setIsRouting(false);
     }
   }, [refreshLayers, showToast]);
+
+  // Reverse geocode: a read-only lat/long -> address/postal-code lookup for
+  // AnalysisPanel's own Reverse Geocode section. Unlike handleRoute, this
+  // doesn't mutate any engine/map state, so there's no refreshLayers() call
+  // - just the same throw-and-toast convention the rest of this file uses
+  // for a failable call the caller can't usefully recover from itself.
+  const handleReverseGeocode = useCallback(async (latitude, longitude) => {
+    try {
+      return await reverseGeocodeLocation(latitude, longitude);
+    } catch (err) {
+      showToast(err.message || "Couldn't find an address for that location.", "error");
+      return null;
+    }
+  }, [showToast]);
 
   const toggleRoute = useCallback(() => {
     const next = !routeOn;
@@ -771,7 +791,12 @@ export default function ApplicationShell() {
           />
         </div>
 
-        <ViewModeToggle is3D={is3D} setIs3D={toggleViewMode} />
+        <ViewModeToggle
+          is3D={is3D}
+          setIs3D={toggleViewMode}
+          satelliteBasemap={satelliteBasemap}
+          onToggleSatelliteBasemap={toggleSatelliteBasemap}
+        />
 
         <GlobalSearchPanel
           onSearch={handleSearch}
@@ -817,6 +842,7 @@ export default function ApplicationShell() {
           onCreateBufferLayer={createBufferResultLayer}
           layers={layers}
           onCreateHeatmapLayer={createHeatmapLayer}
+          onReverseGeocode={handleReverseGeocode}
         />
 
         <PortalLayerPanel
