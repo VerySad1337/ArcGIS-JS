@@ -26,8 +26,32 @@ import {
   buildClassBreaksRenderer,
   buildHeatmapRenderer,
   toArcGISRenderer,
+  interpolateColor,
+  classifyEqualInterval,
   DEFAULT_UNIQUE_VALUE_LIMIT
 } from "./SymbolRenderers";
+import { buildHexagonGrid, countPointsInHexagons } from "./HexagonGrid";
+
+// Sequential fill ramp for a named hexagon layer's count-based coloring
+// (light -> dark = fewer -> more points in that cell) - a different hue
+// family from the heatmap system's own warm ramp (buildHeatmapRenderer's
+// colorStops) so the two analysis modes read as visually distinct on the
+// map.
+const HEXAGON_RAMP_START = "#e8f5e9";
+const HEXAGON_RAMP_END = "#1b5e20";
+
+// interpolateColor (SymbolRenderers.js) returns a hex string; ArcGIS simple-
+// fill symbol colors want an [r, g, b, a] array (alpha in [0, 1]) the same
+// way colorWithOpacity does internally in that module - duplicated here in
+// miniature rather than exporting that private helper, since this is the
+// only place in GISMapEngine.js that needs it.
+function hexToRgba(hex, alpha) {
+  const clean = hex.replace("#", "");
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return [r, g, b, alpha];
+}
 
 // Handles both a real ArcGIS Color instance (has .toHex()) and the plain
 // [r, g, b]/[r, g, b, a] arrays this file's hardcoded renderer literals use
@@ -298,6 +322,21 @@ export default class GISMapEngine {
   namedBufferLayers = new Map();
   namedBufferLayerMeta = new Map();
 
+  // User-created named hexagon-analysis layers (see createHexagonLayer/
+  // removeHexagonLayer) - bins a point source layer's features into a
+  // flat-top hexagon grid and colors each cell by point count, the
+  // discrete/"binned" sibling to the continuous density surface named
+  // heatmap layers produce. Unlike heatmapLayers (a live FeatureLayer whose
+  // renderer ArcGIS recomputes against the source service), a hexagon
+  // layer is computed once at creation time and stored as ordinary polygon
+  // Graphics - structurally identical to namedBufferLayers/namedRouteLayers/
+  // namedSearchLayers above (GraphicsLayer + graphicToJSON snapshots in
+  // *LayerMeta, rebuilt from that meta on every attachToView). Keyed by a
+  // synthetic "hexagon_<id>" id, same id space as layerOrder/portalLayers/
+  // heatmapLayers/namedRouteLayers/namedSearchLayers/namedBufferLayers.
+  namedHexagonLayers = new Map();
+  namedHexagonLayerMeta = new Map();
+
   touristAttractionVisible = true;
   mrtStationVisible = true;
   mrtLineVisible = true;
@@ -518,7 +557,8 @@ export default class GISMapEngine {
       ...Object.fromEntries(this.heatmapLayers),
       ...Object.fromEntries(this.namedRouteLayers),
       ...Object.fromEntries(this.namedSearchLayers),
-      ...Object.fromEntries(this.namedBufferLayers)
+      ...Object.fromEntries(this.namedBufferLayers),
+      ...Object.fromEntries(this.namedHexagonLayers)
     };
   }
 
@@ -879,6 +919,21 @@ export default class GISMapEngine {
       const graphic = this.graphicFromJSON(meta.polygon);
       if (graphic) rebuilt.add(graphic);
       this.namedBufferLayers.set(id, rebuilt);
+    });
+
+    // Named hexagon layers (see createHexagonLayer) are reconstructed the
+    // same way and for the same reason as named buffer-result layers above:
+    // a fresh GraphicsLayer is cheap, and namedHexagonLayerMeta (not the
+    // live layer object) is the real source of truth for its polygons/
+    // title/visibility across a 2D/3D reattachment. Each hexagon's fill
+    // color was already baked into its symbol at creation time, so no
+    // renderer recomputation is needed here the way heatmap layers need.
+    this.namedHexagonLayers = new Map();
+    this.namedHexagonLayerMeta.forEach((meta, id) => {
+      const rebuilt = new GraphicsLayer({ title: meta.title, visible: meta.visible });
+      const graphics = (meta.hexagons || []).map((g) => this.graphicFromJSON(g)).filter(Boolean);
+      rebuilt.addMany(graphics);
+      this.namedHexagonLayers.set(id, rebuilt);
     });
 
     const layerMap = this.buildLayerMap();
@@ -2387,6 +2442,35 @@ export default class GISMapEngine {
       };
     });
 
+    // Named hexagon layers (see createHexagonLayer) - removable like a
+    // portal/heatmap/buffer-result layer, but with no Symbology/Filter/
+    // Annotate sections: each hexagon's fill color is individually baked in
+    // at creation time from its own point count, so there's no single
+    // coherent symbol/renderer to expose a shared color control for (the
+    // same reason named heatmap layers get no Symbology section either).
+    // `hexagon: true` plus `hexagonCellSize`/`hexagonMaxCount`/
+    // `featureCount` let the panel show a short summary of what was
+    // generated instead of an editable control.
+    this.namedHexagonLayers.forEach((layer, id) => {
+      const meta = this.namedHexagonLayerMeta.get(id);
+      lookup[id] = {
+        id,
+        name: meta?.title || "Hexagon Analysis",
+        visible: layer.visible,
+        removable: true,
+        renamable: true,
+        createdAt: meta?.createdAt,
+        layerType: "Hexagon",
+        source: "analysis",
+        hexagon: true,
+        hexagonCellSize: meta?.cellSize,
+        hexagonMaxCount: meta?.maxCount,
+        hexagonLegend: meta?.legend || [],
+        featureCount: layer.graphics.length,
+        styleGroups: []
+      };
+    });
+
     // route/stops/searchResult/buffer are deliberately excluded from the
     // Layers card: they're the live, always-overwritten-on-next-search(or
     // -buffer) working state (visibility is controlled by Route Search's
@@ -2452,6 +2536,11 @@ export default class GISMapEngine {
     // reason - see attachToView's buffer-result-layer reconstruction.
     const namedBufferMeta = this.namedBufferLayerMeta.get(id);
     if (namedBufferMeta) namedBufferMeta.visible = layer.visible;
+
+    // Named hexagon layers need the same visible-sync, for the same
+    // reason - see attachToView's hexagon-layer reconstruction.
+    const namedHexagonMeta = this.namedHexagonLayerMeta.get(id);
+    if (namedHexagonMeta) namedHexagonMeta.visible = layer.visible;
   }
 
   // Adds a layer picked from PortalService.searchPortalLayers as a live
@@ -2994,13 +3083,180 @@ export default class GISMapEngine {
     this.layerOrder = this.layerOrder.filter((x) => x !== id);
   }
 
+  // ---------------------------------------------------------------------
+  // Named Hexagon Layers ("Hexagon Analysis")
+  //
+  // A discrete alternative to the Heatmap layers above: instead of a
+  // continuous kernel-density surface, this tessellates the source point
+  // layer's extent into a flat-top hexagon grid (HexagonGrid.js - pure
+  // geometry math, no ArcGIS import) and colors each cell by how many
+  // source points fall inside it, the same "bin points into hexagons"
+  // analysis ArcGIS Online's own Aggregate Points / H3 binning tools offer
+  // (see https://www.esri.com/arcgis-blog/products/arcgis-online/analytics/
+  // use-h3-hexagons-for-spatial-analysis-in-arcgis-online), done
+  // client-side here since this app has no GeoAnalytics server to call.
+  //
+  // Unlike a named heatmap layer (a live FeatureLayer whose renderer
+  // ArcGIS itself recomputes against the source service - see
+  // resyncHeatmapRendererOnceRendered), a hexagon layer is computed ONCE at
+  // creation time from a single queryFeatures() snapshot and stored as
+  // ordinary polygon Graphics - structurally identical to
+  // namedBufferLayers/namedRouteLayers/namedSearchLayers above
+  // (GraphicsLayer + graphicToJSON snapshots in *LayerMeta, rebuilt from
+  // that meta on every attachToView), not to heatmapLayers. It does not
+  // update itself if the source layer's data changes later; re-running the
+  // tool from the panel creates a fresh layer instead.
+  // ---------------------------------------------------------------------
+
+  // Same eligibility as a heatmap analysis source (point geometry, a real
+  // hosted/portal URL to query - see heatmapEligibleSourceLayers's own
+  // comment for why drawings/route/etc. don't qualify). Kept as its own
+  // named method, rather than call sites reading heatmapEligibleSourceLayers
+  // directly, purely so this section documents its own eligibility rule
+  // instead of silently borrowing someone else's - even though the
+  // implementation happens to be identical today.
+  hexagonEligibleSourceLayers() {
+    return this.heatmapEligibleSourceLayers();
+  }
+
+  // Creates a new, independently named/toggleable/removable hexagon-binning
+  // layer from a point source layer. Throws (same throw-and-let-the-shell-
+  // toast convention as createHeatmapLayer) on a missing name, an
+  // ineligible/unknown source, an invalid cell size, a source with no point
+  // features to bin, or a cell size so large no hexagon ends up containing
+  // any point. `cellSize` is the hexagon's flat-to-flat width in the
+  // source layer's own planar units (Web Mercator meters for every layer
+  // this app analyzes).
+  async createHexagonLayer(sourceId, { name, cellSize = 500 } = {}) {
+    const trimmedName = (name || "").trim();
+    if (!trimmedName) throw new Error("Please give the hexagon layer a name.");
+
+    const eligible = this.hexagonEligibleSourceLayers();
+    if (!eligible.some((l) => l.id === sourceId)) {
+      throw new Error("Choose a point layer (Tourist Attractions, MRT Stations, or an eligible portal layer) to analyze.");
+    }
+    if (!(Number.isFinite(cellSize) && cellSize > 0)) {
+      throw new Error("Cell size must be a positive number.");
+    }
+
+    const sourceLayer = this.buildLayerMap()[sourceId];
+    await sourceLayer.load();
+
+    const extent = sourceLayer.fullExtent;
+    if (!extent) throw new Error("Could not determine that layer's extent yet - try again in a moment.");
+
+    const queryResult = await sourceLayer.queryFeatures({ where: "1=1", outFields: [], returnGeometry: true });
+    const points = (queryResult.features || [])
+      .map((f) => f.geometry)
+      .filter((g) => g && g.type === "point" && Number.isFinite(g.x) && Number.isFinite(g.y))
+      .map((g) => [g.x, g.y]);
+
+    if (!points.length) throw new Error("That layer has no point features to analyze yet.");
+
+    const spatialReference = sourceLayer.spatialReference;
+    const hexagons = buildHexagonGrid(
+      { xmin: extent.xmin, ymin: extent.ymin, xmax: extent.xmax, ymax: extent.ymax },
+      cellSize
+    );
+    const counts = countPointsInHexagons(hexagons, points);
+    const maxCount = Math.max(...counts, 1);
+    const nonEmptyCounts = counts.filter((c) => c > 0);
+
+    // Discrete graduated-color classes (ArcGIS Pro's own "Graduated Colors"
+    // symbology), not a continuous per-hexagon gradient: each hexagon is
+    // bucketed into one of a handful of count ranges and every hexagon in a
+    // bucket gets the exact same color, so the map reads as a legend-able
+    // breakdown ("1-3 points", "4-6 points", ...) instead of a smooth blend
+    // no legend swatch could accurately represent. classCount is capped by
+    // how many distinct non-zero counts actually exist, so e.g. a result
+    // with only 2 distinct counts doesn't generate 5 near-duplicate classes.
+    const classCount = Math.max(1, Math.min(5, new Set(nonEmptyCounts).size));
+    const breaks = classifyEqualInterval(nonEmptyCounts, classCount);
+    const legend = breaks.map((brk, i) => {
+      const t = breaks.length > 1 ? i / (breaks.length - 1) : 0;
+      const color = interpolateColor(HEXAGON_RAMP_START, HEXAGON_RAMP_END, t);
+      const label =
+        Math.round(brk.minValue) === Math.round(brk.maxValue)
+          ? `${Math.round(brk.minValue)}`
+          : `${Math.round(brk.minValue)} – ${Math.round(brk.maxValue)}`;
+      return { key: i, label, color, minValue: brk.minValue, maxValue: brk.maxValue };
+    });
+
+    // A count's class is the first break whose range contains it (breaks are
+    // ordered ascending and, aside from float rounding at their shared
+    // edges, non-overlapping) - falls back to the last (highest) class so a
+    // count sitting exactly on the classification's own max isn't dropped.
+    const classForCount = (count) => {
+      const found = legend.find((entry) => count >= entry.minValue && count <= entry.maxValue);
+      return found || legend[legend.length - 1];
+    };
+
+    const graphics = hexagons
+      .map((hex, i) => ({ ring: hex.ring, count: counts[i] }))
+      .filter((hex) => hex.count > 0)
+      .map((hex, i) => {
+        const entry = classForCount(hex.count);
+        return new Graphic({
+          geometry: { type: "polygon", rings: [hex.ring], spatialReference },
+          symbol: {
+            type: "simple-fill",
+            color: hexToRgba(entry.color, 0.65),
+            outline: { color: [255, 255, 255, 0.6], width: 0.5 }
+          },
+          attributes: { OBJECTID: i + 1, count: hex.count }
+        });
+      });
+
+    if (!graphics.length) {
+      throw new Error("No hexagons contain any points at this cell size - try a smaller cell size.");
+    }
+
+    const id = `hexagon_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const meta = {
+      title: trimmedName,
+      sourceId,
+      cellSize,
+      maxCount,
+      legend: legend.map(({ key, label, color }) => ({ key, label, color })),
+      hexagons: graphics.map((g) => this.graphicToJSON(g)),
+      visible: true,
+      createdAt: Date.now()
+    };
+    this.namedHexagonLayerMeta.set(id, meta);
+
+    const layer = new GraphicsLayer({ title: trimmedName, visible: true });
+    layer.addMany(graphics);
+    this.namedHexagonLayers.set(id, layer);
+    this.layerOrder = [...this.layerOrder, id];
+
+    if (this.currentMap) this.currentMap.add(layer);
+
+    return { id, name: trimmedName, hexagonCount: graphics.length, maxCount };
+  }
+
+  // Removes a named hexagon layer entirely, the same remove-not-hide
+  // behavior removeBufferResultLayer/removeSearchResultLayer/
+  // removeRouteResultLayer/removeHeatmapLayer/removePortalLayer give other
+  // user-created layers.
+  removeHexagonLayer(id) {
+    if (!this.namedHexagonLayerMeta.has(id)) return;
+
+    const layer = this.namedHexagonLayers.get(id);
+    if (layer && this.currentMap) this.currentMap.remove(layer);
+
+    this.namedHexagonLayers.delete(id);
+    this.namedHexagonLayerMeta.delete(id);
+    this.layerOrder = this.layerOrder.filter((x) => x !== id);
+  }
+
   // Renames one of the user-created layers (portal / named heatmap / named
-  // route-result / named search-result / named buffer-result). Deliberately
-  // scoped to just these five: the fixed layers (Tourist Attractions, MRT
-  // Stations/Lines, Drawings) have no `*LayerMeta` entry to rewrite a
-  // `title` onto, and letting them be renamed would mean the id-to-label
-  // mapping other subsystems key off (heatmap source dropdown, draw-target
-  // dropdown, etc.) no longer matched what the app calls them elsewhere.
+  // route-result / named search-result / named buffer-result / named
+  // hexagon-analysis). Deliberately scoped to just these six: the fixed
+  // layers (Tourist Attractions, MRT Stations/Lines, Drawings) have no
+  // `*LayerMeta` entry to rewrite a `title` onto, and letting them be
+  // renamed would mean the id-to-label mapping other subsystems key off
+  // (heatmap source dropdown, draw-target dropdown, etc.) no longer matched
+  // what the app calls them elsewhere.
   // Also updates the live layer's own `.title` where the layer type exposes
   // one (FeatureLayer/GraphicsLayer both do), purely cosmetic since nothing
   // else reads it - `getLayers()`'s `name` field (read from meta.title) is
@@ -3014,7 +3270,8 @@ export default class GISMapEngine {
       this.heatmapLayerMeta.get(id) ||
       this.namedRouteLayerMeta.get(id) ||
       this.namedSearchLayerMeta.get(id) ||
-      this.namedBufferLayerMeta.get(id);
+      this.namedBufferLayerMeta.get(id) ||
+      this.namedHexagonLayerMeta.get(id);
     if (!meta) throw new Error("This layer can't be renamed.");
 
     meta.title = trimmedName;
@@ -3941,6 +4198,7 @@ export default class GISMapEngine {
       namedRouteLayers: Object.fromEntries(this.namedRouteLayerMeta),
       namedSearchLayers: Object.fromEntries(this.namedSearchLayerMeta),
       namedBufferLayers: Object.fromEntries(this.namedBufferLayerMeta),
+      namedHexagonLayers: Object.fromEntries(this.namedHexagonLayerMeta),
       drawingFields: [...this.drawingFields],
       drawings: this.drawLayer.graphics.toArray().map((g) => this.graphicToJSON(g)),
       route: this.graphicToJSON(this.routeGraphic),
@@ -4068,6 +4326,7 @@ export default class GISMapEngine {
     this.namedRouteLayerMeta = new Map(Object.entries(state.namedRouteLayers || {}));
     this.namedSearchLayerMeta = new Map(Object.entries(state.namedSearchLayers || {}));
     this.namedBufferLayerMeta = new Map(Object.entries(state.namedBufferLayers || {}));
+    this.namedHexagonLayerMeta = new Map(Object.entries(state.namedHexagonLayers || {}));
 
     // Drop any layerOrder id that no longer resolves to a real layer -
     // "heat" from a project saved before heatmap became a per-layer renderer
@@ -4087,7 +4346,8 @@ export default class GISMapEngine {
       this.heatmapLayerMeta.has(id) ||
       this.namedRouteLayerMeta.has(id) ||
       this.namedSearchLayerMeta.has(id) ||
-      this.namedBufferLayerMeta.has(id);
+      this.namedBufferLayerMeta.has(id) ||
+      this.namedHexagonLayerMeta.has(id);
     this.layerOrder = state.layerOrder.filter(
       (id) => GISMapEngine.FIXED_LAYER_IDS.has(id) || knownDynamicId(id)
     );

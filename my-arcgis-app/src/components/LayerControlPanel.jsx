@@ -1370,6 +1370,42 @@ function LayerControlPanel({
           </div>
         )}
 
+        {isExpanded && layer.hexagon && layer.hexagonLegend?.length > 0 && (
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen(layer.id, "hexagonLegend")}
+              onClick={() => toggleSection(layer.id, "hexagonLegend")}
+            >
+              <Icon name={isSectionOpen(layer.id, "hexagonLegend") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Legend</span>
+            </button>
+
+            {isSectionOpen(layer.id, "hexagonLegend") && (
+              // Read-only breakdown of the count-based classes baked into
+              // this layer's graphics at creation time (see
+              // GISMapEngine.createHexagonLayer) - unlike RendererControls'
+              // interactive .renderer-legend (which edits a live, shared
+              // FeatureLayer renderer via onUpdateRendererEntry), there is
+              // no single renderer here to edit: each hexagon Graphic
+              // already carries its own final symbol, so this is display-only.
+              <div className="renderer-legend">
+                {layer.hexagonLegend.map((entry) => (
+                  <div key={entry.key} className="renderer-legend-row">
+                    <span
+                      className="hexagon-legend-swatch"
+                      style={{ backgroundColor: entry.color }}
+                      aria-hidden="true"
+                    />
+                    <span className="renderer-legend-label">{entry.label} points</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {isExpanded && hasDetails && (
           <div className="layer-section">
             <button
@@ -1566,6 +1602,16 @@ LayerControlPanel.propTypes = {
       heatmap: PropTypes.bool,
       heatmapIntensity: PropTypes.number,
       heatmapUpdating: PropTypes.bool,
+      hexagon: PropTypes.bool,
+      hexagonCellSize: PropTypes.number,
+      hexagonMaxCount: PropTypes.number,
+      hexagonLegend: PropTypes.arrayOf(
+        PropTypes.shape({
+          key: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+          label: PropTypes.string,
+          color: PropTypes.string
+        })
+      ),
       renamable: PropTypes.bool,
       createdAt: PropTypes.number,
       layerType: PropTypes.string,

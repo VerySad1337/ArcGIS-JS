@@ -106,6 +106,7 @@ function AnalysisPanel({
   onCreateBufferLayer,
   layers,
   onCreateHeatmapLayer,
+  onCreateHexagonLayer,
   onReverseGeocode
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -119,6 +120,10 @@ function AnalysisPanel({
   const [heatmapSourceId, setHeatmapSourceId] = useState("");
   const [heatmapName, setHeatmapName] = useState("");
   const [creatingHeatmap, setCreatingHeatmap] = useState(false);
+  const [hexagonSourceId, setHexagonSourceId] = useState("");
+  const [hexagonName, setHexagonName] = useState("");
+  const [hexagonCellSize, setHexagonCellSize] = useState("500");
+  const [creatingHexagon, setCreatingHexagon] = useState(false);
   const [rgResult, setRgResult] = useState(null);
   const [rgLoading, setRgLoading] = useState(false);
 
@@ -204,6 +209,25 @@ function AnalysisPanel({
       setHeatmapName("");
     } finally {
       setCreatingHeatmap(false);
+    }
+  };
+
+  // Hexagon Analysis: bins a point layer's features into a hexagon grid
+  // and colors each cell by point count (see GISMapEngine.createHexagonLayer),
+  // the discrete "binned" sibling to the Heatmap section above. Eligibility
+  // is identical to Heatmap's own (point geometry, a real hosted/portal
+  // URL to query - drawings excluded for the same reason), so this reuses
+  // heatmapSourceOptions rather than recomputing the same filter twice.
+  const handleCreateHexagonLayer = async () => {
+    if (!hexagonSourceId || !hexagonName.trim() || !onCreateHexagonLayer) return;
+    const cellSize = Number(hexagonCellSize);
+    if (!Number.isFinite(cellSize) || cellSize <= 0) return;
+    setCreatingHexagon(true);
+    try {
+      await onCreateHexagonLayer(hexagonSourceId, { name: hexagonName.trim(), cellSize });
+      setHexagonName("");
+    } finally {
+      setCreatingHexagon(false);
     }
   };
 
@@ -476,6 +500,88 @@ function AnalysisPanel({
               )}
             </div>
           )}
+
+          {onCreateHexagonLayer && (
+            <div className="layer-section">
+              <button
+                type="button"
+                className="layer-section-toggle"
+                aria-expanded={isSectionOpen("hexagon")}
+                onClick={() => toggleSection("hexagon")}
+              >
+                <Icon name={isSectionOpen("hexagon") ? "chevronUp" : "chevronDown"} size={14} />
+                <span>Hexagon Analysis</span>
+              </button>
+
+              {isSectionOpen("hexagon") && (
+                <div className="analysis-tool-section">
+                  {heatmapSourceOptions.length === 0 ? (
+                    <p className="analysis-tool-hint">
+                      Add a point layer (Tourist Attractions, MRT Stations, or an eligible portal layer) first.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="analysis-tool-hint">
+                        Bins the source layer's points into a hexagon grid and colors each cell by how many
+                        points fall inside it.
+                      </p>
+
+                      <label className="analysis-aggregate-field">
+                        <span>Analyze</span>
+                        <select
+                          value={hexagonSourceId}
+                          onChange={(e) => setHexagonSourceId(e.target.value)}
+                          aria-label="Hexagon analysis source layer"
+                        >
+                          <option value="">Choose a layer…</option>
+                          {heatmapSourceOptions.map((l) => (
+                            <option key={l.id} value={l.id}>{l.name}</option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="analysis-aggregate-field">
+                        <span>Cell Size (m)</span>
+                        <input
+                          type="number"
+                          min="1"
+                          step="any"
+                          value={hexagonCellSize}
+                          onChange={(e) => setHexagonCellSize(e.target.value)}
+                          aria-label="Hexagon cell size in meters"
+                        />
+                      </label>
+
+                      <label className="analysis-aggregate-field">
+                        <span>Name</span>
+                        <input
+                          type="text"
+                          value={hexagonName}
+                          onChange={(e) => setHexagonName(e.target.value)}
+                          placeholder="e.g. Attraction Hex Bins"
+                          aria-label="New hexagon layer name"
+                        />
+                      </label>
+
+                      <button
+                        type="button"
+                        className="gis-button"
+                        disabled={
+                          !hexagonSourceId ||
+                          !hexagonName.trim() ||
+                          !(Number(hexagonCellSize) > 0) ||
+                          creatingHexagon
+                        }
+                        onClick={handleCreateHexagonLayer}
+                      >
+                        {creatingHexagon ? "Adding…" : "Add Hexagon Layer"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -498,6 +604,7 @@ AnalysisPanel.propTypes = {
   onCreateBufferLayer: PropTypes.func,
   layers: PropTypes.array,
   onCreateHeatmapLayer: PropTypes.func,
+  onCreateHexagonLayer: PropTypes.func,
   onReverseGeocode: PropTypes.func
 };
 

@@ -1431,6 +1431,129 @@ describe("GISMapEngine named heatmap layers", () => {
   });
 });
 
+describe("GISMapEngine named hexagon layers", () => {
+  function setupSourceLayer(engine, points) {
+    engine.touristAttractionLayer.geometryType = "point";
+    engine.touristAttractionLayer.fullExtent = { xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 };
+    engine.touristAttractionLayer.queryFeatures = jest.fn().mockResolvedValue({
+      features: points.map(([x, y]) => ({ geometry: { type: "point", x, y } }))
+    });
+  }
+
+  test("hexagonEligibleSourceLayers mirrors heatmapEligibleSourceLayers", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+
+    expect(engine.hexagonEligibleSourceLayers()).toEqual(engine.heatmapEligibleSourceLayers());
+  });
+
+  test("createHexagonLayer throws when given no name", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await expect(engine.createHexagonLayer("touristAttractions", { name: "  " })).rejects.toThrow(
+      "Please give the hexagon layer a name."
+    );
+  });
+
+  test("createHexagonLayer throws for an ineligible/unknown source", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    await expect(engine.createHexagonLayer("mrtLines", { name: "My Hexbins" })).rejects.toThrow(
+      "Choose a point layer"
+    );
+  });
+
+  test("createHexagonLayer throws for a non-positive cell size", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.touristAttractionLayer.geometryType = "point";
+    await expect(
+      engine.createHexagonLayer("touristAttractions", { name: "Hexbins", cellSize: 0 })
+    ).rejects.toThrow("Cell size must be a positive number.");
+  });
+
+  test("createHexagonLayer throws when the source layer has no point features", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    setupSourceLayer(engine, []);
+
+    await expect(engine.createHexagonLayer("touristAttractions", { name: "Hexbins" })).rejects.toThrow(
+      "no point features"
+    );
+  });
+
+  test("registers a named, removable hexagon layer with count-colored graphics, appends it to layerOrder, and adds it to an attached map", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    setupSourceLayer(engine, [[10, 10], [15, 15], [900, 900]]);
+
+    const { id, name, hexagonCount } = await engine.createHexagonLayer("touristAttractions", {
+      name: "Attraction Hex Bins",
+      cellSize: 200
+    });
+
+    expect(name).toBe("Attraction Hex Bins");
+    expect(engine.layerOrder).toContain(id);
+    expect(hexagonCount).toBeGreaterThan(0);
+
+    const layer = engine.namedHexagonLayers.get(id);
+    expect(layer.graphics.length).toBe(hexagonCount);
+    expect(view.map.add).toHaveBeenCalledWith(layer);
+
+    const totalCount = layer.graphics.toArray().reduce((sum, g) => sum + g.attributes.count, 0);
+    expect(totalCount).toBe(3);
+
+    const layers = engine.getLayers();
+    const entry = layers.find((l) => l.id === id);
+    expect(entry.hexagon).toBe(true);
+    expect(entry.hexagonCellSize).toBe(200);
+    expect(entry.featureCount).toBe(hexagonCount);
+
+    // Graduated-color legend: every hexagon's baked-in fill color must be
+    // one of the legend's own colors, so the map and the legend never
+    // disagree about what a color means.
+    expect(entry.hexagonLegend.length).toBeGreaterThan(0);
+    const legendColors = new Set(entry.hexagonLegend.map((l) => l.color));
+    layer.graphics.forEach((g) => {
+      const [r, g2, b] = g.symbol.color;
+      const asHex = `#${[r, g2, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+      expect(legendColors.has(asHex)).toBe(true);
+    });
+  });
+
+  test("removeHexagonLayer removes the layer from the map and layerOrder", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    setupSourceLayer(engine, [[10, 10]]);
+
+    const { id } = await engine.createHexagonLayer("touristAttractions", { name: "Hexbins", cellSize: 200 });
+    engine.removeHexagonLayer(id);
+
+    expect(engine.namedHexagonLayers.has(id)).toBe(false);
+    expect(engine.layerOrder).not.toContain(id);
+  });
+
+  test("survives a 2D/3D reattachment by rebuilding from namedHexagonLayerMeta", async () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    setupSourceLayer(engine, [[10, 10], [20, 20]]);
+
+    const { id, hexagonCount } = await engine.createHexagonLayer("touristAttractions", {
+      name: "Hexbins",
+      cellSize: 200
+    });
+
+    engine.attachToView(makeView());
+
+    const rebuilt = engine.namedHexagonLayers.get(id);
+    expect(rebuilt).toBeDefined();
+    expect(rebuilt.graphics.length).toBe(hexagonCount);
+  });
+});
+
 describe("GISMapEngine.zoomToPoint", () => {
   test("is a no-op when there is no current view", async () => {
     const engine = new GISMapEngine();

@@ -1282,6 +1282,20 @@ input[type="range"] {
   font-size: var(--text-sm);
 }
 
+/* Read-only swatch for a named hexagon layer's Legend section (see
+   LayerControlPanel.jsx) - unlike .renderer-legend-row's <input type="color">
+   (an editable control for a live, shared renderer), a hexagon layer's
+   classes were baked into its graphics at creation time, so this is just a
+   static color chip, not an interactive control. */
+.hexagon-legend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
 .layer-style-group-label {
   color: var(--accent);
   font-size: var(--text-xs);

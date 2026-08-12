@@ -448,6 +448,24 @@ export default function ApplicationShell() {
     refreshLayers();
   }, [refreshLayers]);
 
+  // Named Hexagon Layers: the discrete, "bin points into hexagons"
+  // sibling to Named Heatmap Layers above (see GISMapEngine's "Named
+  // Hexagon Layers" section) - a user picks a source point layer, a name,
+  // and a cell size, and gets a brand-new, independently toggleable/
+  // removable layer of count-colored hexagons. createHexagonLayer is async
+  // (it queries the source layer's features) and throws on a missing
+  // name/ineligible source/invalid cell size/no data to bin, same
+  // throw-and-toast convention as createHeatmapLayer.
+  const createHexagonLayer = useCallback(async (sourceId, options) => {
+    try {
+      const { name } = await engineRef.current.createHexagonLayer(sourceId, options);
+      refreshLayers();
+      showToast(`Added hexagon layer "${name}".`, "success");
+    } catch (err) {
+      showToast(err.message || "Failed to add hexagon layer.", "error");
+    }
+  }, [refreshLayers, showToast]);
+
   // "Add to Layers" in Route Search's discoverable way to keep a route
   // result around: route/stops are excluded from the Layers card (see
   // GISMapEngine.getLayers's comment) since they're just the live, always-
@@ -522,6 +540,8 @@ export default function ApplicationShell() {
       engineRef.current.removeSearchResultLayer(id);
     } else if (id.startsWith("buffer_")) {
       engineRef.current.removeBufferResultLayer(id);
+    } else if (id.startsWith("hexagon_")) {
+      engineRef.current.removeHexagonLayer(id);
     } else {
       engineRef.current.removePortalLayer(id);
     }
@@ -842,6 +862,7 @@ export default function ApplicationShell() {
           onCreateBufferLayer={createBufferResultLayer}
           layers={layers}
           onCreateHeatmapLayer={createHeatmapLayer}
+          onCreateHexagonLayer={createHexagonLayer}
           onReverseGeocode={handleReverseGeocode}
         />
 
