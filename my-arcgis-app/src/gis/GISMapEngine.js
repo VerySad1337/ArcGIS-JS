@@ -624,35 +624,17 @@ export default class GISMapEngine {
   // old map's layers loses them for the rest of the session.
   detachFromView() {
     this.currentMap?.removeAll();
-    // sliceWidget holds a live reference into this.currentView's own UI
-    // (view.ui.add), so it must be torn down here - before that view is
-    // destroyed by the outgoing custom element's unmount - rather than left
-    // for attachToView to discover once currentView has already been
-    // overwritten with the new view.
-    if (this.sliceWidget) {
-      this.currentView?.ui.remove(this.sliceWidget);
-      this.sliceWidget.destroy();
-      this.sliceWidget = null;
-    }
-    if (this.lineOfSightWidget) {
-      this.currentView?.ui.remove(this.lineOfSightWidget);
-      this.lineOfSightWidget.destroy();
-      this.lineOfSightWidget = null;
-    }
-    // viewshedAnalysis lives in this.currentView's own `analyses`
-    // collection (the Analysis-object equivalent of view.ui.add), so it is
-    // just as view-bound as sliceWidget/lineOfSightWidget above and must be
-    // torn down here for the same reason. Abort any in-progress interactive
-    // placement first (place()'s promise settles via the AbortController,
-    // not by the analysis being removed out from under it).
-    if (this.viewshedAbortController) {
-      this.viewshedAbortController.abort();
-      this.viewshedAbortController = null;
-    }
-    if (this.viewshedAnalysis) {
-      this.currentView?.analyses?.remove(this.viewshedAnalysis);
-      this.viewshedAnalysis = null;
-    }
+    // sliceWidget/lineOfSightWidget/viewshedAnalysis all hold a live
+    // reference into this.currentView (view.ui.add / view.analyses.add), so
+    // they must be torn down here - before that view is destroyed by the
+    // outgoing custom element's unmount - rather than left for attachToView
+    // to discover once currentView has already been overwritten with the
+    // new view. Routed through the same stop* methods stopAnalysisTools
+    // (below) uses, so there is exactly one teardown path for each rather
+    // than two copies that could drift out of sync.
+    this.stopSlice();
+    this.stopLineOfSight();
+    this.stopViewshed();
   }
 
   // Single source of truth for id -> layer resolution, used by every
@@ -1244,8 +1226,7 @@ export default class GISMapEngine {
   // ---------------------------------------------------------------------
   // Spatial Analysis System (Buffer + Slice + Line of Sight + Viewshed)
   //
-  // Slice/LineOfSight/Viewshed are all gated on isSceneView() - each wraps
-  // an ArcGIS widget that only ever operates against a SceneView to begin
+  // Slice/LineOfSight/Viewshed are all gated on isSceneView() - each only
   // ever operates against a SceneView to begin with (see the sliceWidget
   // field comment). Buffer has no such technical constraint - geodesicBuffer
   // is pure geometry math, independent of the current view - so it works in
@@ -1257,6 +1238,14 @@ export default class GISMapEngine {
   // to keep a particular buffer result uses the Buffer section's own "Add
   // to Layers" control (createBufferResultLayer), which snapshots it into
   // an ordinary, independently named/styled/reorderable card row.
+  //
+  // Slice/LineOfSight/Viewshed are additionally mutually exclusive: each
+  // captures clicks/drags directly on the SceneView (Slice's box-drag,
+  // LineOfSight's click-to-place-target, Viewshed's click-to-place-observer),
+  // so having more than one active at once makes the user's next click on
+  // the scene ambiguous about which tool it belongs to. Each start* method
+  // therefore stops the other two first - see stopSlice/stopLineOfSight/
+  // stopViewshed being called from every start* below.
   // ---------------------------------------------------------------------
 
   isSceneView() {
@@ -1334,6 +1323,8 @@ export default class GISMapEngine {
       return;
     }
     if (this.sliceWidget) return;
+    this.stopLineOfSight();
+    this.stopViewshed();
 
     this.sliceWidget = new Slice({ view: this.currentView });
     this.currentView.ui.add(this.sliceWidget, "top-right");
@@ -1362,6 +1353,8 @@ export default class GISMapEngine {
       return;
     }
     if (this.lineOfSightWidget) return;
+    this.stopSlice();
+    this.stopViewshed();
 
     this.lineOfSightWidget = new LineOfSight({ view: this.currentView });
     this.currentView.ui.add(this.lineOfSightWidget, "top-right");
@@ -1401,6 +1394,8 @@ export default class GISMapEngine {
       return;
     }
     if (this.viewshedAnalysis) return;
+    this.stopSlice();
+    this.stopLineOfSight();
 
     const analysis = new ViewshedAnalysis();
     this.viewshedAnalysis = analysis;

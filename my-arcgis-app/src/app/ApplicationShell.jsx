@@ -327,14 +327,29 @@ export default function ApplicationShell() {
     refreshLayers();
   }, [refreshLayers, showToast]);
 
+  // Slice/Line of Sight/Viewshed are mutually exclusive on the engine side
+  // (see GISMapEngine's "Slice/LineOfSight/Viewshed are additionally
+  // mutually exclusive" comment) - starting any one of them silently stops
+  // whichever of the other two was active, so every toggle here re-syncs
+  // all three pieces of shell state from the engine afterward, not just the
+  // one the user clicked. Without this, switching from e.g. Slice straight
+  // to Line of Sight would leave sliceActive stuck true (the engine already
+  // tore the widget down, but the shell never found out), showing "Stop
+  // Slice" for a tool that isn't actually running anymore.
+  const syncAnalysisToolState = useCallback(() => {
+    setSliceActive(engineRef.current.isSliceActive());
+    setLineOfSightActive(engineRef.current.isLineOfSightActive());
+    setViewshedActive(engineRef.current.isViewshedActive());
+  }, []);
+
   const toggleSlice = useCallback(() => {
     if (sliceActive) {
       engineRef.current.stopSlice();
     } else {
       engineRef.current.startSlice(showToast);
     }
-    setSliceActive(engineRef.current.isSliceActive());
-  }, [sliceActive, showToast]);
+    syncAnalysisToolState();
+  }, [sliceActive, showToast, syncAnalysisToolState]);
 
   const toggleLineOfSight = useCallback(() => {
     if (lineOfSightActive) {
@@ -342,8 +357,8 @@ export default function ApplicationShell() {
     } else {
       engineRef.current.startLineOfSight(showToast);
     }
-    setLineOfSightActive(engineRef.current.isLineOfSightActive());
-  }, [lineOfSightActive, showToast]);
+    syncAnalysisToolState();
+  }, [lineOfSightActive, showToast, syncAnalysisToolState]);
 
   const toggleViewshed = useCallback(() => {
     if (viewshedActive) {
@@ -351,8 +366,8 @@ export default function ApplicationShell() {
     } else {
       engineRef.current.startViewshed(showToast);
     }
-    setViewshedActive(engineRef.current.isViewshedActive());
-  }, [viewshedActive, showToast]);
+    syncAnalysisToolState();
+  }, [viewshedActive, showToast, syncAnalysisToolState]);
 
   // Portal layer search itself is a stateless service call (consistent with
   // the existing rule that RoutingService/GeocodingService are invoked from
