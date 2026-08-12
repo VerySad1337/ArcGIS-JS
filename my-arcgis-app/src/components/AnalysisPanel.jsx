@@ -217,12 +217,26 @@ function AnalysisPanel({
     }
   };
 
-  // Hexagon Analysis: bins a point layer's features into a hexagon grid
-  // and colors each cell by point count (see GISMapEngine.createHexagonLayer),
-  // the discrete "binned" sibling to the Heatmap section above. Eligibility
-  // is identical to Heatmap's own (point geometry, a real hosted/portal
-  // URL to query - drawings excluded for the same reason), so this reuses
-  // heatmapSourceOptions rather than recomputing the same filter twice.
+  // Hexagon Analysis: bins a point/polygon/line layer's features into a
+  // hexagon grid and colors each cell by feature count (see
+  // GISMapEngine.createHexagonLayer), the discrete "binned" sibling to the
+  // Heatmap section above. Unlike Heatmap (kernel density, point-only),
+  // hexagon binning also accepts polygon layers (binned by centroid) and
+  // line layers (binned by their own midpoint) - so this is its own filter
+  // rather than a reuse of heatmapSourceOptions: `l.geometryType` (from
+  // GISMapEngine.getLayers(), already normalized to
+  // "point"/"polyline"/"polygon") drives it directly instead of the
+  // point-only `heatmapEligible` style-group flag. `drawings` is excluded
+  // for the same URL-backed reason Heatmap excludes it -
+  // GISMapEngine.hexagonEligibleSourceLayers() (the actual server-side
+  // check createHexagonLayer validates against) never includes it either,
+  // since a local GraphicsLayer has no `url` to query.
+  const hexagonSourceOptions = (layers ?? []).filter(
+    (l) =>
+      l &&
+      l.id !== "drawings" &&
+      (l.geometryType === "point" || l.geometryType === "polygon" || l.geometryType === "polyline")
+  );
   const handleCreateHexagonLayer = async () => {
     if (!hexagonSourceId || !hexagonName.trim() || !onCreateHexagonLayer) return;
     const cellSize = Number(hexagonCellSize);
@@ -588,15 +602,16 @@ function AnalysisPanel({
 
               {isSectionOpen("hexagon") && (
                 <div className="analysis-tool-section">
-                  {heatmapSourceOptions.length === 0 ? (
+                  {hexagonSourceOptions.length === 0 ? (
                     <p className="analysis-tool-hint">
-                      Add a point layer (Tourist Attractions, MRT Stations, or an eligible portal layer) first.
+                      Add a point, polygon, or line layer (Tourist Attractions, MRT Stations, MRT Lines, or an
+                      eligible portal layer) first.
                     </p>
                   ) : (
                     <>
                       <p className="analysis-tool-hint">
-                        Bins the source layer's points into a hexagon grid and colors each cell by how many
-                        points fall inside it.
+                        Bins the source layer's points (or polygon centroids / line midpoints) into a hexagon
+                        grid and colors each cell by how many features fall inside it.
                       </p>
 
                       <label className="analysis-aggregate-field">
@@ -607,7 +622,7 @@ function AnalysisPanel({
                           aria-label="Hexagon analysis source layer"
                         >
                           <option value="">Choose a layer…</option>
-                          {heatmapSourceOptions.map((l) => (
+                          {hexagonSourceOptions.map((l) => (
                             <option key={l.id} value={l.id}>{l.name}</option>
                           ))}
                         </select>

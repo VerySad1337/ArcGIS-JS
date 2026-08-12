@@ -55,6 +55,78 @@ function hexToRgba(hex, alpha) {
   return [r, g, b, alpha];
 }
 
+// A polyline geometry (unlike Polygon) has no `.centroid` getter of its own
+// - only `.paths` (an array of parts, each an array of [x, y(, z)] vertices)
+// and `.extent`. This walks every part's segments to find the point exactly
+// halfway along the line's own total length (not the bounding-box center,
+// which can land off a curved/L-shaped line entirely, and not just the
+// midpoint vertex, which is only "the middle" for an evenly-vertexed line).
+// Pure planar arithmetic - consistent with hexagon binning itself being
+// planar, not geodesic (see createHexagonLayer's cellSize comment).
+function polylineMidpoint(geometry) {
+  const paths = geometry?.paths;
+  if (!Array.isArray(paths) || !paths.length) return null;
+
+  const segments = [];
+  let totalLength = 0;
+  paths.forEach((path) => {
+    for (let i = 0; i < path.length - 1; i++) {
+      const [x1, y1] = path[i];
+      const [x2, y2] = path[i + 1];
+      if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) continue;
+      const length = Math.hypot(x2 - x1, y2 - y1);
+      segments.push({ x1, y1, x2, y2, length });
+      totalLength += length;
+    }
+  });
+
+  if (!segments.length) {
+    // Degenerate line (a single vertex, or every vertex coincident) - fall
+    // back to its first vertex rather than contributing nothing.
+    const first = paths[0]?.[0];
+    return first && Number.isFinite(first[0]) && Number.isFinite(first[1]) ? [first[0], first[1]] : null;
+  }
+
+  let remaining = totalLength / 2;
+  for (const seg of segments) {
+    if (remaining <= seg.length) {
+      const t = seg.length === 0 ? 0 : remaining / seg.length;
+      return [seg.x1 + (seg.x2 - seg.x1) * t, seg.y1 + (seg.y2 - seg.y1) * t];
+    }
+    remaining -= seg.length;
+  }
+  const last = segments[segments.length - 1];
+  return [last.x2, last.y2];
+}
+
+// Reduces one queried feature's geometry down to a single representative
+// [x, y] pair to bin into a hexagon (see GISMapEngine.createHexagonLayer):
+// a point contributes its own coordinate; a polygon contributes its own
+// area-weighted centroid (the ArcGIS `Polygon.centroid` getter, populated
+// automatically on any polygon geometry `queryFeatures` returns) - the same
+// "collapse an area feature to one point" approach ArcGIS Pro's own
+// Aggregate Points/Polygons tools use, so a large polygon isn't overcounted
+// just because it happens to span several hexagons; a polyline contributes
+// its own true midpoint (polylineMidpoint above, since Polyline has no
+// centroid getter of its own). Anything else (multipoint, a null/malformed
+// centroid, a pathless line) contributes nothing.
+function geometryToBinPoint(geometry) {
+  if (!geometry) return null;
+  if (geometry.type === "point" && Number.isFinite(geometry.x) && Number.isFinite(geometry.y)) {
+    return [geometry.x, geometry.y];
+  }
+  if (geometry.type === "polygon") {
+    const centroid = geometry.centroid;
+    if (centroid && Number.isFinite(centroid.x) && Number.isFinite(centroid.y)) {
+      return [centroid.x, centroid.y];
+    }
+  }
+  if (geometry.type === "polyline") {
+    return polylineMidpoint(geometry);
+  }
+  return null;
+}
+
 // Handles both a real ArcGIS Color instance (has .toHex()) and the plain
 // [r, g, b]/[r, g, b, a] arrays this file's hardcoded renderer literals use
 // before they've ever been through a live layer's autocast/.clone() - without
@@ -3229,32 +3301,56 @@ export default class GISMapEngine {
   // tool from the panel creates a fresh layer instead.
   // ---------------------------------------------------------------------
 
-  // Same eligibility as a heatmap analysis source (point geometry, a real
-  // hosted/portal URL to query - see heatmapEligibleSourceLayers's own
-  // comment for why drawings/route/etc. don't qualify). Kept as its own
-  // named method, rather than call sites reading heatmapEligibleSourceLayers
-  // directly, purely so this section documents its own eligibility rule
-  // instead of silently borrowing someone else's - even though the
-  // implementation happens to be identical today.
+  // Unlike heatmapEligibleSourceLayers (point geometry only - a kernel-
+  // density surface genuinely needs point features to compute density
+  // from), hexagon binning works equally well aggregating polygon features
+  // by their own centroid or line features by their own midpoint
+  // (geometryToBinPoint), so this is its own, independent eligibility rule
+  // rather than a delegation to the heatmap one: point, polygon, OR
+  // polyline geometry, still restricted to a real hosted/portal URL to
+  // query (same reason drawings/route/etc. don't qualify - see
+  // heatmapEligibleSourceLayers's own comment). `mrtLines` is checked here
+  // (unlike heatmapEligibleSourceLayers, which never considers it - line
+  // geometry can never be heatmap-eligible) since it's the one fixed hosted
+  // layer whose real geometry is a line.
   hexagonEligibleSourceLayers() {
-    return this.heatmapEligibleSourceLayers();
+    const eligibleGeometry = (geometryType) =>
+      GISMapEngine.isPointGeometry(geometryType) || geometryType === "polygon" || geometryType === "polyline";
+    const results = [];
+    if (eligibleGeometry(this.touristAttractionLayer?.geometryType)) {
+      results.push({ id: "touristAttractions", name: "Tourist Attractions" });
+    }
+    if (eligibleGeometry(this.mrtStationLayer?.geometryType)) {
+      results.push({ id: "mrtStations", name: "MRT Stations" });
+    }
+    if (eligibleGeometry(this.mrtLineLayer?.geometryType)) {
+      results.push({ id: "mrtLines", name: "MRT Lines" });
+    }
+    this.portalLayers.forEach((layer, id) => {
+      if (eligibleGeometry(layer.geometryType)) {
+        results.push({ id, name: this.portalLayerMeta.get(id)?.title || "Portal Layer" });
+      }
+    });
+    return results;
   }
 
   // Creates a new, independently named/toggleable/removable hexagon-binning
-  // layer from a point source layer. Throws (same throw-and-let-the-shell-
-  // toast convention as createHeatmapLayer) on a missing name, an
-  // ineligible/unknown source, an invalid cell size, a source with no point
-  // features to bin, or a cell size so large no hexagon ends up containing
-  // any point. `cellSize` is the hexagon's flat-to-flat width in the
-  // source layer's own planar units (Web Mercator meters for every layer
-  // this app analyzes).
+  // layer from a point OR polygon source layer. Throws (same throw-and-
+  // let-the-shell-toast convention as createHeatmapLayer) on a missing
+  // name, an ineligible/unknown source, an invalid cell size, a source
+  // with no point/polygon/line features to bin, or a cell size so large no
+  // hexagon ends up containing any feature. `cellSize` is the hexagon's
+  // flat-to-flat width in the source layer's own planar units (Web
+  // Mercator meters for every layer this app analyzes).
   async createHexagonLayer(sourceId, { name, cellSize = 500 } = {}) {
     const trimmedName = (name || "").trim();
     if (!trimmedName) throw new Error("Please give the hexagon layer a name.");
 
     const eligible = this.hexagonEligibleSourceLayers();
     if (!eligible.some((l) => l.id === sourceId)) {
-      throw new Error("Choose a point layer (Tourist Attractions, MRT Stations, or an eligible portal layer) to analyze.");
+      throw new Error(
+        "Choose a point, polygon, or line layer (Tourist Attractions, MRT Stations, MRT Lines, or an eligible portal layer) to analyze."
+      );
     }
     if (!(Number.isFinite(cellSize) && cellSize > 0)) {
       throw new Error("Cell size must be a positive number.");
@@ -3268,11 +3364,10 @@ export default class GISMapEngine {
 
     const queryResult = await sourceLayer.queryFeatures({ where: "1=1", outFields: [], returnGeometry: true });
     const points = (queryResult.features || [])
-      .map((f) => f.geometry)
-      .filter((g) => g && g.type === "point" && Number.isFinite(g.x) && Number.isFinite(g.y))
-      .map((g) => [g.x, g.y]);
+      .map((f) => geometryToBinPoint(f.geometry))
+      .filter(Boolean);
 
-    if (!points.length) throw new Error("That layer has no point features to analyze yet.");
+    if (!points.length) throw new Error("That layer has no point, polygon, or line features to analyze yet.");
 
     const spatialReference = sourceLayer.spatialReference;
     const hexagons = buildHexagonGrid(

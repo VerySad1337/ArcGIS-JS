@@ -1440,12 +1440,38 @@ describe("GISMapEngine named hexagon layers", () => {
     });
   }
 
-  test("hexagonEligibleSourceLayers mirrors heatmapEligibleSourceLayers", () => {
+  test("hexagonEligibleSourceLayers includes point sources, same as heatmapEligibleSourceLayers", () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
     engine.touristAttractionLayer.geometryType = "point";
 
     expect(engine.hexagonEligibleSourceLayers()).toEqual(engine.heatmapEligibleSourceLayers());
+  });
+
+  // Regression coverage for the point-or-polygon extension: heatmap stays
+  // point-only (kernel density needs point features), but hexagon binning
+  // works equally well aggregating polygon features by centroid, so the two
+  // eligibility lists must diverge once a polygon source exists.
+  test("hexagonEligibleSourceLayers includes polygon sources that heatmapEligibleSourceLayers excludes", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.mrtStationLayer.geometryType = "polygon";
+
+    expect(engine.hexagonEligibleSourceLayers().map((l) => l.id)).toContain("mrtStations");
+    expect(engine.heatmapEligibleSourceLayers().map((l) => l.id)).not.toContain("mrtStations");
+  });
+
+  // Unlike heatmapEligibleSourceLayers (never considers mrtLines - line
+  // geometry can't have a kernel-density surface), hexagon binning derives
+  // a representative midpoint from a line's own path, so mrtLines is a
+  // valid source once its real geometryType is confirmed polyline.
+  test("hexagonEligibleSourceLayers includes line sources that heatmapEligibleSourceLayers never considers", () => {
+    const engine = new GISMapEngine();
+    engine.attachToView(makeView());
+    engine.mrtLineLayer.geometryType = "polyline";
+
+    expect(engine.hexagonEligibleSourceLayers().map((l) => l.id)).toContain("mrtLines");
+    expect(engine.heatmapEligibleSourceLayers().map((l) => l.id)).not.toContain("mrtLines");
   });
 
   test("createHexagonLayer throws when given no name", async () => {
@@ -1459,8 +1485,11 @@ describe("GISMapEngine named hexagon layers", () => {
   test("createHexagonLayer throws for an ineligible/unknown source", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
+    // mrtLines has no geometryType set here, so it hasn't been confirmed
+    // eligible yet (unlike the "includes line sources" test above, which
+    // sets it to "polyline" first) - a clean stand-in for "unknown source".
     await expect(engine.createHexagonLayer("mrtLines", { name: "My Hexbins" })).rejects.toThrow(
-      "Choose a point layer"
+      "Choose a point, polygon, or line layer"
     );
   });
 
@@ -1473,14 +1502,65 @@ describe("GISMapEngine named hexagon layers", () => {
     ).rejects.toThrow("Cell size must be a positive number.");
   });
 
-  test("createHexagonLayer throws when the source layer has no point features", async () => {
+  test("createHexagonLayer throws when the source layer has no point/polygon/line features", async () => {
     const engine = new GISMapEngine();
     engine.attachToView(makeView());
     setupSourceLayer(engine, []);
 
     await expect(engine.createHexagonLayer("touristAttractions", { name: "Hexbins" })).rejects.toThrow(
-      "no point features"
+      "no point, polygon, or line features"
     );
+  });
+
+  test("createHexagonLayer bins polygon features by their own centroid", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.mrtStationLayer.geometryType = "polygon";
+    engine.mrtStationLayer.fullExtent = { xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 };
+    engine.mrtStationLayer.queryFeatures = jest.fn().mockResolvedValue({
+      features: [
+        { geometry: { type: "polygon", centroid: { x: 10, y: 10 } } },
+        { geometry: { type: "polygon", centroid: { x: 15, y: 15 } } },
+        // No centroid (a malformed/unsupported geometry) contributes nothing
+        // rather than throwing - the same "skip, don't fail the whole run"
+        // treatment a missing point coordinate already gets.
+        { geometry: { type: "polygon", centroid: null } }
+      ]
+    });
+
+    const { id } = await engine.createHexagonLayer("mrtStations", { name: "Station Coverage", cellSize: 200 });
+
+    const layer = engine.namedHexagonLayers.get(id);
+    const totalCount = layer.graphics.toArray().reduce((sum, g) => sum + g.attributes.count, 0);
+    expect(totalCount).toBe(2);
+  });
+
+  test("createHexagonLayer bins line features by the true midpoint along their own path, not their bounding-box center", async () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.mrtLineLayer.geometryType = "polyline";
+    engine.mrtLineLayer.fullExtent = { xmin: 0, ymin: 0, xmax: 1000, ymax: 1000 };
+    engine.mrtLineLayer.queryFeatures = jest.fn().mockResolvedValue({
+      features: [
+        // An L-shaped line: (0,0) -> (100,0) -> (100,100). Total length 200,
+        // so the true midpoint (100 along) is (100, 0) - the corner vertex -
+        // NOT the bounding-box center (50, 50), which sits off the line
+        // entirely for a bent path like this.
+        { geometry: { type: "polyline", paths: [[[0, 0], [100, 0], [100, 100]]] } },
+        // A pathless/degenerate line contributes nothing rather than
+        // throwing - the same "skip, don't fail the whole run" treatment a
+        // missing point coordinate or null polygon centroid already gets.
+        { geometry: { type: "polyline", paths: [] } }
+      ]
+    });
+
+    const { id } = await engine.createHexagonLayer("mrtLines", { name: "Line Coverage", cellSize: 200 });
+
+    const layer = engine.namedHexagonLayers.get(id);
+    const totalCount = layer.graphics.toArray().reduce((sum, g) => sum + g.attributes.count, 0);
+    expect(totalCount).toBe(1);
   });
 
   test("registers a named, removable hexagon layer with count-colored graphics, appends it to layerOrder, and adds it to an attached map", async () => {
