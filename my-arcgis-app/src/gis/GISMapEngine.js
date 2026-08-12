@@ -10,6 +10,8 @@ import {
 import HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import Slice from "@arcgis/core/widgets/Slice";
+import LineOfSight from "@arcgis/core/widgets/LineOfSight";
+import ViewshedAnalysis from "@arcgis/core/analysis/ViewshedAnalysis";
 import { geodesicBuffer } from "@arcgis/core/geometry/geometryEngine";
 import IdentityManager from "@arcgis/core/identity/IdentityManager";
 import esriRequest from "@arcgis/core/request";
@@ -383,6 +385,30 @@ export default class GISMapEngine {
   // survive a 2D/3D reattachment and is torn down in detachFromView.
   sliceWidget = null;
 
+  // Line of Sight is the same "3D-only ArcGIS widget bound directly to the
+  // live SceneView" shape as sliceWidget above - @arcgis/core/widgets/
+  // LineOfSight only ever operates against a SceneView, is added to the
+  // view's own UI, and cannot survive a 2D/3D reattachment, so it's torn
+  // down in detachFromView the same way. Runs entirely client-side (no
+  // service call - it ray-casts against the already-loaded scene layers).
+  lineOfSightWidget = null;
+
+  // Viewshed has no equivalent widgets/Viewshed class in @arcgis/core - it
+  // is exposed as an "analysis object" instead (@arcgis/core/analysis/
+  // ViewshedAnalysis, added to view.analyses, same family as
+  // LineOfSightAnalysis). viewshedAnalysis is null whenever Viewshed is
+  // inactive; once created it is added to the live SceneView's own
+  // `analyses` collection (analogous to sliceWidget's view.ui.add), so it
+  // is just as view-bound and just as unable to survive a 2D/3D
+  // reattachment - torn down in detachFromView the same way. Interactive
+  // placement (view.whenAnalysisView(analysis).then(v => v.place(...)))
+  // is itself cancellable via an AbortController, which viewshedAbortController
+  // holds so stopViewshed can cancel an in-progress placement as well as
+  // remove a completed one. Computed entirely client-side (GPU-rendered
+  // visible/obstructed shading), matching every other tool in this section.
+  viewshedAnalysis = null;
+  viewshedAbortController = null;
+
   onFeatureSelect = null;
   clickHandle = null;
   onDrawingsChanged = null;
@@ -535,6 +561,25 @@ export default class GISMapEngine {
       this.currentView?.ui.remove(this.sliceWidget);
       this.sliceWidget.destroy();
       this.sliceWidget = null;
+    }
+    if (this.lineOfSightWidget) {
+      this.currentView?.ui.remove(this.lineOfSightWidget);
+      this.lineOfSightWidget.destroy();
+      this.lineOfSightWidget = null;
+    }
+    // viewshedAnalysis lives in this.currentView's own `analyses`
+    // collection (the Analysis-object equivalent of view.ui.add), so it is
+    // just as view-bound as sliceWidget/lineOfSightWidget above and must be
+    // torn down here for the same reason. Abort any in-progress interactive
+    // placement first (place()'s promise settles via the AbortController,
+    // not by the analysis being removed out from under it).
+    if (this.viewshedAbortController) {
+      this.viewshedAbortController.abort();
+      this.viewshedAbortController = null;
+    }
+    if (this.viewshedAnalysis) {
+      this.currentView?.analyses?.remove(this.viewshedAnalysis);
+      this.viewshedAnalysis = null;
     }
   }
 
@@ -1125,9 +1170,10 @@ export default class GISMapEngine {
   }
 
   // ---------------------------------------------------------------------
-  // Spatial Analysis System (Buffer + Slice)
+  // Spatial Analysis System (Buffer + Slice + Line of Sight + Viewshed)
   //
-  // Slice is gated on isSceneView() - it wraps an ArcGIS widget that only
+  // Slice/LineOfSight/Viewshed are all gated on isSceneView() - each wraps
+  // an ArcGIS widget that only ever operates against a SceneView to begin
   // ever operates against a SceneView to begin with (see the sliceWidget
   // field comment). Buffer has no such technical constraint - geodesicBuffer
   // is pure geometry math, independent of the current view - so it works in
@@ -1226,6 +1272,81 @@ export default class GISMapEngine {
     this.currentView?.ui.remove(this.sliceWidget);
     this.sliceWidget.destroy();
     this.sliceWidget = null;
+  }
+
+  isLineOfSightActive() {
+    return Boolean(this.lineOfSightWidget);
+  }
+
+  // Starts/stops the ArcGIS LineOfSight widget: the user places an observer
+  // point then one or more target points, and the widget draws a line to
+  // each target colored green (visible) or red (obstructed by scene
+  // geometry) - all computed client-side against the already-loaded scene,
+  // no server round trip. Same "widget owns its own on-map interaction once
+  // added" shape as Slice.
+  startLineOfSight(msg) {
+    if (!this.isSceneView()) {
+      msg?.("Line of Sight is only available in 3D view.", "error");
+      return;
+    }
+    if (this.lineOfSightWidget) return;
+
+    this.lineOfSightWidget = new LineOfSight({ view: this.currentView });
+    this.currentView.ui.add(this.lineOfSightWidget, "top-right");
+  }
+
+  stopLineOfSight() {
+    if (!this.lineOfSightWidget) return;
+    this.currentView?.ui.remove(this.lineOfSightWidget);
+    this.lineOfSightWidget.destroy();
+    this.lineOfSightWidget = null;
+  }
+
+  isViewshedActive() {
+    return Boolean(this.viewshedAnalysis);
+  }
+
+  // Starts/stops interactive Viewshed placement. Unlike Slice/LineOfSight,
+  // @arcgis/core has no standalone "widgets/Viewshed" widget - viewshed
+  // analysis is instead an "analysis object" (ViewshedAnalysis, added to
+  // view.analyses) plus an analysis view (view.whenAnalysisView(analysis))
+  // that drives the interactive placement: the user's first click drops the
+  // observer point, the second sets orientation, shading the scene green
+  // (visible from the observer) / red (obstructed) - computed client-side,
+  // GPU-rendered, no server round trip.
+  //
+  // place() is async and only resolves/rejects once the user finishes or
+  // cancels, so this can't be awaited synchronously the way startSlice's
+  // widget construction is; the promise chain is fired here and its errors
+  // swallowed (an AbortError from stopViewshed, or the user pressing Escape,
+  // are both expected, silent ways for placement to end - see
+  // ViewshedAnalysisView3D.place's own AbortController-driven contract).
+  // viewshedAbortController is what lets stopViewshed cancel a placement
+  // that's still in progress, not just remove a completed one.
+  startViewshed(msg) {
+    if (!this.isSceneView()) {
+      msg?.("Viewshed is only available in 3D view.", "error");
+      return;
+    }
+    if (this.viewshedAnalysis) return;
+
+    const analysis = new ViewshedAnalysis();
+    this.viewshedAnalysis = analysis;
+    this.currentView.analyses.add(analysis);
+
+    this.viewshedAbortController = new AbortController();
+    this.currentView
+      .whenAnalysisView(analysis)
+      .then((analysisView) => analysisView.place({ signal: this.viewshedAbortController?.signal }))
+      .catch(() => {});
+  }
+
+  stopViewshed() {
+    if (!this.viewshedAnalysis) return;
+    this.viewshedAbortController?.abort();
+    this.viewshedAbortController = null;
+    this.currentView?.analyses?.remove(this.viewshedAnalysis);
+    this.viewshedAnalysis = null;
   }
 
   // ---------------------------------------------------------------------

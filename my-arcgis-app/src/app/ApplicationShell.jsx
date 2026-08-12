@@ -56,6 +56,8 @@ export default function ApplicationShell() {
   const [signedInUser, setSignedInUser] = useState(null);
   const [signingIn, setSigningIn] = useState(false);
   const [sliceActive, setSliceActive] = useState(false);
+  const [lineOfSightActive, setLineOfSightActive] = useState(false);
+  const [viewshedActive, setViewshedActive] = useState(false);
   // Bumped on every successful project load - see loadProject below and
   // LayerControlPanel's projectVersion prop for why this exists.
   const [projectVersion, setProjectVersion] = useState(0);
@@ -130,12 +132,14 @@ export default function ApplicationShell() {
     // permanently wiping their graphics before the next attachToView call
     // ever gets a chance to save them. See GISMapEngine.detachFromView.
     engineRef.current.detachFromView();
-    // detachFromView tears down the Slice widget (it's bound to the
-    // outgoing view's own UI and can't survive the reattachment), so the
-    // shell's mirror of that state needs to follow.
+    // detachFromView tears down the Slice/LineOfSight/Viewshed widgets
+    // (each bound to the outgoing view's own UI and unable to survive the
+    // reattachment), so the shell's mirrors of that state need to follow.
     if (sliceActive) setSliceActive(false);
+    if (lineOfSightActive) setLineOfSightActive(false);
+    if (viewshedActive) setViewshedActive(false);
     setIs3D(next);
-  }, [is3D, activeDrawType, sliceActive, showToast]);
+  }, [is3D, activeDrawType, sliceActive, lineOfSightActive, viewshedActive, showToast]);
 
   const toggleSatelliteBasemap = useCallback((next) => {
     engineRef.current.setSatelliteBasemap(next);
@@ -331,6 +335,24 @@ export default function ApplicationShell() {
     }
     setSliceActive(engineRef.current.isSliceActive());
   }, [sliceActive, showToast]);
+
+  const toggleLineOfSight = useCallback(() => {
+    if (lineOfSightActive) {
+      engineRef.current.stopLineOfSight();
+    } else {
+      engineRef.current.startLineOfSight(showToast);
+    }
+    setLineOfSightActive(engineRef.current.isLineOfSightActive());
+  }, [lineOfSightActive, showToast]);
+
+  const toggleViewshed = useCallback(() => {
+    if (viewshedActive) {
+      engineRef.current.stopViewshed();
+    } else {
+      engineRef.current.startViewshed(showToast);
+    }
+    setViewshedActive(engineRef.current.isViewshedActive());
+  }, [viewshedActive, showToast]);
 
   // Portal layer search itself is a stateless service call (consistent with
   // the existing rule that RoutingService/GeocodingService are invoked from
@@ -852,6 +874,10 @@ export default function ApplicationShell() {
           onBuffer={bufferSelectedFeature}
           sliceActive={sliceActive}
           onToggleSlice={toggleSlice}
+          lineOfSightActive={lineOfSightActive}
+          onToggleLineOfSight={toggleLineOfSight}
+          viewshedActive={viewshedActive}
+          onToggleViewshed={toggleViewshed}
           routeOn={routeOn}
           toggleRoute={toggleRoute}
           onRoute={handleRoute}

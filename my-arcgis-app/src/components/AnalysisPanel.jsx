@@ -79,13 +79,14 @@ SaveBufferLayerForm.propTypes = {
   saving: PropTypes.bool
 };
 
-// Route Search, Buffer, and Slice are the three tools under this card.
-// Buffer works in both 2D and 3D (geodesicBuffer is pure geometry math,
-// independent of the current view). Slice wraps an ArcGIS widget that only
-// ever operates against a SceneView, so it alone is gated on is3D - shown
-// as an explanatory hint instead of the toggle button whenever is3D is
-// false, rather than a disabled control whose failure mode a user would
-// have to guess at.
+// Route Search, Buffer, Slice, Line of Sight, and Viewshed are the tools
+// under this card. Buffer works in both 2D and 3D (geodesicBuffer is pure
+// geometry math, independent of the current view). Slice/Line of Sight/
+// Viewshed each wrap an ArcGIS widget that only ever operates against a
+// SceneView, so those three alone are gated on is3D - shown as an
+// explanatory hint instead of the toggle button whenever is3D is false,
+// rather than a disabled control whose failure mode a user would have to
+// guess at.
 // Each tool section below is independently collapsible (default collapsed),
 // same per-row chevron sub-section pattern LayerControlPanel uses for
 // Symbology/Filter/Aggregate/Annotate - opening the card shouldn't dump all
@@ -96,6 +97,10 @@ function AnalysisPanel({
   onBuffer,
   sliceActive,
   onToggleSlice,
+  lineOfSightActive,
+  onToggleLineOfSight,
+  viewshedActive,
+  onToggleViewshed,
   routeOn,
   toggleRoute,
   onRoute,
@@ -441,6 +446,74 @@ function AnalysisPanel({
             )}
           </div>
 
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen("lineOfSight")}
+              onClick={() => toggleSection("lineOfSight")}
+            >
+              <Icon name={isSectionOpen("lineOfSight") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Line of Sight</span>
+            </button>
+
+            {isSectionOpen("lineOfSight") && (
+              <div className="analysis-tool-section">
+                {!is3D ? (
+                  <p className="analysis-tool-hint">Switch to 3D view to use Line of Sight.</p>
+                ) : (
+                  <>
+                    <p className="analysis-tool-hint">
+                      Click to place an observer point, then click target points - each line turns
+                      green (visible) or red (obstructed).
+                    </p>
+                    <button
+                      type="button"
+                      className="gis-button-secondary"
+                      onClick={onToggleLineOfSight}
+                    >
+                      {lineOfSightActive ? "Stop Line of Sight" : "Start Line of Sight"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="layer-section">
+            <button
+              type="button"
+              className="layer-section-toggle"
+              aria-expanded={isSectionOpen("viewshed")}
+              onClick={() => toggleSection("viewshed")}
+            >
+              <Icon name={isSectionOpen("viewshed") ? "chevronUp" : "chevronDown"} size={14} />
+              <span>Viewshed</span>
+            </button>
+
+            {isSectionOpen("viewshed") && (
+              <div className="analysis-tool-section">
+                {!is3D ? (
+                  <p className="analysis-tool-hint">Switch to 3D view to use Viewshed.</p>
+                ) : (
+                  <>
+                    <p className="analysis-tool-hint">
+                      Drop an observer point on the scene - the area visible from it shades green,
+                      obstructed areas shade red.
+                    </p>
+                    <button
+                      type="button"
+                      className="gis-button-secondary"
+                      onClick={onToggleViewshed}
+                    >
+                      {viewshedActive ? "Stop Viewshed" : "Start Viewshed"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           {onCreateHeatmapLayer && (
             <div className="layer-section">
               <button
@@ -594,6 +667,10 @@ AnalysisPanel.propTypes = {
   onBuffer: PropTypes.func.isRequired,
   sliceActive: PropTypes.bool,
   onToggleSlice: PropTypes.func.isRequired,
+  lineOfSightActive: PropTypes.bool,
+  onToggleLineOfSight: PropTypes.func.isRequired,
+  viewshedActive: PropTypes.bool,
+  onToggleViewshed: PropTypes.func.isRequired,
   routeOn: PropTypes.bool,
   toggleRoute: PropTypes.func,
   onRoute: PropTypes.func,
