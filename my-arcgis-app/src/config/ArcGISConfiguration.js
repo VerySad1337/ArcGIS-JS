@@ -50,6 +50,14 @@ export const MRT_LINE_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20a
 //Geocoding Service
 export const GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
 
+// Esri's global OpenStreetMap 3D Buildings SceneLayer, draped over the scene
+// when the satellite basemap toggle is on in 3D (see GISMapEngine.js's
+// syncSceneEnhancements). Like the feature/geocode/route services above,
+// basemaps3d.arcgis.com now requires an API key for anonymous access - left
+// out of `esriConfig.apiKeys.scopes` below, every request to it came back
+// `400 Bad Request` and the layer/layerview failed to load.
+export const BUILDINGS_SCENE_LAYER_URL = "https://basemaps3d.arcgis.com/arcgis/rest/services/OpenStreetMap3DBuildings/SceneServer";
+
 // API key, SCOPED to just this app's own known services - never set as the
 // blanket `esriConfig.apiKey`.
 //
@@ -85,7 +93,8 @@ esriConfig.apiKeys = {
         MRT_STATION_FEATURE_LAYER_URL,
         MRT_LINE_FEATURE_LAYER_URL,
         GEOCODER_URL,
-        ROUTE_SERVICE_URL
+        ROUTE_SERVICE_URL,
+        BUILDINGS_SCENE_LAYER_URL
       ],
       token: getEnv("VITE_ARCGIS_API_KEY")
     }

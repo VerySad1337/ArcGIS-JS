@@ -5,7 +5,8 @@ import {
   TOURIST_ATTRACTIONS_FEATURE_LAYER_URL,
   MRT_STATION_FEATURE_LAYER_URL,
   MRT_LINE_FEATURE_LAYER_URL,
-  PORTAL_URL
+  PORTAL_URL,
+  BUILDINGS_SCENE_LAYER_URL
 } from "../config/ArcGISConfiguration";
 import HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
@@ -1137,7 +1138,7 @@ export default class GISMapEngine {
       .then(({ default: SceneLayer }) => {
         if (!this.satelliteVisible || this.currentMap !== map || this.buildingsLayer) return;
         this.buildingsLayer = new SceneLayer({
-          url: "https://basemaps3d.arcgis.com/arcgis/rest/services/OpenStreetMap3DBuildings/SceneServer",
+          url: BUILDINGS_SCENE_LAYER_URL,
           title: "3D Buildings"
         });
         map.add(this.buildingsLayer);
