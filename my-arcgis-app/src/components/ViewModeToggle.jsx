@@ -1,10 +1,13 @@
 import { memo } from "react";
 import PropTypes from "prop-types";
+import { BASEMAP_OPTIONS } from "../config/ArcGISConfiguration";
 
 // Rendered at the very top of the sidebar, above every collapsible panel -
 // switching 2D/3D is a frequent, always-relevant action, not scoped to
-// routing or any other single panel.
-function ViewModeToggle({ is3D, setIs3D, satelliteBasemap, onToggleSatelliteBasemap }) {
+// routing or any other single panel. The basemap picker sits beside it for
+// the same reason - it applies regardless of which analysis/layer panel is
+// currently open.
+function ViewModeToggle({ is3D, setIs3D, basemapId, onChangeBasemap }) {
   return (
     <div className="view-mode-bar">
       <span className="view-mode-bar-label">View</span>
@@ -25,17 +28,21 @@ function ViewModeToggle({ is3D, setIs3D, satelliteBasemap, onToggleSatelliteBase
         >
           3D
         </button>
-        <button
-          type="button"
-          className="view-mode-btn view-mode-satellite-btn"
-          aria-pressed={satelliteBasemap}
-          aria-label="Satellite imagery basemap"
-          title="Satellite imagery"
-          onClick={() => onToggleSatelliteBasemap(!satelliteBasemap)}
-        >
-          Satellite
-        </button>
       </fieldset>
+      <label className="view-mode-basemap-picker">
+        <span className="sr-only">Basemap</span>
+        <select
+          aria-label="Basemap"
+          value={basemapId}
+          onChange={(e) => onChangeBasemap(e.target.value)}
+        >
+          {BASEMAP_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
@@ -43,8 +50,8 @@ function ViewModeToggle({ is3D, setIs3D, satelliteBasemap, onToggleSatelliteBase
 ViewModeToggle.propTypes = {
   is3D: PropTypes.bool,
   setIs3D: PropTypes.func.isRequired,
-  satelliteBasemap: PropTypes.bool,
-  onToggleSatelliteBasemap: PropTypes.func.isRequired
+  basemapId: PropTypes.string,
+  onChangeBasemap: PropTypes.func.isRequired
 };
 
 // Memoized: ApplicationShell re-renders on any of its own state changes

@@ -6,8 +6,13 @@ import {
   MRT_STATION_FEATURE_LAYER_URL,
   MRT_LINE_FEATURE_LAYER_URL,
   PORTAL_URL,
-  BUILDINGS_SCENE_LAYER_URL
+  BUILDINGS_SCENE_LAYER_URL,
+  IMAGERY_BASEMAP_IDS,
+  ONEMAP_TILE_URL_TEMPLATE,
+  ONEMAP_ATTRIBUTION
 } from "../config/ArcGISConfiguration";
+import Basemap from "@arcgis/core/Basemap";
+import WebTileLayer from "@arcgis/core/layers/WebTileLayer";
 import HeatmapRenderer from "@arcgis/core/renderers/HeatmapRenderer";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel";
 import Slice from "@arcgis/core/widgets/Slice";
@@ -249,14 +254,15 @@ export default class GISMapEngine {
   routeVisible = true;
   searchVisible = true;
 
-  // Satellite imagery basemap toggle (Esri World Imagery, "hybrid" = imagery
-  // + reference labels). Persisted as a field, not just a live map.basemap
-  // flip, because a 2D/3D switch swaps `view.map` for a fresh WebMap/
-  // WebScene instance built from that item's own basemap - see attachToView,
-  // which reapplies this on every reattach. originalBasemap is the just-
-  // attached map's own configured basemap, captured once per attach so
-  // turning satellite off can revert to it instead of a hardcoded default.
-  satelliteVisible = false;
+  // Selected basemap picker choice (one of BASEMAP_OPTIONS' ids, "default"
+  // meaning "the map/scene item's own configured basemap"). Persisted as a
+  // field, not just a live map.basemap flip, because a 2D/3D switch swaps
+  // `view.map` for a fresh WebMap/WebScene instance built from that item's
+  // own basemap - see attachToView, which reapplies this on every reattach.
+  // originalBasemap is the just-attached map's own configured basemap,
+  // captured once per attach so picking "Default" can revert to it instead
+  // of a hardcoded fallback.
+  basemapId = "default";
   originalBasemap = null;
 
   layerOrder = [
@@ -317,8 +323,8 @@ export default class GISMapEngine {
   mrtStationLayer = null;
   mrtLineLayer = null;
 
-  // Global 3D buildings massing, added to a SceneView only while
-  // satelliteVisible is on - see syncSceneEnhancements.
+  // Global 3D buildings massing, added to a SceneView only while an imagery
+  // basemap is selected - see syncSceneEnhancements.
   buildingsLayer = null;
 
   // User-added layers picked from an ArcGIS portal search (see
@@ -777,12 +783,12 @@ export default class GISMapEngine {
 
     // Basemap is independent of the operational layers rebuilt below.
     // Capture the freshly attached map/scene item's own basemap before
-    // touching anything, then reapply an active satellite toggle to this
-    // new instance - see the satelliteVisible field comment for why this
+    // touching anything, then reapply an active basemap-picker choice to
+    // this new instance - see the basemapId field comment for why this
     // can't just live on the map instance itself.
     this.originalBasemap = map.basemap;
-    if (this.satelliteVisible) {
-      map.basemap = "hybrid";
+    if (this.basemapId !== "default") {
+      map.basemap = this.resolveBasemap(this.basemapId);
     }
 
     map.removeAll();
@@ -1088,35 +1094,37 @@ export default class GISMapEngine {
     const navigated = previousExtent ? view.goTo(previousExtent).catch(() => {}) : Promise.resolve();
     navigated.then(() => this.resyncAllHeatmapRenderers(view));
 
-    // Reapplies the satellite toggle's 3D buildings/elevation enhancements
-    // to this freshly (re)built map - see syncSceneEnhancements. A no-op on
-    // a MapView (2D) or when satelliteVisible is off.
+    // Reapplies the basemap picker's 3D buildings/elevation enhancements to
+    // this freshly (re)built map - see syncSceneEnhancements. A no-op on a
+    // MapView (2D) or when the selected basemap isn't imagery.
     this.syncSceneEnhancements();
   }
 
   // Adds Esri's global OpenStreetMap 3D Buildings layer and boosts ground
   // elevation exaggeration while the current view is a SceneView (3D) AND
-  // satelliteVisible is on - imagery draped over plain terrain with no
-  // building massing and default (1x) relief reads as "flat" next to a
-  // WebScene's own authored 3D content, which attachToView's map.removeAll()
-  // strips just like every other pre-existing operational layer. Reverts
-  // both the moment satellite is toggled off or the view leaves 3D.
+  // an imagery basemap (IMAGERY_BASEMAP_IDS) is selected - imagery draped
+  // over plain terrain with no building massing and default (1x) relief
+  // reads as "flat" next to a WebScene's own authored 3D content, which
+  // attachToView's map.removeAll() strips just like every other
+  // pre-existing operational layer. Reverts both the moment a non-imagery
+  // basemap is picked or the view leaves 3D.
   //
-  // Called from both attachToView's tail (so a 2D->3D switch while satellite
-  // is already on picks it back up) and setSatelliteBasemap (so toggling
-  // satellite while already in 3D takes effect immediately).
+  // Called from both attachToView's tail (so a 2D->3D switch while an
+  // imagery basemap is already selected picks it back up) and setBasemap
+  // (so switching basemap while already in 3D takes effect immediately).
   //
   // SceneLayer is dynamically imported, mirroring GISMapView's lazy
   // <arcgis-scene> import, so a session that never enters 3D never pays for
   // the 3D layer bundle. Fire-and-forget: if the view has since detached or
-  // satellite was toggled back off before the import resolves, the stale
-  // result is discarded rather than added to a map nobody asked for anymore.
+  // the basemap was switched away from imagery before the import resolves,
+  // the stale result is discarded rather than added to a map nobody asked
+  // for anymore.
   syncSceneEnhancements() {
     const view = this.currentView;
     const map = this.currentMap;
     if (!view || !map || view.type !== "3d") return;
 
-    const active = this.satelliteVisible;
+    const active = IMAGERY_BASEMAP_IDS.includes(this.basemapId);
 
     if (map.ground?.layers) {
       map.ground.layers.forEach((layer) => {
@@ -1136,7 +1144,7 @@ export default class GISMapEngine {
 
     import("@arcgis/core/layers/SceneLayer")
       .then(({ default: SceneLayer }) => {
-        if (!this.satelliteVisible || this.currentMap !== map || this.buildingsLayer) return;
+        if (!IMAGERY_BASEMAP_IDS.includes(this.basemapId) || this.currentMap !== map || this.buildingsLayer) return;
         this.buildingsLayer = new SceneLayer({
           url: BUILDINGS_SCENE_LAYER_URL,
           title: "3D Buildings"
@@ -1823,14 +1831,41 @@ export default class GISMapEngine {
     if (this.stopLayer) this.stopLayer.visible = v;
   }
 
-  // Switches the current map/scene to Esri's World Imagery satellite
-  // basemap ("hybrid" = imagery + reference labels), or back to the
-  // attached item's own configured basemap. See the satelliteVisible field
-  // comment for why this is persisted rather than a one-off live mutation.
-  setSatelliteBasemap(enabled) {
-    this.satelliteVisible = enabled;
+  // "onemap" isn't a named Esri basemap style string autocast can resolve
+  // (unlike "default"/"satellite") - it's a real external tile service, so
+  // it needs an actual Basemap instance wrapping a WebTileLayer.
+  // Built fresh on every call rather than cached/reused across attaches, the
+  // same "cheap to reconstruct, not worth persisting the live instance"
+  // choice addPortalLayer/createHeatmapLayer make for their own layers.
+  buildOneMapBasemap() {
+    return new Basemap({
+      title: "OneMap",
+      baseLayers: [
+        new WebTileLayer({
+          urlTemplate: ONEMAP_TILE_URL_TEMPLATE,
+          copyright: ONEMAP_ATTRIBUTION
+        })
+      ]
+    });
+  }
+
+  // Resolves a BASEMAP_OPTIONS id into whatever map.basemap actually
+  // accepts: a named Esri style string for the built-in options, or a real
+  // Basemap instance for "onemap" (see buildOneMapBasemap). Shared by
+  // attachToView's basemap-restore step and setBasemap so the two can never
+  // resolve the same id two different ways.
+  resolveBasemap(id) {
+    return id === "onemap" ? this.buildOneMapBasemap() : id;
+  }
+
+  // Switches the current map/scene to one of BASEMAP_OPTIONS' raster/vector
+  // basemap styles, or ("default") back to the attached item's own
+  // configured basemap. See the basemapId field comment for why this is
+  // persisted rather than a one-off live mutation.
+  setBasemap(id) {
+    this.basemapId = id;
     if (!this.currentMap) return;
-    this.currentMap.basemap = enabled ? "hybrid" : this.originalBasemap;
+    this.currentMap.basemap = id === "default" ? this.originalBasemap : this.resolveBasemap(id);
     this.syncSceneEnhancements();
   }
 

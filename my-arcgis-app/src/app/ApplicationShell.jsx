@@ -20,7 +20,7 @@ import Icon from "../components/Icon";
 
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
-  const [satelliteBasemap, setSatelliteBasemap] = useState(false);
+  const [basemapId, setBasemapId] = useState("default");
   const [routeOn, setRouteOn] = useState(true);
   const [layers, setLayers] = useState([]);
   const engineRef = useRef(new GISMapEngine());
@@ -141,9 +141,9 @@ export default function ApplicationShell() {
     setIs3D(next);
   }, [is3D, activeDrawType, sliceActive, lineOfSightActive, viewshedActive, showToast]);
 
-  const toggleSatelliteBasemap = useCallback((next) => {
-    engineRef.current.setSatelliteBasemap(next);
-    setSatelliteBasemap(next);
+  const changeBasemap = useCallback((id) => {
+    engineRef.current.setBasemap(id);
+    setBasemapId(id);
   }, []);
 
   const handleViewReady = useCallback((view) => {
@@ -851,8 +851,8 @@ export default function ApplicationShell() {
         <ViewModeToggle
           is3D={is3D}
           setIs3D={toggleViewMode}
-          satelliteBasemap={satelliteBasemap}
-          onToggleSatelliteBasemap={toggleSatelliteBasemap}
+          basemapId={basemapId}
+          onChangeBasemap={changeBasemap}
         />
 
         <GlobalSearchPanel

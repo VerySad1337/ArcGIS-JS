@@ -50,8 +50,44 @@ export const MRT_LINE_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20a
 //Geocoding Service
 export const GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
 
+// Raster basemaps selectable from the ViewModeToggle basemap picker (2D and
+// 3D both use these - `map.basemap = id` accepts the same style ids
+// regardless of view type). "default" is not a real Esri basemap id; it
+// means "revert to the map/scene item's own configured basemap" - see
+// GISMapEngine.js's originalBasemap field and setBasemap. "satellite" is
+// raster imagery (the one id IMAGERY_BASEMAP_IDS treats as warranting the 3D
+// buildings/exaggeration enhancement - see syncSceneEnhancements); "onemap"
+// is SLA OneMap's own tile service (see ONEMAP_TILE_URL_TEMPLATE below).
+// Previously also offered Esri's "hybrid"/"streets-vector"/"topo-vector"/
+// "osm"/"gray-vector"/"dark-gray-vector" styles - removed (2026-08) to keep
+// the picker to just Default/Imagery/OneMap.
+export const BASEMAP_OPTIONS = [
+  { id: "default", label: "Default" },
+  { id: "satellite", label: "Imagery" },
+  { id: "onemap", label: "OneMap (Singapore)" }
+];
+
+// SLA OneMap's own basemap tiles - the "Default" style of
+// https://www.onemap.gov.sg/docs/maps/. Deliberately NOT behind
+// esriConfig.apiKeys.scopes/an API key: unlike OneMap's search/theme/
+// routing REST APIs (which require a bearer token from
+// /api/auth/post/getToken - see GeocodingService.js's comment on why that
+// keeps this app on Nominatim instead), the tile endpoint is served
+// publicly with no authentication, per OneMap's own docs and Terms of Use
+// (which only require showing their logo/attribution, not a credential).
+// {level}/{col}/{row} are WebTileLayer's own placeholder names for a
+// standard Web Mercator XYZ tile scheme - the same z/x/y OneMap's docs
+// describe, just ArcGIS's naming for them.
+export const ONEMAP_TILE_URL_TEMPLATE = "https://www.onemap.gov.sg/maps/tiles/Default/{level}/{col}/{row}.png";
+export const ONEMAP_ATTRIBUTION = "Map data © OneMap, Singapore Land Authority";
+
+// The subset of BASEMAP_OPTIONS that are raster imagery - drives
+// syncSceneEnhancements' 3D buildings/exaggeration enhancement, which only
+// makes sense draped under photographic imagery, not a vector basemap.
+export const IMAGERY_BASEMAP_IDS = ["satellite"];
+
 // Esri's global OpenStreetMap 3D Buildings SceneLayer, draped over the scene
-// when the satellite basemap toggle is on in 3D (see GISMapEngine.js's
+// when an imagery basemap is active in 3D (see GISMapEngine.js's
 // syncSceneEnhancements). Like the feature/geocode/route services above,
 // basemaps3d.arcgis.com now requires an API key for anonymous access - left
 // out of `esriConfig.apiKeys.scopes` below, every request to it came back

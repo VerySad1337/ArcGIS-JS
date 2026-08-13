@@ -4,7 +4,7 @@ import ViewModeToggle from "./ViewModeToggle";
 
 describe("ViewModeToggle", () => {
   test("reflects the current mode via aria-pressed", () => {
-    render(<ViewModeToggle is3D={false} setIs3D={jest.fn()} />);
+    render(<ViewModeToggle is3D={false} setIs3D={jest.fn()} onChangeBasemap={jest.fn()} />);
 
     expect(screen.getByRole("button", { name: "2D" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "3D" })).toHaveAttribute("aria-pressed", "false");
@@ -13,7 +13,7 @@ describe("ViewModeToggle", () => {
   test("clicking 3D/2D calls setIs3D with the selected mode", async () => {
     const user = userEvent.setup();
     const setIs3D = jest.fn();
-    render(<ViewModeToggle is3D={false} setIs3D={setIs3D} />);
+    render(<ViewModeToggle is3D={false} setIs3D={setIs3D} onChangeBasemap={jest.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "3D" }));
     expect(setIs3D).toHaveBeenCalledWith(true);
@@ -22,22 +22,22 @@ describe("ViewModeToggle", () => {
     expect(setIs3D).toHaveBeenCalledWith(false);
   });
 
-  test("satellite button reflects state and toggles it", async () => {
+  test("basemap picker reflects state and changing it calls onChangeBasemap", async () => {
     const user = userEvent.setup();
-    const onToggleSatelliteBasemap = jest.fn();
+    const onChangeBasemap = jest.fn();
     render(
       <ViewModeToggle
         is3D={false}
         setIs3D={jest.fn()}
-        satelliteBasemap={false}
-        onToggleSatelliteBasemap={onToggleSatelliteBasemap}
+        basemapId="default"
+        onChangeBasemap={onChangeBasemap}
       />
     );
 
-    const satelliteBtn = screen.getByRole("button", { name: "Satellite imagery basemap" });
-    expect(satelliteBtn).toHaveAttribute("aria-pressed", "false");
+    const picker = screen.getByRole("combobox", { name: "Basemap" });
+    expect(picker).toHaveValue("default");
 
-    await user.click(satelliteBtn);
-    expect(onToggleSatelliteBasemap).toHaveBeenCalledWith(true);
+    await user.selectOptions(picker, "satellite");
+    expect(onChangeBasemap).toHaveBeenCalledWith("satellite");
   });
 });

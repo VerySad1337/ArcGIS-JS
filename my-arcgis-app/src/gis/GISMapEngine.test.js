@@ -3267,7 +3267,7 @@ describe("GISMapEngine Project Persistence (Save/Load Project)", () => {
   });
 });
 
-describe("GISMapEngine satellite basemap + 3D scene enhancements", () => {
+describe("GISMapEngine basemap picker + 3D scene enhancements", () => {
   function makeSceneView(groundLayers = [{ exaggeration: 1 }]) {
     const view = makeView();
     view.type = "3d";
@@ -3275,17 +3275,61 @@ describe("GISMapEngine satellite basemap + 3D scene enhancements", () => {
     return view;
   }
 
-  test("setSatelliteBasemap swaps the map's basemap and reverts it to what it was before", () => {
+  test("setBasemap swaps the map's basemap and 'default' reverts it to what it was before", () => {
     const engine = new GISMapEngine();
     const view = makeView();
     view.map.basemap = "topo-vector";
     engine.attachToView(view);
 
-    engine.setSatelliteBasemap(true);
-    expect(view.map.basemap).toBe("hybrid");
+    engine.setBasemap("satellite");
+    expect(view.map.basemap).toBe("satellite");
 
-    engine.setSatelliteBasemap(false);
+    engine.setBasemap("default");
     expect(view.map.basemap).toBe("topo-vector");
+  });
+
+  test("setBasemap('onemap') assigns a real Basemap instance wrapping OneMap's tile service, and 'default' still reverts cleanly", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    view.map.basemap = "topo-vector";
+    engine.attachToView(view);
+
+    engine.setBasemap("onemap");
+    expect(view.map.basemap).not.toBe("onemap");
+    expect(view.map.basemap.baseLayers[0].urlTemplate).toBe(
+      "https://www.onemap.gov.sg/maps/tiles/Default/{level}/{col}/{row}.png"
+    );
+
+    engine.setBasemap("default");
+    expect(view.map.basemap).toBe("topo-vector");
+  });
+
+  test("re-selecting 'onemap' after a 2D/3D reattach re-resolves it into a fresh Basemap instance", () => {
+    const engine = new GISMapEngine();
+    const view = makeView();
+    engine.attachToView(view);
+    engine.setBasemap("onemap");
+
+    const nextView = makeView();
+    engine.attachToView(nextView);
+
+    expect(nextView.map.basemap.baseLayers[0].urlTemplate).toBe(
+      "https://www.onemap.gov.sg/maps/tiles/Default/{level}/{col}/{row}.png"
+    );
+  });
+
+  test("a non-imagery basemap choice (e.g. onemap) is a no-op for buildings/exaggeration on a SceneView", async () => {
+    const engine = new GISMapEngine();
+    const groundLayer = { exaggeration: 1 };
+    const view = makeSceneView([groundLayer]);
+    engine.attachToView(view);
+
+    engine.setBasemap("onemap");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(groundLayer.exaggeration).toBe(1);
+    expect(engine.buildingsLayer).toBeNull();
+    expect(view.map.add).not.toHaveBeenCalledWith(expect.objectContaining({ title: "3D Buildings" }));
   });
 
   test("is a no-op for buildings/exaggeration on a 2D MapView", () => {
@@ -3293,19 +3337,19 @@ describe("GISMapEngine satellite basemap + 3D scene enhancements", () => {
     const view = makeView();
     engine.attachToView(view);
 
-    engine.setSatelliteBasemap(true);
+    engine.setBasemap("satellite");
 
     expect(engine.buildingsLayer).toBeNull();
     expect(view.map.add).not.toHaveBeenCalledWith(expect.objectContaining({ title: "3D Buildings" }));
   });
 
-  test("boosts ground exaggeration and adds a 3D buildings layer on a SceneView when satellite is enabled", async () => {
+  test("boosts ground exaggeration and adds a 3D buildings layer on a SceneView when an imagery basemap is selected", async () => {
     const engine = new GISMapEngine();
     const groundLayer = { exaggeration: 1 };
     const view = makeSceneView([groundLayer]);
     engine.attachToView(view);
 
-    engine.setSatelliteBasemap(true);
+    engine.setBasemap("satellite");
     expect(groundLayer.exaggeration).toBe(1.5);
 
     // The buildings layer is added via a dynamically imported module -
@@ -3316,30 +3360,30 @@ describe("GISMapEngine satellite basemap + 3D scene enhancements", () => {
     expect(view.map.add).toHaveBeenCalledWith(engine.buildingsLayer);
   });
 
-  test("removes the buildings layer and resets exaggeration when satellite is turned back off", async () => {
+  test("removes the buildings layer and resets exaggeration when switched away from imagery", async () => {
     const engine = new GISMapEngine();
     const groundLayer = { exaggeration: 1 };
     const view = makeSceneView([groundLayer]);
     engine.attachToView(view);
 
-    engine.setSatelliteBasemap(true);
+    engine.setBasemap("satellite");
     await new Promise((resolve) => setTimeout(resolve, 0));
     const buildings = engine.buildingsLayer;
     expect(buildings).not.toBeNull();
 
-    engine.setSatelliteBasemap(false);
+    engine.setBasemap("default");
 
     expect(groundLayer.exaggeration).toBe(1);
     expect(engine.buildingsLayer).toBeNull();
     expect(view.map.remove).toHaveBeenCalledWith(buildings);
   });
 
-  test("re-adds the buildings layer after a 2D/3D reattach while satellite stays on", async () => {
+  test("re-adds the buildings layer after a 2D/3D reattach while an imagery basemap stays selected", async () => {
     const engine = new GISMapEngine();
     const groundLayer = { exaggeration: 1 };
     const view = makeSceneView([groundLayer]);
     engine.attachToView(view);
-    engine.setSatelliteBasemap(true);
+    engine.setBasemap("satellite");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(engine.buildingsLayer).not.toBeNull();
 
