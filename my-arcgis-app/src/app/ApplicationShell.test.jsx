@@ -186,8 +186,8 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("submit-route"));
 
-    expect(geocodeAddress).toHaveBeenNthCalledWith(1, "Start", "esri");
-    expect(geocodeAddress).toHaveBeenNthCalledWith(2, "End", "esri");
+    expect(geocodeAddress).toHaveBeenNthCalledWith(1, "Start");
+    expect(geocodeAddress).toHaveBeenNthCalledWith(2, "End");
     expect(solveRoute).toHaveBeenCalledWith(
       { type: "point", longitude: 1, latitude: 3 },
       { type: "point", longitude: 2, latitude: 4 }

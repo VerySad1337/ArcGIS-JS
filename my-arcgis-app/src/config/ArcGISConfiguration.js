@@ -47,9 +47,6 @@ export const MRT_STATION_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz
 //MRT Line Station Feature Layer
 export const MRT_LINE_FEATURE_LAYER_URL = "https://services2.arcgis.com/j80Jz20at6Bi0thr/arcgis/rest/services/Rail_Lines/FeatureServer";
 
-//Geocoding Service
-export const GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
-
 // Raster basemaps selectable from the ViewModeToggle basemap picker (2D and
 // 3D both use these - `map.basemap = id` accepts the same style ids
 // regardless of view type). "default" is not a real Esri basemap id; it
@@ -69,12 +66,13 @@ export const BASEMAP_OPTIONS = [
 
 // SLA OneMap's own basemap tiles - the "Default" style of
 // https://www.onemap.gov.sg/docs/maps/. Deliberately NOT behind
-// esriConfig.apiKeys.scopes/an API key: unlike OneMap's search/theme/
-// routing REST APIs (which require a bearer token from
-// /api/auth/post/getToken - see GeocodingService.js's comment on why that
-// keeps this app on Nominatim instead), the tile endpoint is served
-// publicly with no authentication, per OneMap's own docs and Terms of Use
-// (which only require showing their logo/attribution, not a credential).
+// esriConfig.apiKeys.scopes/an API key: unlike OneMap's search/reverse-
+// geocode APIs (which require a bearer token from /api/auth/post/getToken,
+// obtained server-side by onemap-proxy/ - see GeocodingService.js and
+// knowledge/index.md's Geocoder Provider Toggle section), the tile endpoint
+// is served publicly with no authentication, per OneMap's own docs and
+// Terms of Use (which only require showing their logo/attribution, not a
+// credential).
 // {level}/{col}/{row} are WebTileLayer's own placeholder names for a
 // standard Web Mercator XYZ tile scheme - the same z/x/y OneMap's docs
 // describe, just ArcGIS's naming for them.
@@ -128,7 +126,6 @@ esriConfig.apiKeys = {
         TOURIST_ATTRACTIONS_FEATURE_LAYER_URL,
         MRT_STATION_FEATURE_LAYER_URL,
         MRT_LINE_FEATURE_LAYER_URL,
-        GEOCODER_URL,
         ROUTE_SERVICE_URL,
         BUILDINGS_SCENE_LAYER_URL
       ],

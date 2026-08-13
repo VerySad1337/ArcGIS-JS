@@ -1,7 +1,6 @@
 // Holds the SLA OneMap account credential (email + password) SERVER-SIDE,
-// and exposes exactly one endpoint - GET /api/onemap/token - that hands the
-// frontend a short-lived access token to call OneMap's Search/Reverse
-// Geocode APIs with.
+// and proxies the actual Search/Reverse Geocode requests too - the token
+// itself never reaches the browser, only the two calls' JSON results do.
 //
 // Why this exists at all: OneMap's Search/Reverse Geocode APIs (unlike its
 // public, keyless basemap tiles - see ArcGISConfiguration.js's
@@ -12,8 +11,17 @@
 // constant, whatever) is trivially readable via devtools/Network tab, so
 // the account password can never live there. This tiny service is the only
 // thing in the deployment that holds it: it logs in, caches the resulting
-// token in memory, and re-logs-in automatically once the cache is stale -
-// the frontend only ever sees the short-lived token, never the password.
+// token in memory, and re-logs-in automatically once the cache is stale.
+//
+// Full proxy, not just a token-mint endpoint (2026-08). An earlier version
+// of this service only exposed GET /api/onemap/token and let the browser
+// call OneMap's Search/Reverse Geocode APIs directly with that token
+// attached - which hid the password but still put the (shorter-lived,
+// lower-privilege, but still real) token in every request the browser made,
+// visible in devtools. GeocodingService.js now calls this service's own
+// /api/onemap/search and /api/onemap/revgeocode instead of onemap.gov.sg
+// directly, and this service attaches the token server-side before
+// forwarding - the token never leaves this container at all anymore.
 //
 // Deliberately minimal: one dependency (express), no database, no session
 // state beyond the in-memory token cache below. If this process restarts,
@@ -21,6 +29,12 @@
 const express = require("express");
 
 const ONEMAP_AUTH_URL = "https://www.onemap.gov.sg/api/auth/post/getToken";
+const ONEMAP_SEARCH_URL = "https://www.onemap.gov.sg/api/common/elastic/search";
+// Verified live (2026-08) with a real account token against a real point
+// (Marina Bay Sands) - both this URL and its GeocodeInfo[] response shape
+// matched on the first try. See knowledge/index.md's Routing System section
+// for the full verification note.
+const ONEMAP_REVGEOCODE_URL = "https://www.onemap.gov.sg/api/public/revgeocode";
 
 const ONEMAP_EMAIL = process.env.ONEMAP_EMAIL;
 const ONEMAP_PASSWORD = process.env.ONEMAP_PASSWORD;
@@ -37,19 +51,14 @@ if (!ONEMAP_EMAIL || !ONEMAP_PASSWORD) {
 }
 
 // Refresh this many ms before the token's real expiry, so a request that
-// lands right at the boundary never hands out a token that's about to die
-// mid-flight on the frontend.
+// lands right at the boundary never gets rejected mid-flight by OneMap.
 const EXPIRY_SAFETY_MARGIN_MS = 5 * 60 * 1000;
 
 // OneMap's own docs describe access tokens as valid for ~3 days. Used only
 // as a defensive fallback if the login response's expiry field is ever
-// missing or unparseable (see the reverse-geocode endpoint's own
-// unverified-at-implementation-time caveat in GeocodingService.js - this
-// service was built without being able to render OneMap's JS-SPA docs
-// site, so response-shape assumptions here are corroborated from secondary
-// sources, not confirmed against the live API) - better to keep serving a
-// plausibly-valid cached token than to trust a malformed expiry into
-// treating every token as already-expired.
+// missing or unparseable - better to keep serving a plausibly-valid cached
+// token than to trust a malformed expiry into treating every token as
+// already-expired.
 const DEFAULT_TOKEN_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 let cachedToken = null;
@@ -82,13 +91,13 @@ async function loginToOneMap() {
 
   cachedToken = data.access_token;
   cachedExpiresAtMs = expiresAtMs;
-  return { token: cachedToken, expiresAt: cachedExpiresAtMs };
+  return cachedToken;
 }
 
 async function getValidToken() {
   const now = Date.now();
   if (cachedToken && now < cachedExpiresAtMs - EXPIRY_SAFETY_MARGIN_MS) {
-    return { token: cachedToken, expiresAt: cachedExpiresAtMs };
+    return cachedToken;
   }
 
   if (!loginPromise) {
@@ -99,22 +108,79 @@ async function getValidToken() {
   return loginPromise;
 }
 
+// Shared by both proxy routes below. Retries once, with a forced-fresh
+// token, on a 401 from OneMap - our own cached-expiry bookkeeping can be
+// wrong (clock skew, a token revoked early) even when it looks valid, so
+// this is the actual source of truth rather than trusting the cache
+// blindly. This retry used to live client-side (GeocodingService.js's
+// fetchOneMapApi) back when the browser held the token itself; it moved
+// here along with the token when the full-proxy design replaced that.
+async function fetchOneMapWithAuth(url) {
+  const token = await getValidToken();
+  let response = await fetch(url, { headers: { Authorization: token } });
+
+  if (response.status === 401) {
+    cachedToken = null;
+    cachedExpiresAtMs = 0;
+    const freshToken = await getValidToken();
+    response = await fetch(url, { headers: { Authorization: freshToken } });
+  }
+
+  return response;
+}
+
 const app = express();
 
 app.get("/healthz", (_req, res) => {
   res.status(200).send("ok");
 });
 
-app.get("/api/onemap/token", async (_req, res) => {
+// GeocodingService.js's geocodeAddress calls this instead of OneMap's
+// Search API directly - q is the already-normalized query string (postal
+// code prefixing etc. still happens client-side in GeocodingService.js,
+// since that's presentation logic, not a credential concern). The
+// returnGeom/getAddrDetails/pageNum params this app always wants are fixed
+// here rather than accepted from the client, keeping OneMap's own API
+// shape entirely server-side.
+app.get("/api/onemap/search", async (req, res) => {
+  const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!query) {
+    res.status(400).json({ error: "Missing required query parameter: q" });
+    return;
+  }
+
   try {
-    const { token, expiresAt } = await getValidToken();
-    res.json({ token, expiresAt });
+    const url = `${ONEMAP_SEARCH_URL}?searchVal=${encodeURIComponent(query)}&returnGeom=Y&getAddrDetails=Y&pageNum=1`;
+    const response = await fetchOneMapWithAuth(url);
+    const body = await response.json();
+    res.status(response.status).json(body);
   } catch (err) {
-    // Logged server-side for operator visibility; the client only ever
-    // gets a generic message - never the upstream error body, which could
-    // otherwise hint at credential/account details.
-    console.error("[onemap-proxy] Failed to obtain a OneMap token:", err.message);
-    res.status(502).json({ error: "OneMap authentication is currently unavailable." });
+    console.error("[onemap-proxy] Search request failed:", err.message);
+    res.status(502).json({ error: "OneMap search is currently unavailable." });
+  }
+});
+
+// GeocodingService.js's reverseGeocodeLocation calls this instead of
+// OneMap's Reverse Geocode API directly - lat/lon are already-validated
+// numbers (GeocodingService.js's own validateCoordinates runs first). The
+// buffer/addressType/otherFeatures params this app always wants are fixed
+// here, same reasoning as /api/onemap/search above.
+app.get("/api/onemap/revgeocode", async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    res.status(400).json({ error: "Missing/invalid required query parameters: lat, lon" });
+    return;
+  }
+
+  try {
+    const url = `${ONEMAP_REVGEOCODE_URL}?location=${lat},${lon}&buffer=200&addressType=All&otherFeatures=N`;
+    const response = await fetchOneMapWithAuth(url);
+    const body = await response.json();
+    res.status(response.status).json(body);
+  } catch (err) {
+    console.error("[onemap-proxy] Reverse geocode request failed:", err.message);
+    res.status(502).json({ error: "OneMap reverse geocode is currently unavailable." });
   }
 });
 

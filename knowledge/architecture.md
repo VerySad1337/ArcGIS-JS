@@ -35,7 +35,9 @@ The system separates concerns along three lines:
 - **Orchestration** — `ApplicationShell` wires UI state (view mode, route state, layer list) to engine calls and re-renders derived state after engine mutations.
 - **Domain / Map Engine** — `GISMapEngine` encapsulates all ArcGIS map, layer, and graphics logic in one class, acting as the boundary between the React component tree and the ArcGIS JS API.
 
-Supporting services (`RoutingService`, `GeocodingService`) are stateless modules that wrap ArcGIS REST APIs and are consumed directly by `ApplicationShell`, not by the engine. Configuration (`ArcGISConfiguration.js`) centralizes all external endpoint URLs and portal item IDs used across the engine, shell, and services.
+Supporting services (`RoutingService`, `GeocodingService`) are stateless modules consumed directly by `ApplicationShell`, not by the engine. `RoutingService` wraps an ArcGIS REST API; `GeocodingService` wraps SLA OneMap's Search/Reverse Geocode REST APIs (2026-08 — previously ArcGIS's own World Geocoding Service, with an OpenStreetMap Nominatim fallback; both were removed, OneMap is now the sole, no-fallback geocoder — see `knowledge/index.md`'s Routing System section). Configuration (`ArcGISConfiguration.js`) centralizes all external endpoint URLs and portal item IDs used across the engine, shell, and services.
+
+`GeocodingService.js`'s OneMap calls depend on `onemap-proxy/` (repo root) - a small Node/Express service, this app's only server-side component, that holds the OneMap account credential and hands the frontend short-lived tokens. This is the one exception to "the frontend is a pure static bundle with no backend" elsewhere in this document - see `knowledge/index.md`'s "Why OneMap needed real backend infrastructure" for the full rationale.
 
 ---
 
