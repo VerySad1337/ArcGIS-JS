@@ -23,6 +23,13 @@
 # The repo-root .env must never be git-tracked - it used to be, with a real
 # key committed, before history was rewritten to purge it. See
 # knowledge/deployment.md for the full postmortem.
+#
+# ONEMAP_EMAIL / ONEMAP_PASSWORD (below, onemap-proxy service) are a real
+# OneMap account login, not a scoped API key - keep them out of the tracked
+# repo the exact same way, and never as VITE_-prefixed vars (those get
+# baked into the frontend bundle and shipped to every browser - see
+# onemap-proxy/server.js's module comment for why this account credential
+# specifically can never live there).
 services:
   arcgis-app:
     build:
@@ -33,3 +40,19 @@ services:
       VITE_ARCGIS_PORTAL_URL: "${VITE_ARCGIS_PORTAL_URL:-}"
     ports:
       - "8080:443"
+    depends_on:
+      - onemap-proxy
+
+  # Holds the OneMap account credential server-side and hands the frontend
+  # short-lived tokens via nginx's /api/onemap/ reverse-proxy rule (see
+  # nginx.conf) - see onemap-proxy/server.js's module comment for why this
+  # can't just be another VITE_-prefixed env var baked into the static
+  # frontend bundle the way the ArcGIS key is. Not reachable from outside
+  # the compose network - only arcgis-app's nginx talks to it, over the
+  # Docker-internal service name below.
+  onemap-proxy:
+    build:
+      context: ./onemap-proxy
+    environment:
+      ONEMAP_EMAIL: "${ONEMAP_EMAIL:?missing - set in my-arcgis-app/.env or --env-file}"
+      ONEMAP_PASSWORD: "${ONEMAP_PASSWORD:?missing - set in my-arcgis-app/.env or --env-file}"

@@ -1,5 +1,16 @@
 import { addressToLocations, locationToAddress } from "@arcgis/core/rest/locator";
 import { geocodeAddress, reverseGeocodeLocation } from "./GeocodingService";
+import { invalidateOneMapToken } from "./OneMapAuthService";
+
+// A OneMap-provider call always starts with a token fetch (OneMapAuthService
+// hits /api/onemap/token) before the actual Search/Reverse Geocode request -
+// mockResolvedValueOnce order below always accounts for that first call.
+function mockTokenResponse(fetchMock) {
+  return fetchMock.mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({ token: "test-token", expiresAt: Date.now() + 60 * 60 * 1000 })
+  });
+}
 
 describe("geocodeAddress", () => {
   const originalFetch = global.fetch;
@@ -227,6 +238,122 @@ describe("reverseGeocodeLocation", () => {
 
   test("rejects a non-numeric coordinate", async () => {
     await expect(reverseGeocodeLocation("abc", 103.8607)).rejects.toThrow(
+      "Latitude must be a number between -90 and 90."
+    );
+  });
+});
+
+describe("geocodeAddress with provider='onemap'", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    invalidateOneMapToken();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test("resolves to the first result's longitude/latitude via OneMap's Search API, bypassing Esri entirely", async () => {
+    global.fetch = jest.fn();
+    mockTokenResponse(global.fetch);
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ LATITUDE: "1.3521", LONGITUDE: "103.8198" }] })
+    });
+
+    const result = await geocodeAddress("Marina Bay Sands", "onemap");
+
+    expect(result).toEqual({ longitude: 103.8198, latitude: 1.3521 });
+    expect(addressToLocations).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("onemap.gov.sg/api/common/elastic/search"),
+      expect.anything()
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("searchVal=Marina%20Bay%20Sands"),
+      expect.anything()
+    );
+  });
+
+  test("throws, without falling back to Esri, when OneMap finds nothing", async () => {
+    global.fetch = jest.fn();
+    mockTokenResponse(global.fetch);
+    global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ results: [] }) });
+
+    await expect(geocodeAddress("Nowhere", "onemap")).rejects.toThrow("Location not found");
+    expect(addressToLocations).not.toHaveBeenCalled();
+  });
+
+  test("retries once with a fresh token on a 401, then succeeds", async () => {
+    global.fetch = jest.fn();
+    mockTokenResponse(global.fetch);
+    global.fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+    mockTokenResponse(global.fetch);
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ LATITUDE: "1.3521", LONGITUDE: "103.8198" }] })
+    });
+
+    const result = await geocodeAddress("Marina Bay Sands", "onemap");
+
+    expect(result).toEqual({ longitude: 103.8198, latitude: 1.3521 });
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("reverseGeocodeLocation with provider='onemap'", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    invalidateOneMapToken();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test("resolves to the address, postal code, and block via OneMap's Reverse Geocode API, bypassing Esri entirely", async () => {
+    global.fetch = jest.fn();
+    mockTokenResponse(global.fetch);
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        GeocodeInfo: [{ BUILDINGNAME: "NIL", BLOCK: "168", ROAD: "Bishan Street 13", POSTALCODE: "570168" }]
+      })
+    });
+
+    const result = await reverseGeocodeLocation(1.2834, 103.8607, "onemap");
+
+    expect(result).toEqual({ address: "168 Bishan Street 13", postalCode: "570168", block: "168" });
+    expect(locationToAddress).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("onemap.gov.sg/api/public/revgeocode"),
+      expect.anything()
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("location=1.2834,103.8607"),
+      expect.anything()
+    );
+  });
+
+  test("throws, without falling back to Esri, when OneMap finds nothing", async () => {
+    global.fetch = jest.fn();
+    mockTokenResponse(global.fetch);
+    global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ GeocodeInfo: [] }) });
+
+    await expect(reverseGeocodeLocation(1.2834, 103.8607, "onemap")).rejects.toThrow(
+      "No address found for this location"
+    );
+    expect(locationToAddress).not.toHaveBeenCalled();
+  });
+
+  test("still validates coordinates before calling OneMap", async () => {
+    await expect(reverseGeocodeLocation(200, 103.8607, "onemap")).rejects.toThrow(
       "Latitude must be a number between -90 and 90."
     );
   });

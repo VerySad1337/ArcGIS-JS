@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const TOAST_DURATION_MS = 4000;
 import GISMapView from "../components/GISMapView";
 import ViewModeToggle from "../components/ViewModeToggle";
+import GeocoderToggle from "../components/GeocoderToggle";
 import LayerControlPanel from "../components/LayerControlPanel";
 import GlobalSearchPanel from "../components/GlobalSearchPanel";
 import PortalLayerPanel from "../components/PortalLayerPanel";
@@ -21,6 +22,7 @@ import Icon from "../components/Icon";
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
   const [basemapId, setBasemapId] = useState("default");
+  const [geocoderProvider, setGeocoderProvider] = useState("esri");
   const [routeOn, setRouteOn] = useState(true);
   const [layers, setLayers] = useState([]);
   const engineRef = useRef(new GISMapEngine());
@@ -146,6 +148,10 @@ export default function ApplicationShell() {
     setBasemapId(id);
   }, []);
 
+  const changeGeocoderProvider = useCallback((provider) => {
+    setGeocoderProvider(provider);
+  }, []);
+
   const handleViewReady = useCallback((view) => {
     engineRef.current.setOnFeatureSelect(setSelectedFeature);
     engineRef.current.setOnDrawingsChanged(refreshLayers);
@@ -165,8 +171,8 @@ export default function ApplicationShell() {
     setHasInteracted(true);
     setIsRouting(true);
     try {
-      const s = await geocodeAddress(start);
-      const e = await geocodeAddress(end);
+      const s = await geocodeAddress(start, geocoderProvider);
+      const e = await geocodeAddress(end, geocoderProvider);
       const route = await solveRoute(
         { type: "point", longitude: s.longitude, latitude: s.latitude },
         { type: "point", longitude: e.longitude, latitude: e.latitude }
@@ -182,7 +188,7 @@ export default function ApplicationShell() {
     } finally {
       setIsRouting(false);
     }
-  }, [refreshLayers, showToast]);
+  }, [refreshLayers, showToast, geocoderProvider]);
 
   // Reverse geocode: a read-only lat/long -> address/postal-code lookup for
   // AnalysisPanel's own Reverse Geocode section. Unlike handleRoute, this
@@ -191,12 +197,12 @@ export default function ApplicationShell() {
   // for a failable call the caller can't usefully recover from itself.
   const handleReverseGeocode = useCallback(async (latitude, longitude) => {
     try {
-      return await reverseGeocodeLocation(latitude, longitude);
+      return await reverseGeocodeLocation(latitude, longitude, geocoderProvider);
     } catch (err) {
       showToast(err.message || "Couldn't find an address for that location.", "error");
       return null;
     }
-  }, [showToast]);
+  }, [showToast, geocoderProvider]);
 
   const toggleRoute = useCallback(() => {
     const next = !routeOn;
@@ -632,7 +638,7 @@ export default function ApplicationShell() {
   const handleSearch = useCallback(async (query) => {
     const [featureResults, addressLocation] = await Promise.all([
       engineRef.current.searchFeatures(query),
-      geocodeAddress(query).catch(() => null)
+      geocodeAddress(query, geocoderProvider).catch(() => null)
     ]);
 
     const addressResult = addressLocation
@@ -646,7 +652,7 @@ export default function ApplicationShell() {
       : [];
 
     return [...featureResults, ...addressResult];
-  }, []);
+  }, [geocoderProvider]);
 
   const handleSelectSearchResult = useCallback(async (result) => {
     setHasInteracted(true);
@@ -853,6 +859,11 @@ export default function ApplicationShell() {
           setIs3D={toggleViewMode}
           basemapId={basemapId}
           onChangeBasemap={changeBasemap}
+        />
+
+        <GeocoderToggle
+          provider={geocoderProvider}
+          onChangeProvider={changeGeocoderProvider}
         />
 
         <GlobalSearchPanel

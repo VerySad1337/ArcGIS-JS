@@ -4,7 +4,8 @@ Instruction:
 1) Clone the repo
 2) Change the .env for api key for routing engine etc.
 3) Edit ArcGISConfiguration.js WEBMAP_ID,WEBSCENE_ID, HEATMAP_FEATURE_LAYER_URL to your own.
-4) docker compose up -- build
+4) For the OneMap geocoder toggle (Esri/OneMap switch), also set ONEMAP_EMAIL and ONEMAP_PASSWORD in .env - these back a separate onemap-proxy container (see docker-compose.yml and knowledge/index.md's Geocoder Provider Toggle section) that logs into OneMap server-side, so the account password never ships to the browser. Only needed for that toggle; everything else works without it.
+5) docker compose up -- build
 
 
 Snapshot of implementation process:

@@ -1,5 +1,6 @@
 import { addressToLocations, locationToAddress } from "@arcgis/core/rest/locator";
 import { GEOCODER_URL } from "../config/ArcGISConfiguration.js";
+import { getOneMapToken, invalidateOneMapToken } from "./OneMapAuthService.js";
 
 // This app is Singapore-only (its MRT/Tourist Attraction layers only cover
 // Singapore), but the ArcGIS World Geocoding Service defaults to a
@@ -61,8 +62,50 @@ async function geocodeWithNominatim(address) {
   };
 }
 
-export async function geocodeAddress(address) {
+// Retries once, with a forced-fresh token, on a 401 from OneMap - our own
+// cached-expiry bookkeeping (OneMapAuthService.js) can be wrong (clock
+// skew, a token revoked early) even when it looks valid, so this is the
+// actual source of truth rather than trusting the cache blindly.
+async function fetchOneMapApi(url) {
+  const token = await getOneMapToken();
+  let response = await fetch(url, { headers: { Authorization: token } });
+
+  if (response.status === 401) {
+    invalidateOneMapToken();
+    const freshToken = await getOneMapToken();
+    response = await fetch(url, { headers: { Authorization: freshToken } });
+  }
+
+  return response;
+}
+
+const ONEMAP_SEARCH_URL = "https://www.onemap.gov.sg/api/common/elastic/search";
+
+async function geocodeWithOneMap(address) {
+  const url = `${ONEMAP_SEARCH_URL}?searchVal=${encodeURIComponent(address)}&returnGeom=Y&getAddrDetails=Y&pageNum=1`;
+  const response = await fetchOneMapApi(url);
+  if (!response.ok) throw new Error("Location not found");
+
+  const data = await response.json();
+  const result = data.results?.[0];
+  if (!result) throw new Error("Location not found");
+
+  return {
+    longitude: parseFloat(result.LONGITUDE),
+    latitude: parseFloat(result.LATITUDE)
+  };
+}
+
+// provider defaults to "esri" (the existing Esri-first/Nominatim-fallback
+// behavior, unchanged for any caller that doesn't pass one) - "onemap"
+// bypasses that chain entirely rather than falling back to Esri on
+// failure, since the whole point of the picker is letting the user see
+// which provider actually answered; silently falling back would defeat
+// that.
+export async function geocodeAddress(address, provider = "esri") {
   const query = normalizePostalCodeQuery(address);
+
+  if (provider === "onemap") return geocodeWithOneMap(query);
 
   try {
     return await geocodeWithEsri(query);
@@ -220,11 +263,50 @@ async function reverseGeocodeWithNominatim(latitude, longitude) {
   };
 }
 
+// Verified live (2026-08) with a real account token against a real point
+// (Marina Bay Sands) - both this URL and the GeocodeInfo[] response shape
+// below (BUILDINGNAME/BLOCK/ROAD/POSTALCODE/LATITUDE/LONGITUDE) matched on
+// the first try. Originally written as an extrapolated best guess (OneMap's
+// docs are a JS SPA that couldn't be rendered while this was first built),
+// kept here since the guess turned out correct.
+const ONEMAP_REVGEOCODE_URL = "https://www.onemap.gov.sg/api/public/revgeocode";
+
+// OneMap represents "no value" as the literal string "NIL" rather than an
+// empty field - see the field comment on ONEMAP_REVGEOCODE_URL for why this
+// (like the rest of this response shape) is corroborated from secondary
+// sources rather than confirmed firsthand.
+function valueOrEmpty(value) {
+  return value && value !== "NIL" ? value : "";
+}
+
+async function reverseGeocodeWithOneMap(latitude, longitude) {
+  const url = `${ONEMAP_REVGEOCODE_URL}?location=${latitude},${longitude}&buffer=200&addressType=All&otherFeatures=N`;
+  const response = await fetchOneMapApi(url);
+  if (!response.ok) throw new Error("No address found for this location");
+
+  const data = await response.json();
+  const info = data?.GeocodeInfo?.[0];
+  if (!info) throw new Error("No address found for this location");
+
+  const building = valueOrEmpty(info.BUILDINGNAME);
+  const block = valueOrEmpty(info.BLOCK);
+  const road = valueOrEmpty(info.ROAD);
+  const postalCode = valueOrEmpty(info.POSTALCODE);
+  const blockAndRoad = [block, road].filter(Boolean).join(" ");
+  const address = [building, blockAndRoad].filter(Boolean).join(", ") || road;
+
+  return { address, postalCode, block };
+}
+
 // Reverse geocodes a lat/long point to a street address, postal code, and
 // nearest block number, mirroring geocodeAddress's Esri-first/Nominatim-
 // fallback structure so the two directions of geocoding behave consistently.
-export async function reverseGeocodeLocation(latitude, longitude) {
+// provider follows the same "onemap bypasses the fallback chain entirely"
+// rule geocodeAddress uses, for the same reason.
+export async function reverseGeocodeLocation(latitude, longitude, provider = "esri") {
   const { lat, lon } = validateCoordinates(latitude, longitude);
+
+  if (provider === "onemap") return reverseGeocodeWithOneMap(lat, lon);
 
   try {
     return await reverseGeocodeWithEsri(lat, lon);

@@ -1,0 +1,14 @@
+{
+  "name": "onemap-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Holds the SLA OneMap account credential server-side and hands the frontend short-lived access tokens - see the module-level comment in server.js.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
