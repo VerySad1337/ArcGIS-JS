@@ -69,6 +69,7 @@ Only analyze files referenced by:
 * `knowledge/features/feature-attributes.md`
 * `knowledge/features/responsive-layout.md`
 * `knowledge/features/ui-feedback.md`
+* `knowledge/features/chatbot-mcp-system.md`
 * `knowledge/deployment.md`
 
 Do not inspect unrelated files unless:
@@ -220,6 +221,31 @@ Focus on:
 * Renderer configuration
 * Intensity updates
 * Visibility control
+
+---
+
+# Chatbot / MCP System
+
+Primary reference:
+
+`knowledge/features/chatbot-mcp-system.md`
+
+Relevant implementation:
+
+* `mcp-chat-proxy/` (repo root - new sidecar: `server.js`, `chatLoop.js`, `mcpServer.js`, `portalTools.js`, `toolSchemas.js`, `urlSafety.js`, `ollamaClient.js`, `config.js`)
+* `src/services/ChatService.js`
+* `src/components/ChatPanel.jsx`
+* `src/app/ApplicationShell.jsx`
+* `src/gis/GISMapEngine.js` (`getLayers()`'s `url` field only)
+
+Focus on:
+
+* Server-executed vs client-executed tool split, and why (`GISMapEngine` is browser-only)
+* The pendingAction / tool-result continuation protocol
+* SSRF guard on server-tool `url` arguments
+* Local model configuration (nothing hardcoded - see `mcp-chat-proxy/README.md`)
+
+Do not introduce a second chat/AI integration path unless explicitly requested.
 
 ---
 

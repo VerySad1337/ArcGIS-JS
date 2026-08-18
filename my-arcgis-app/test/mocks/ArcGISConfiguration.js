@@ -16,5 +16,6 @@ module.exports = {
   ],
   IMAGERY_BASEMAP_IDS: ["satellite"],
   ONEMAP_TILE_URL_TEMPLATE: "https://www.onemap.gov.sg/maps/tiles/Default/{level}/{col}/{row}.png",
-  ONEMAP_ATTRIBUTION: "Map data © OneMap, Singapore Land Authority"
+  ONEMAP_ATTRIBUTION: "Map data © OneMap, Singapore Land Authority",
+  CHAT_ENABLED: true
 };

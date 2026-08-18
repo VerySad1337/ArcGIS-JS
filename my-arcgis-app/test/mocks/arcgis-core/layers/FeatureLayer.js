@@ -18,6 +18,14 @@ class FeatureLayer {
     this.definitionExpression = props.definitionExpression ?? null;
     this.queryFeatures = jest.fn().mockResolvedValue({ features: [] });
     this.queryFeatureCount = jest.fn().mockResolvedValue(0);
+    // Unlike fullExtent, a real queryExtent honours definitionExpression -
+    // which is the whole reason zoomToLayer consults it for a filtered layer
+    // (see GISMapEngine.zoomToLayer). Defaults to "one feature, degenerate
+    // extent" so the single-feature framing path is what a test exercising a
+    // filtered zoom gets unless it says otherwise.
+    this.queryExtent = jest
+      .fn()
+      .mockResolvedValue({ count: 1, extent: { xmin: 5, ymin: 5, xmax: 5, ymax: 5, center: { x: 5, y: 5 } } });
   }
 }
 

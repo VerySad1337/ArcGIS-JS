@@ -97,6 +97,70 @@ jest.mock("../components/FeatureAttributesPanel", () => (props) =>
   ) : null
 );
 
+// The chat loop needs a real {ok, data|error} outcome to report back to the
+// model (a toast isn't enough - see runClientAction's own comment), so the
+// filter tests below assert on what onRunClientAction resolved to, not just
+// on the engine calls it made.
+let lastClientActionOutcome = null;
+
+jest.mock("../components/ChatPanel", () => (props) => (
+  <div data-testid="chat-panel">
+    <button
+      onClick={() =>
+        props.onRunClientAction("add_portal_layer", {
+          item: { id: "abc", title: "Parks", url: "https://example.com/Parks/FeatureServer" }
+        })
+      }
+    >
+      run-add-portal-layer
+    </button>
+    <button onClick={() => props.onRunClientAction("rename_layer", { id: "portal_abc", name: "My Parks" })}>
+      run-rename-layer
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("set_layer_filter", {
+          id: "mrtStations",
+          conditions: [{ field: "name", operator: "contains", value: "Tampines" }]
+        });
+      }}
+    >
+      run-set-layer-filter
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("set_layer_filter", {
+          id: "mrtStations",
+          conditions: [{ field: "station_name", operator: "=", value: "Tampines" }]
+        });
+      }}
+    >
+      run-set-layer-filter-separators
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("set_layer_filter", {
+          id: "mrtStations",
+          conditions: [{ field: "nope", operator: "=", value: "Tampines" }]
+        });
+      }}
+    >
+      run-set-layer-filter-unknown-field
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("set_layer_filter", {
+          id: "mrtStations",
+          conditions: [{ field: "title", operator: "!=", value: "Tampines" }]
+        });
+      }}
+    >
+      run-set-layer-filter-sql-operator
+    </button>
+    <span>chat-layer-fields:{JSON.stringify(props.mapContext.layers.map((l) => l.fields))}</span>
+  </div>
+));
+
 function getEngineInstance() {
   return GISMapEngine.mock.instances[0];
 }
@@ -112,7 +176,12 @@ describe("ApplicationShell", () => {
       Promise.resolve({ longitude: addr === "Start" ? 1 : 2, latitude: addr === "Start" ? 3 : 4 })
     );
     GISMapEngine.prototype.getLayers.mockReturnValue([]);
+    // Read on mount by the chat map-context field prefetch (see
+    // ApplicationShell's chatLayerFields effect), same reason getLayers needs
+    // a default: the automock would otherwise return undefined.
+    GISMapEngine.prototype.getFilterableLayers.mockReturnValue([]);
     isOAuthConfigured.mockReturnValue(false);
+    lastClientActionOutcome = null;
   });
 
   test("renders the core layout", () => {
@@ -394,6 +463,204 @@ describe("ApplicationShell", () => {
 
     await user.click(screen.getByText("add-portal-layer"));
     expect(await screen.findByText("no url")).toBeInTheDocument();
+  });
+
+  // Regression test: chat asking to add a portal layer under a custom name
+  // ("...and call it SCB") went through runClientAction's add_portal_layer
+  // case in one combined tool call with an optional `name` field - even
+  // after marking that field required in the tool schema, qwen2.5:1.5b
+  // still reliably omitted it (observed directly, twice), so the chat
+  // reply claimed the rename happened while the Layers card kept showing
+  // the portal item's real title. Fixed by splitting "add" and "rename"
+  // into two separate, single-purpose client tools/actions - mirroring the
+  // apply_buffer -> create_buffer_result_layer chain this model already
+  // handles correctly - rather than relying on one call with multiple
+  // fields. rename_layer is its own runClientAction case, reusing the same
+  // engine.renameLayer the manual per-row rename control already calls.
+  test("runClientAction add_portal_layer only adds the layer under its own title - no rename", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.addPortalLayer.mockResolvedValue("portal_abc");
+
+    await user.click(screen.getByText("run-add-portal-layer"));
+
+    expect(engine.addPortalLayer).toHaveBeenCalledWith({
+      id: "abc",
+      title: "Parks",
+      url: "https://example.com/Parks/FeatureServer"
+    });
+    expect(engine.renameLayer).not.toHaveBeenCalled();
+    expect(await screen.findByText('Added "Parks" to layers.')).toBeInTheDocument();
+  });
+
+  test("runClientAction rename_layer calls engine.renameLayer and shows a toast", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+
+    await user.click(screen.getByText("run-rename-layer"));
+
+    expect(engine.renameLayer).toHaveBeenCalledWith("portal_abc", "My Parks");
+    expect(await screen.findByText('Renamed layer to "My Parks".')).toBeInTheDocument();
+  });
+
+  // The manual Filter UI populates its field <select> from
+  // getLayerFieldSchema, so it can never send a field that doesn't exist -
+  // but the chat's model types the field name itself. Observed directly:
+  // "filter out tampines mrt stations from mrt stations" had qwen2.5:1.5b
+  // call set_layer_filter with field "name" against an uppercase schema,
+  // which GISMapEngine rejected with '"name" is not a field on this layer.'
+  // (and the model then reported the failed filter to the user as applied,
+  // blaming a zoom_to_layer call it had never made). A chat-supplied field
+  // name is now resolved against the real schema first.
+  describe("runClientAction set_layer_filter field resolution", () => {
+    const mrtFields = { fields: [{ name: "NAME", kind: "string" }, { name: "STATION_NAME", kind: "string" }] };
+
+    test("resolves a lowercased field name to the layer's real, uppercase field", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.setLayerFilter.mockResolvedValue({ active: true, description: "NAME contains Tampines" });
+
+      await user.click(screen.getByText("run-set-layer-filter"));
+
+      expect(engine.setLayerFilter).toHaveBeenCalledWith("mrtStations", {
+        conditions: [{ field: "NAME", operator: "contains", value: "Tampines" }],
+        logic: undefined
+      });
+      expect(lastClientActionOutcome).toEqual({ ok: true, data: { active: true, description: "NAME contains Tampines" } });
+    });
+
+    test("resolves a field name whose separators don't match the schema's", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.setLayerFilter.mockResolvedValue({ active: true, description: "" });
+
+      await user.click(screen.getByText("run-set-layer-filter-separators"));
+
+      expect(engine.setLayerFilter).toHaveBeenCalledWith("mrtStations", {
+        conditions: [{ field: "STATION_NAME", operator: "=", value: "Tampines" }],
+        logic: undefined
+      });
+    });
+
+    // The point of the error text: the model's retry should be informed by
+    // the real schema rather than being another guess, and the filter must
+    // not be applied on some other field it didn't ask about.
+    test("a genuinely unknown field fails with the layer's real field list and applies nothing", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.inferFieldForValue.mockResolvedValue(null);
+
+      await user.click(screen.getByText("run-set-layer-filter-unknown-field"));
+
+      expect(engine.setLayerFilter).not.toHaveBeenCalled();
+      expect(lastClientActionOutcome.ok).toBe(false);
+      expect(lastClientActionOutcome.error).toContain("NAME, STATION_NAME");
+    });
+
+    // The model named a field this layer doesn't have ("title"/"name"), which
+    // it did twice in a row in production. The value itself identifies its own
+    // field far more reliably, so the data is asked instead of the model.
+    test("infers the field from the value when the model's field doesn't exist", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.inferFieldForValue.mockResolvedValue({ field: "NAME", matchedValue: "Tampines" });
+      engine.setLayerFilter.mockResolvedValue({ active: true, description: "" });
+
+      await user.click(screen.getByText("run-set-layer-filter-unknown-field"));
+
+      expect(engine.inferFieldForValue).toHaveBeenCalledWith("mrtStations", "Tampines");
+      expect(engine.setLayerFilter).toHaveBeenCalledWith("mrtStations", {
+        conditions: [{ field: "NAME", operator: "=", value: "Tampines" }],
+        logic: undefined
+      });
+      // Reported back so the model's reply describes the filter that ran.
+      expect(lastClientActionOutcome.data.corrections[0]).toContain("searched NAME");
+    });
+
+    // Without this, "filter Tampines" applies NAME = 'Tampines' against values
+    // like "TAMPINES MRT STATION" and empties the layer - a filter that looks
+    // applied but matches nothing.
+    test("promotes = to contains when the probe proves the value is only a substring", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.inferFieldForValue.mockResolvedValue({ field: "NAME", matchedValue: "TAMPINES MRT STATION" });
+      engine.setLayerFilter.mockResolvedValue({ active: true, description: "" });
+
+      await user.click(screen.getByText("run-set-layer-filter-unknown-field"));
+
+      expect(engine.setLayerFilter).toHaveBeenCalledWith("mrtStations", {
+        conditions: [{ field: "NAME", operator: "contains", value: "Tampines" }],
+        logic: undefined
+      });
+      expect(lastClientActionOutcome.data.corrections.join(" ")).toContain("substring");
+    });
+
+    // "!=" is the obvious operator for "filter OUT x" and is what the tool
+    // schema used to advertise, but LayerFilterExpression's table keys it as
+    // "<>" - an unmapped token throws '"!=" is not a supported filter operator.'
+    // The mirror of the = -> contains promotion: NAME <> 'Tampines' matches
+    // EVERY station (none is exactly "Tampines"), so it applies cleanly and
+    // filters nothing - which is what "still not filtered" turned out to be.
+    test("promotes <> to doesNotContain on the same substring evidence", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.inferFieldForValue.mockResolvedValue({ field: "NAME", matchedValue: "TAMPINES MRT STATION" });
+      engine.setLayerFilter.mockResolvedValue({ active: true, description: "" });
+
+      await user.click(screen.getByText("run-set-layer-filter-sql-operator"));
+
+      expect(engine.setLayerFilter).toHaveBeenCalledWith("mrtStations", {
+        conditions: [{ field: "NAME", operator: "doesNotContain", value: "Tampines" }],
+        logic: undefined
+      });
+    });
+
+    test("maps SQL-flavoured operator spellings onto the engine's real tokens", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.getLayerFieldSchema.mockResolvedValue(mrtFields);
+      engine.inferFieldForValue.mockResolvedValue({ field: "NAME", matchedValue: "Tampines" });
+      engine.setLayerFilter.mockResolvedValue({ active: true, description: "" });
+
+      await user.click(screen.getByText("run-set-layer-filter-sql-operator"));
+
+      expect(engine.setLayerFilter).toHaveBeenCalledWith("mrtStations", {
+        conditions: [{ field: "NAME", operator: "<>", value: "Tampines" }],
+        logic: undefined
+      });
+    });
+  });
+
+  // Field names reach the model up front in the map context, so a correct
+  // first attempt doesn't depend on it guessing - on CPU-only Ollama a
+  // wasted round trip costs minutes (see mcp-chat-proxy/config.js).
+  test("the chat map context carries each layer's real field names", async () => {
+    GISMapEngine.prototype.getLayers.mockReturnValue([{ id: "mrtStations", name: "MRT Stations", styleGroups: [] }]);
+    GISMapEngine.prototype.getFilterableLayers.mockReturnValue([{ id: "mrtStations", name: "MRT Stations" }]);
+    GISMapEngine.prototype.getLayerFieldSchema.mockResolvedValue({
+      fields: [{ name: "NAME", kind: "string" }, { name: "LINE", kind: "string" }]
+    });
+
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    await readyTheView(user);
+
+    expect(await screen.findByText('chat-layer-fields:[["NAME","LINE"]]')).toBeInTheDocument();
   });
 
   test("removing a portal layer calls engine.removePortalLayer and refreshes layers", async () => {

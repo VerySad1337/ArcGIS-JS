@@ -1,6 +1,9 @@
 .env
 my-arcgis-app/.env
 /node_modules
+# Covers onemap-proxy/node_modules and mcp-chat-proxy/node_modules too -
+# /node_modules above only ever matched the repo root.
+**/node_modules
 
 # SonarQube
 .scannerwork

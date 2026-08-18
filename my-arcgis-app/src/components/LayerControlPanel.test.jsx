@@ -496,6 +496,56 @@ describe("LayerControlPanel", () => {
       });
     });
 
+    // Reported against a chat-applied filter: the row showed "filtered" and
+    // "NAME contains Tampines", but the editable condition row underneath was
+    // blank - so the applied filter wasn't visible or adjustable, and pressing
+    // Apply Filter on that blank row would have cleared it.
+    test("seeds the condition rows from the layer's active filter instead of showing a blank row", async () => {
+      const user = userEvent.setup();
+      setup({
+        layers: [
+          {
+            ...filterableLayers[0],
+            filterDescription: "NAME contains Tampines",
+            filterConditions: [{ field: "NAME", operator: "contains", value: "Tampines" }],
+            filterLogic: "AND"
+          }
+        ]
+      });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Filter" }));
+
+      expect(await screen.findByLabelText("Field")).toHaveValue("NAME");
+      expect(screen.getByLabelText("Operator")).toHaveValue("contains");
+      expect(screen.getByLabelText("Value")).toHaveValue("Tampines");
+    });
+
+    // Re-applying without editing must reproduce the same filter, not clear it.
+    test("re-applying a seeded filter sends the same conditions back", async () => {
+      const user = userEvent.setup();
+      const { props } = setup({
+        layers: [
+          {
+            ...filterableLayers[0],
+            filterDescription: "NAME contains Tampines",
+            filterConditions: [{ field: "NAME", operator: "contains", value: "Tampines" }],
+            filterLogic: "AND"
+          }
+        ]
+      });
+
+      await user.click(screen.getByRole("button", { name: "Toggle layer styling and filter options" }));
+      await user.click(screen.getByRole("button", { name: "Filter" }));
+      await screen.findByLabelText("Field");
+      await user.click(screen.getByRole("button", { name: "Apply Filter" }));
+
+      expect(props.onApplyFilter).toHaveBeenCalledWith("touristAttractions", {
+        conditions: [{ field: "NAME", operator: "contains", value: "Tampines" }],
+        logic: "AND"
+      });
+    });
+
     test("shows the active filter description with a clear control when the layer is already filtered", async () => {
       const user = userEvent.setup();
       const { props } = setup({

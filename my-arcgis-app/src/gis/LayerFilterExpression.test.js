@@ -103,6 +103,24 @@ describe("buildWhereClause", () => {
     ).toBe("(NAME LIKE '%ina')");
   });
 
+  // The only way to express "exclude anything mentioning X" on text data:
+  // `<>` compares the whole value, so it matches every row whose value merely
+  // CONTAINS the term - a filter that applies cleanly and filters nothing.
+  test("negates a substring match with NOT LIKE, and evaluates the same way on drawings", () => {
+    expect(
+      buildWhereClause(FIELDS, { conditions: [{ field: "NAME", operator: "doesNotContain", value: "Tampines" }] })
+    ).toBe("(NAME NOT LIKE '%Tampines%')");
+
+    const filter = { conditions: [{ field: "NAME", operator: "doesNotContain", value: "tampines" }] };
+    expect(matchesAttributes({ NAME: "TAMPINES MRT STATION" }, FIELDS, filter)).toBe(false);
+    expect(matchesAttributes({ NAME: "BEDOK MRT STATION" }, FIELDS, filter)).toBe(true);
+  });
+
+  test("offers doesNotContain on string fields only, like contains", () => {
+    expect(operatorsForKind("string").map((o) => o.value)).toContain("doesNotContain");
+    expect(operatorsForKind("number").map((o) => o.value)).not.toContain("doesNotContain");
+  });
+
   test("builds a DATE literal for date fields", () => {
     const where = buildWhereClause(FIELDS, {
       conditions: [{ field: "OPENED", operator: ">", value: "2024-01-15" }]

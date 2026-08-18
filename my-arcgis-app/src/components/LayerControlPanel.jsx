@@ -449,6 +449,25 @@ function emptyCondition() {
   return { field: "", operator: "", value: "" };
 }
 
+// The condition rows the Filter form should start from: the layer's own active
+// filter when it has one, so an applied filter is visible and editable rather
+// than being shown as a blank row beside its own "filtered" badge and summary
+// text. That blank row was also a trap - pressing Apply Filter on it cleared
+// the filter, since an empty condition is dropped and the where clause comes
+// out null. Matters most for a filter the user didn't type themselves: the chat
+// assistant applies them (see knowledge/features/chatbot-mcp-system.md), and
+// this form is the only place to see or adjust what it did.
+function conditionsFromLayer(layer) {
+  if (!layer.filterConditions?.length) return [emptyCondition()];
+  return layer.filterConditions.map((c) => ({
+    field: c.field ?? "",
+    operator: c.operator ?? "",
+    // A value-less operator (isNull/isNotNull) has no value to restore, and the
+    // inputs are controlled, so it must be "" rather than undefined.
+    value: c.value ?? ""
+  }));
+}
+
 // "Today"/"Yesterday"/calendar-date, matching how most consumer apps phrase
 // a recent creation time rather than a raw timestamp - the Details section
 // only needs a rough sense of "when", not to-the-second precision.
@@ -604,8 +623,19 @@ function LayerControlPanel({
       if (!fieldsById[layer.id]) ensureFieldsLoaded(layer.id);
     }
     if (opening && layer.filterable) {
-      setConditionsById((prev) => (prev[layer.id] ? prev : { ...prev, [layer.id]: [emptyCondition()] }));
-      setLogicById((prev) => (prev[layer.id] ? prev : { ...prev, [layer.id]: "AND" }));
+      // An active filter always re-seeds the form on open, so reopening a row
+      // shows what is actually applied to the layer right now (including a
+      // filter the chat assistant applied since the row was last open). Only a
+      // layer with no active filter keeps any half-typed draft from last time.
+      const seeded = conditionsFromLayer(layer);
+      setConditionsById((prev) =>
+        layer.filterConditions?.length || !prev[layer.id] ? { ...prev, [layer.id]: seeded } : prev
+      );
+      setLogicById((prev) =>
+        layer.filterConditions?.length || !prev[layer.id]
+          ? { ...prev, [layer.id]: layer.filterLogic || "AND" }
+          : prev
+      );
     }
   };
 
@@ -849,8 +879,8 @@ function LayerControlPanel({
     const isExpandable = isStylable || isFilterable || isAnnotatable || isHeatmapLayer || hasDetails;
     const isExpanded = isExpandable && expandedIds[layer.id];
     const fields = fieldsById[layer.id] || [];
-    const conditions = conditionsById[layer.id] || [emptyCondition()];
-    const logic = logicById[layer.id] || "AND";
+    const conditions = conditionsById[layer.id] || conditionsFromLayer(layer);
+    const logic = logicById[layer.id] || layer.filterLogic || "AND";
     const statistics = statisticsById[layer.id] || [];
     const aggregateField = aggregateFieldById[layer.id] || "";
     const aggregateResult = aggregateResultsById[layer.id];
@@ -1597,6 +1627,8 @@ LayerControlPanel.propTypes = {
       removable: PropTypes.bool,
       filterable: PropTypes.bool,
       filterDescription: PropTypes.string,
+      filterConditions: PropTypes.array,
+      filterLogic: PropTypes.string,
       annotatable: PropTypes.bool,
       annotationField: PropTypes.string,
       heatmap: PropTypes.bool,

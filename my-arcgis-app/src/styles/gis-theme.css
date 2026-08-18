@@ -2247,6 +2247,95 @@ input[type="range"] {
 }
 
 /* =========================
+   CHAT PANEL
+========================= */
+
+/* ChatPanel.jsx (knowledge/features/chatbot-mcp-system.md) had no rules of
+   its own at all, so its message text fell back to the browser's default
+   black on this panel's dark background - unreadable, same class of bug
+   the .gis-button-secondary comment above already documents for buttons.
+   Every color below follows this file's existing dark-panel convention:
+   white body text, var(--text-muted) for secondary/system lines, and the
+   #0f172a/rgba(255,255,255,.15) input treatment .route-panel/.analysis-tool-row
+   already use. */
+.chat-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: var(--space-3);
+}
+
+.chat-message {
+  color: white;
+  font-size: var(--text-sm);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  word-break: break-word;
+}
+
+.chat-message-user {
+  align-self: flex-end;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent-stronger));
+}
+
+.chat-message-assistant {
+  align-self: flex-start;
+}
+
+/* "Running: ..."/"Applied: ..." lines for a client-executed tool call (see
+   ApplicationShell.jsx's runClientAction) - kept visually distinct from the
+   conversational bubbles above, same muted treatment .analysis-tool-hint
+   uses for secondary/system text elsewhere in this app. */
+.chat-message-action {
+  color: var(--text-muted);
+  background: transparent;
+  font-size: var(--text-xs);
+  font-style: italic;
+  padding: 2px 8px;
+}
+
+.chat-message-error {
+  color: #fecaca;
+  background: rgba(239, 113, 103, 0.16);
+  border: 1px solid rgba(239, 113, 103, 0.35);
+}
+
+.chat-message-pending {
+  color: var(--text-muted);
+  background: transparent;
+  font-size: var(--text-xs);
+  font-style: italic;
+  padding: 2px 8px;
+}
+
+.chat-input-form {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input-form input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0f172a;
+  color: white;
+}
+
+.chat-input-form input::placeholder {
+  color: var(--text-muted);
+}
+
+.chat-input-form .gis-button {
+  width: auto;
+  padding: var(--space-2) var(--space-3);
+}
+
+/* =========================
    REDUCED MOTION
 ========================= */
 

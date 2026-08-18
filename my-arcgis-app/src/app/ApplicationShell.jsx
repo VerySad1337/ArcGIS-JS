@@ -8,15 +8,72 @@ import PortalLayerPanel from "../components/PortalLayerPanel";
 import CreateFeatureLayerPanel from "../components/CreateFeatureLayerPanel";
 import AccountButton from "../components/AccountButton";
 import AnalysisPanel from "../components/AnalysisPanel";
+import ChatPanel from "../components/ChatPanel";
 import GISMapEngine from "../gis/GISMapEngine";
 import { solveRoute } from "../services/RoutingService";
 import { geocodeAddress, reverseGeocodeLocation } from "../services/GeocodingService";
 import { searchPortalLayers } from "../services/PortalService";
+import { sendChatMessage, sendToolResult } from "../services/ChatService";
 import { isOAuthConfigured, checkSignInStatus, signIn, signOut } from "../services/AuthService";
-import { WEBMAP_ID, WEBSCENE_ID } from "../config/ArcGISConfiguration";
+import { WEBMAP_ID, WEBSCENE_ID, CHAT_ENABLED } from "../config/ArcGISConfiguration";
 import FloatingDrawTools from "../components/FloatingDrawTools";
 import FeatureAttributesPanel from "../components/FeatureAttributesPanel";
 import Icon from "../components/Icon";
+
+// Chatbot / MCP System only - see knowledge/features/chatbot-mcp-system.md.
+//
+// The manual Filter UI can never send a field name that doesn't exist: it
+// populates a <select> from getLayerFieldSchema, so GISMapEngine's strict
+// exact-match validation is exactly right there. The chat's model types the
+// field name itself, and a small local model both lowercases ArcGIS's
+// conventionally-uppercase field names and paraphrases them - which surfaced
+// as "filter out tampines from mrt stations" failing with `"name" is not a
+// field on this layer.` even when a NAME field does exist.
+//
+// So a chat-supplied field name is resolved against the layer's real schema
+// before the engine ever sees it, rather than being trusted or rejected
+// outright: exact match, then case-insensitive, then ignoring separators
+// (so "station_name"/"stationname"/"Station Name" all reach STATION_NAME).
+// Anything looser is deliberately NOT attempted - silently filtering on a
+// field the user didn't ask about is worse than an error the model can act
+// on, and runClientAction's failure path hands the model the real field list
+// so its retry is informed rather than another guess.
+function squashFieldName(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// A model writes SQL-flavoured operator spellings that LayerFilterExpression's
+// FILTER_OPERATORS table doesn't use as keys. The table is the authority (the
+// tool schema now advertises its real keys), but a model will keep emitting
+// these regardless of the schema, and "!=" in particular is the obvious choice
+// for "filter OUT x" - so they're mapped rather than rejected.
+const OPERATOR_ALIASES = {
+  "!=": "<>",
+  "is null": "isNull",
+  "is not null": "isNotNull",
+  isnull: "isNull",
+  isnotnull: "isNotNull",
+  like: "contains",
+  "starts with": "startsWith",
+  "ends with": "endsWith"
+};
+
+function resolveOperatorToken(requested) {
+  const token = String(requested || "").trim();
+  return OPERATOR_ALIASES[token] || OPERATOR_ALIASES[token.toLowerCase()] || token;
+}
+
+function resolveFieldName(requested, fields) {
+  const names = fields.map((f) => f.name);
+  const exact = names.find((n) => n === requested);
+  if (exact) return exact;
+
+  const caseInsensitive = names.find((n) => n.toLowerCase() === String(requested || "").toLowerCase());
+  if (caseInsensitive) return caseInsensitive;
+
+  const squashed = squashFieldName(requested);
+  return squashed ? names.find((n) => squashFieldName(n) === squashed) || null : null;
+}
 
 export default function ApplicationShell() {
   const [is3D, setIs3D] = useState(false);
@@ -793,6 +850,245 @@ export default function ApplicationShell() {
     [loadProject]
   );
 
+  // Chatbot / MCP System - see knowledge/features/chatbot-mcp-system.md.
+  // mcp-chat-proxy is stateless and has no access to GISMapEngine (which
+  // only exists in this browser tab), so every request it handles carries
+  // this snapshot of what's actually on the map right now: `layers` is the
+  // exact same array LayerControlPanel/AnalysisPanel already consume (no
+  // new engine state), and `queryableLayerUrls` is the allow-list the
+  // sidecar's query_layer_features/get_layer_statistics tools validate a
+  // requested `url` against, so the model can only ever query a layer the
+  // user already has on their map, not an arbitrary REST endpoint.
+  // Field names per filterable layer, included in `mapContext` so the model
+  // can name a real field on its FIRST attempt instead of guessing one. The
+  // guess is not a small cost to absorb: on CPU-only Ollama a single turn is
+  // dominated by prompt evaluation (~200s - see mcp-chat-proxy/config.js's
+  // timeout note), so one avoidable failed round trip costs the user minutes,
+  // where these few hundred extra prompt tokens cost essentially nothing.
+  //
+  // Keyed off the filterable ids only, deliberately not `layers` itself:
+  // refreshLayers() runs on every layer mutation including a colour-picker
+  // drag, and re-querying every layer's schema on each of those events would
+  // spawn a promise per layer per drag event. The trade-off is that a column
+  // added via addColumnToLayer after this ran isn't reflected here until the
+  // layer set next changes - runClientAction reads the live schema anyway, so
+  // that only costs one informed retry in that narrow case.
+  const [chatLayerFields, setChatLayerFields] = useState({});
+  const layerIdsKey = layers.filter(Boolean).map((l) => l.id).join(",");
+
+  useEffect(() => {
+    if (!CHAT_ENABLED) return undefined; // nothing else reads this
+    let cancelled = false;
+    const engine = engineRef.current;
+
+    Promise.all(
+      engine.getFilterableLayers().map(async ({ id }) => {
+        const { fields } = await engine.getLayerFieldSchema(id);
+        return [id, fields.map((f) => f.name)];
+      })
+    )
+      .then((entries) => {
+        if (!cancelled) setChatLayerFields(Object.fromEntries(entries));
+      })
+      // A schema lookup failing just means the model has to ask; it must
+      // never break the app, same as getLayerFields' un-toasted contract.
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [layerIdsKey]);
+
+  const mapContext = useMemo(
+    () => ({
+      is3D,
+      layers: layers.filter(Boolean).map((l) => (chatLayerFields[l.id] ? { ...l, fields: chatLayerFields[l.id] } : l)),
+      queryableLayerUrls: layers.filter(Boolean).map((l) => l.url).filter(Boolean)
+    }),
+    [is3D, layers, chatLayerFields]
+  );
+
+  // Thin, un-toasted pass-throughs to ChatService - ChatPanel already shows
+  // a failure inline in its own timeline, so there's no separate toast to
+  // duplicate that (unlike every other service call in this file, which
+  // has no equivalent inline surface of its own).
+  const handleSendChatMessage = useCallback((messages, context) => sendChatMessage(messages, context), []);
+  const handleSubmitChatToolResult = useCallback(
+    (messages, context, callId, result) => sendToolResult(messages, context, callId, result),
+    []
+  );
+
+  // Executes one client-domain chat tool call (see mcp-chat-proxy/toolSchemas.js)
+  // against the real engine methods - the same ones the manual UI buttons
+  // call - so a chat-driven action can do nothing a signed-in-or-not user
+  // couldn't already do by clicking through the UI, and inherits the exact
+  // same anonymous-first authorization checks (IdentityManager/canEdit)
+  // those methods already enforce. Deliberately separate from the existing
+  // createHeatmapLayer/createHexagonLayer/... useCallbacks above: those
+  // already catch-and-toast internally with no return value, but the chat
+  // loop needs a real {ok, data|error} outcome to report back to the model
+  // (see ChatPanel.jsx's onSubmitToolResult call) - not just a toast side
+  // effect - so this calls the engine directly instead of through them.
+  // Still shows the same toasts those handlers would have, for a user
+  // watching the map react to what the assistant just did.
+  const runClientAction = useCallback(async (name, args) => {
+    const engine = engineRef.current;
+    try {
+      switch (name) {
+        case "create_heatmap_layer": {
+          const result = engine.createHeatmapLayer(args.sourceId, {
+            name: args.name,
+            intensity: args.intensity
+          });
+          refreshLayers();
+          showToast(`Added heatmap layer "${result.name}".`, "success");
+          return { ok: true, data: result };
+        }
+        case "create_hexagon_layer": {
+          const result = await engine.createHexagonLayer(args.sourceId, {
+            name: args.name,
+            cellSize: args.cellSize
+          });
+          refreshLayers();
+          showToast(`Added hexagon layer "${result.name}".`, "success");
+          return { ok: true, data: result };
+        }
+        case "apply_buffer": {
+          let captured = null;
+          engine.bufferSelectedFeature(args.distance, args.unit || "meters", (message, type) => {
+            captured = { message, type };
+            showToast(message, type);
+          });
+          refreshLayers();
+          if (captured?.type === "error") return { ok: false, error: captured.message };
+          return { ok: true, data: { message: captured?.message } };
+        }
+        case "create_buffer_result_layer": {
+          const result = engine.createBufferResultLayer(args.name);
+          engine.clearBufferResult();
+          refreshLayers();
+          showToast(`Added buffer layer "${result.name}".`, "success");
+          return { ok: true, data: result };
+        }
+        case "add_portal_layer": {
+          if (!args.item?.id || !args.item?.url) {
+            return { ok: false, error: "item must be an object with id/title/url from a prior search_portal_layers result." };
+          }
+          const layerId = await engine.addPortalLayer(args.item);
+          refreshLayers();
+          showToast(`Added "${args.item.title}" to layers.`, "success");
+          // Returns the real layer id so a follow-up rename_layer call (a
+          // separate tool call - see mcp-chat-proxy/chatLoop.js's system
+          // prompt) has something to reference. A single add_portal_layer
+          // call used to also accept an optional custom `name` directly,
+          // but qwen2.5:1.5b reliably dropped that field even once it was
+          // marked required in the schema - splitting "add" and "rename"
+          // into two separate, single-purpose tool calls mirrors the
+          // apply_buffer -> create_buffer_result_layer chain, which this
+          // model already handles correctly.
+          return { ok: true, data: { id: layerId, title: args.item.title } };
+        }
+        case "rename_layer": {
+          engine.renameLayer(args.id, args.name);
+          refreshLayers();
+          showToast(`Renamed layer to "${args.name}".`, "success");
+          return { ok: true, data: { id: args.id, name: args.name } };
+        }
+        case "set_layer_filter": {
+          const layerName = engine.getLayers().find((l) => l?.id === args.id)?.name || args.id;
+          const { fields } = await engine.getLayerFieldSchema(args.id);
+
+          // Correct the model's field names against the real schema (see
+          // resolveFieldName above) and, when one genuinely doesn't exist,
+          // fail with the actual field list rather than the engine's bare
+          // '"name" is not a field on this layer.' - the model's next attempt
+          // is then informed instead of another guess.
+          const conditions = [];
+          const corrections = [];
+
+          for (const rawCondition of args.conditions || []) {
+            const condition = { ...rawCondition, operator: resolveOperatorToken(rawCondition.operator) };
+
+            // LayerFilterExpression's usableConditions silently drops a
+            // field-less condition, which is right for the manual UI (a
+            // half-typed row shouldn't error on every keystroke) but wrong
+            // here: a completed tool call that omitted the field would
+            // silently clear the filter instead of applying one.
+            let field = condition.field ? resolveFieldName(condition.field, fields) : null;
+
+            // The model named no field this layer has. Rather than bouncing it
+            // back to guess again, ask the data which field actually holds the
+            // value it's looking for - a name like "Tampines" identifies its
+            // own field far more reliably than a 1.5B model does.
+            if (!field) {
+              const inferred = await engine.inferFieldForValue(args.id, condition.value);
+              if (inferred) {
+                field = inferred.field;
+                corrections.push(`searched ${field} (the field containing "${condition.value}")`);
+
+                // The probe found the value as a SUBSTRING of the real value
+                // (e.g. NAME is "TAMPINES MRT STATION", not "Tampines"), which
+                // makes both whole-value comparisons provably useless: `=`
+                // matches nothing and empties the layer, `<>` matches every
+                // row and filters nothing. Each is promoted to its substring
+                // equivalent, preserving include-vs-exclude intent. Promoted
+                // on that evidence only - never on a hunch, and never when the
+                // value IS the whole field value.
+                const substringEquivalent = { "=": "contains", "<>": "doesNotContain" }[condition.operator];
+                if (
+                  substringEquivalent &&
+                  inferred.matchedValue.toLowerCase() !== String(condition.value).toLowerCase()
+                ) {
+                  condition.operator = substringEquivalent;
+                  corrections.push(`matched ${field} by substring rather than exactly, since values look like "${inferred.matchedValue}"`);
+                }
+              }
+            }
+
+            if (!field) {
+              const available = fields.map((f) => f.name).join(", ") || "none";
+              return {
+                ok: false,
+                error: `"${condition.field}" is not a field on "${layerName}", and no field on it contains "${condition.value}". Its fields are: ${available}. Retry with one of those exact names.`
+              };
+            }
+            conditions.push({ ...condition, field });
+          }
+
+          const result = await engine.setLayerFilter(args.id, { conditions, logic: args.logic });
+          refreshLayers();
+          showToast(result.active ? `Filter applied to "${layerName}".` : `Filter cleared for "${layerName}".`, "success");
+          // `corrections` is surfaced to the model so its reply to the user
+          // describes the filter that was actually applied, not the one it
+          // asked for - silently substituting a field would otherwise have it
+          // confidently report the wrong thing.
+          return { ok: true, data: corrections.length ? { ...result, corrections } : result };
+        }
+        case "set_layer_style": {
+          engine.setLayerStyle(args.id, { color: args.color, borderWidth: args.borderWidth, opacity: args.opacity });
+          refreshLayers();
+          return { ok: true, data: { id: args.id } };
+        }
+        case "toggle_layer": {
+          engine.toggleLayer(args.id);
+          refreshLayers();
+          return { ok: true, data: { id: args.id } };
+        }
+        case "zoom_to_layer": {
+          await engine.zoomToLayer(args.id, showToast);
+          refreshLayers();
+          return { ok: true, data: { id: args.id } };
+        }
+        default:
+          return { ok: false, error: `Unknown action: ${name}` };
+      }
+    } catch (err) {
+      const message = err.message || "That action failed.";
+      showToast(message, "error");
+      return { ok: false, error: message };
+    }
+  }, [refreshLayers, showToast]);
+
   return (
     <div className="app">
       <button
@@ -916,6 +1212,15 @@ export default function ApplicationShell() {
           onCreateLayer={createHostedFeatureLayer}
           signedInUser={signedInUser}
         />
+
+        {CHAT_ENABLED && (
+          <ChatPanel
+            mapContext={mapContext}
+            onSendMessage={handleSendChatMessage}
+            onSubmitToolResult={handleSubmitChatToolResult}
+            onRunClientAction={runClientAction}
+          />
+        )}
       </div>
 
       <span className="sr-only" role="status" aria-live="polite">

@@ -653,6 +653,83 @@ describe("GISMapEngine.zoomToLayer", () => {
     expect(view.goTo).toHaveBeenCalledWith(engine.touristAttractionLayer.fullExtent);
   });
 
+  // fullExtent is the SERVICE's extent and ignores definitionExpression, so
+  // zooming a layer just filtered down to one station framed every station in
+  // the country - which reads as "the filter didn't work" even though it did.
+  describe("with an active filter", () => {
+    async function filteredEngine(view) {
+      const engine = new GISMapEngine();
+      engine.attachToView(view);
+      engine.mrtStationLayer.fields = [{ name: "NAME", type: "string" }];
+      await engine.setLayerFilter("mrtStations", {
+        conditions: [{ field: "NAME", operator: "contains", value: "Tampines" }]
+      });
+      return engine;
+    }
+
+    test("frames the filtered features' extent from queryExtent, not the service's fullExtent", async () => {
+      const view = makeView();
+      const engine = await filteredEngine(view);
+      engine.mrtStationLayer.queryExtent.mockResolvedValue({
+        count: 3,
+        extent: { xmin: 1, ymin: 1, xmax: 2, ymax: 2 }
+      });
+
+      await engine.zoomToLayer("mrtStations", jest.fn());
+
+      expect(engine.mrtStationLayer.queryExtent).toHaveBeenCalled();
+      expect(view.goTo).toHaveBeenCalledWith({ xmin: 1, ymin: 1, xmax: 2, ymax: 2 });
+      expect(view.goTo).not.toHaveBeenCalledWith(engine.mrtStationLayer.fullExtent);
+    });
+
+    // The whole point of the request that exposed this: one station left.
+    test("frames a single remaining feature by its center at a fixed scale, since its extent is degenerate", async () => {
+      const view = makeView();
+      const engine = await filteredEngine(view);
+
+      await engine.zoomToLayer("mrtStations", jest.fn());
+
+      expect(view.goTo).toHaveBeenCalledWith({ target: { x: 5, y: 5 }, scale: GISMapEngine.SINGLE_FEATURE_SCALE });
+    });
+
+    test("says so when the filter matches nothing, instead of zooming to the unfiltered extent", async () => {
+      const view = makeView();
+      const engine = await filteredEngine(view);
+      engine.mrtStationLayer.queryExtent.mockResolvedValue({ count: 0, extent: null });
+      const msg = jest.fn();
+
+      await engine.zoomToLayer("mrtStations", msg);
+
+      expect(view.goTo).not.toHaveBeenCalled();
+      expect(msg).toHaveBeenCalledWith("No features match this layer's current filter.", "error");
+    });
+
+    test("an unfiltered layer still uses fullExtent, with no extra query", async () => {
+      const view = makeView();
+      const engine = new GISMapEngine();
+      engine.attachToView(view);
+
+      await engine.zoomToLayer("mrtStations", jest.fn());
+
+      expect(engine.mrtStationLayer.queryExtent).not.toHaveBeenCalled();
+      expect(view.goTo).toHaveBeenCalledWith(engine.mrtStationLayer.fullExtent);
+    });
+
+    test("skips drawings graphics an active filter has hidden", async () => {
+      const view = makeView();
+      const engine = new GISMapEngine();
+      engine.attachToView(view);
+      const shown = { symbol: { type: "simple-marker" }, visible: true, attributes: { label: "keep" } };
+      const hidden = { symbol: { type: "simple-marker" }, visible: false, attributes: { label: "drop" } };
+      engine.drawLayer.add(shown);
+      engine.drawLayer.add(hidden);
+
+      await engine.zoomToLayer("drawings", jest.fn());
+
+      expect(view.goTo).toHaveBeenCalledWith([shown]);
+    });
+  });
+
   test("reports nothing-to-zoom-to when a loaded FeatureLayer has no fullExtent", async () => {
     const engine = new GISMapEngine();
     const view = makeView();
@@ -935,6 +1012,7 @@ describe("GISMapEngine portal layers", () => {
     expect(entry).toEqual({
       id,
       name: "Parks",
+      url: portalItem.url,
       visible: true,
       removable: true,
       renamable: true,
@@ -943,6 +1021,10 @@ describe("GISMapEngine portal layers", () => {
       styleGroups: [],
       filterable: true,
       filterDescription: null,
+      // The filter's own definition, for seeding LayerControlPanel's Filter
+      // form from what's actually applied (see filterInfoFor).
+      filterConditions: null,
+      filterLogic: "AND",
       annotatable: true,
       annotationField: null,
       editable: false,
@@ -2343,6 +2425,97 @@ describe("GISMapEngine Filter & Aggregate System", () => {
           { name: "count", kind: "number" }
         ])
       );
+    });
+  });
+
+  // getLayers() exposed only the human-readable summary, so the Filter form had
+  // nothing to seed its condition rows from and rendered a blank row next to
+  // the layer's own "filtered" badge - and pressing Apply Filter on that blank
+  // row cleared the filter.
+  describe("filter definition on getLayers()", () => {
+    test("reports an active filter's own conditions and logic, not just its description", async () => {
+      await engine.setLayerFilter("touristAttractions", {
+        conditions: [{ field: "NAME", operator: "contains", value: "Tampines" }],
+        logic: "OR"
+      });
+
+      const layer = engine.getLayers().find((l) => l.id === "touristAttractions");
+      expect(layer.filterDescription).toBe("NAME contains Tampines");
+      expect(layer.filterConditions).toEqual([{ field: "NAME", operator: "contains", value: "Tampines" }]);
+      expect(layer.filterLogic).toBe("OR");
+    });
+
+    test("reports null conditions for an unfiltered layer", () => {
+      const layer = engine.getLayers().find((l) => l.id === "touristAttractions");
+      expect(layer.filterConditions).toBeNull();
+      expect(layer.filterDescription).toBeNull();
+    });
+
+    test("copies the conditions so the panel's own edits cannot mutate engine state", async () => {
+      const conditions = [{ field: "NAME", operator: "contains", value: "Tampines" }];
+      await engine.setLayerFilter("touristAttractions", { conditions });
+
+      const reported = engine.getLayers().find((l) => l.id === "touristAttractions").filterConditions;
+      reported[0].value = "Bedok";
+
+      expect(engine.layerFilters.get("touristAttractions").conditions[0].value).toBe("Tampines");
+    });
+  });
+
+  // Used only by the Chatbot / MCP System, where the field name is typed by a
+  // model rather than picked from the Filter UI's <select> - see
+  // knowledge/features/chatbot-mcp-system.md.
+  describe("inferFieldForValue", () => {
+    beforeEach(() => {
+      // The SDK normalizes a loaded layer's field types to its own lowercase
+      // vocabulary, which is what this method filters on.
+      engine.mrtStationLayer.fields = [
+        { name: "OBJECTID_1", type: "oid" },
+        { name: "TYPE", type: "string" },
+        { name: "NAME", type: "string" },
+        { name: "Shape__Area", type: "double" }
+      ];
+    });
+
+    test("returns the string field that actually contains the value, plus the value it found", async () => {
+      engine.mrtStationLayer.queryFeatures = jest.fn().mockResolvedValue({
+        features: [{ attributes: { TYPE: "MRT", NAME: "TAMPINES MRT STATION" } }]
+      });
+
+      expect(await engine.inferFieldForValue("mrtStations", "Tampines")).toEqual({
+        field: "NAME",
+        matchedValue: "TAMPINES MRT STATION"
+      });
+
+      // Case-insensitive LIKE across every string field, and only string
+      // fields - the same query shape searchHostedLayer uses.
+      const { where, outFields } = engine.mrtStationLayer.queryFeatures.mock.calls[0][0];
+      expect(where).toBe("UPPER(TYPE) LIKE UPPER('%Tampines%') OR UPPER(NAME) LIKE UPPER('%Tampines%')");
+      expect(outFields).toEqual(["TYPE", "NAME"]);
+    });
+
+    test("escapes a single quote in the value rather than breaking the where clause", async () => {
+      engine.mrtStationLayer.queryFeatures = jest.fn().mockResolvedValue({ features: [] });
+
+      await engine.inferFieldForValue("mrtStations", "St Joseph's");
+
+      expect(engine.mrtStationLayer.queryFeatures.mock.calls[0][0].where).toContain("%St Joseph''s%");
+    });
+
+    test("returns null when no feature contains the value, and for a layer with no queryFeatures", async () => {
+      engine.mrtStationLayer.queryFeatures = jest.fn().mockResolvedValue({ features: [] });
+      expect(await engine.inferFieldForValue("mrtStations", "Nowhere")).toBeNull();
+      // drawings is a GraphicsLayer - nothing to query.
+      expect(await engine.inferFieldForValue("drawings", "Tampines")).toBeNull();
+      expect(await engine.inferFieldForValue("mrtStations", "  ")).toBeNull();
+    });
+
+    test("returns null instead of throwing when the query itself fails", async () => {
+      jest.spyOn(console, "error").mockImplementation(() => {});
+      engine.mrtStationLayer.queryFeatures = jest.fn().mockRejectedValue(new Error("service down"));
+
+      expect(await engine.inferFieldForValue("mrtStations", "Tampines")).toBeNull();
+      console.error.mockRestore();
     });
   });
 

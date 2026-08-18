@@ -62,6 +62,13 @@ export const FILTER_OPERATORS = {
   "<":          { label: "less than",       sql: "<",  arity: 1, kinds: ["number", "date"] },
   "<=":         { label: "at most",         sql: "<=", arity: 1, kinds: ["number", "date"] },
   contains:     { label: "contains",        sql: "LIKE", arity: 1, kinds: ["string"], wrap: (v) => `%${v}%` },
+  // The negation of `contains`, and the only way to express "exclude anything
+  // mentioning X" on text data. Without it, excluding a feature whose field
+  // value is longer than the search term ("TAMPINES MRT STATION" vs
+  // "Tampines") could only be attempted with `<>`, which compares the WHOLE
+  // value and so silently matches every row - a filter that applies cleanly
+  // and filters nothing.
+  doesNotContain: { label: "does not contain", sql: "NOT LIKE", arity: 1, kinds: ["string"], wrap: (v) => `%${v}%` },
   startsWith:   { label: "starts with",     sql: "LIKE", arity: 1, kinds: ["string"], wrap: (v) => `${v}%` },
   endsWith:     { label: "ends with",       sql: "LIKE", arity: 1, kinds: ["string"], wrap: (v) => `%${v}` },
   isNull:       { label: "is empty",        sql: "IS NULL",     arity: 0, kinds: ["string", "number", "date", "other"] },
@@ -202,6 +209,7 @@ function matchesCondition(attributes, fields, condition) {
 
   switch (condition.operator) {
     case "contains":   return haystack.includes(needle);
+    case "doesNotContain": return !haystack.includes(needle);
     case "startsWith": return haystack.startsWith(needle);
     case "endsWith":   return haystack.endsWith(needle);
     case "=":          return compareValues(field.kind, actual, condition.value) === 0;

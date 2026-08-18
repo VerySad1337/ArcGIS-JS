@@ -77,6 +77,15 @@ export const BASEMAP_OPTIONS = [
 // standard Web Mercator XYZ tile scheme - the same z/x/y OneMap's docs
 // describe, just ArcGIS's naming for them.
 export const ONEMAP_TILE_URL_TEMPLATE = "https://www.onemap.gov.sg/maps/tiles/Default/{level}/{col}/{row}.png";
+
+// Whether the local-model MCP chatbot panel (ChatPanel.jsx) renders at all
+// - see knowledge/features/chatbot-mcp-system.md and mcp-chat-proxy/README.md.
+// Defaults to enabled; set VITE_CHAT_ENABLED=false to ship a build with the
+// feature hidden entirely (e.g. a deployment with no mcp-chat-proxy/Ollama
+// running). Same getEnv/window.__ENV__ runtime-override mechanism as every
+// other VITE_-prefixed value here - a container can flip this at start time
+// without a rebuild, same as VITE_ARCGIS_PORTAL_URL above.
+export const CHAT_ENABLED = getEnv("VITE_CHAT_ENABLED") !== "false";
 export const ONEMAP_ATTRIBUTION = "Map data © OneMap, Singapore Land Authority";
 
 // The subset of BASEMAP_OPTIONS that are raster imagery - drives

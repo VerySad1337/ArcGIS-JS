@@ -1,0 +1,18 @@
+{
+  "name": "mcp-chat-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-model chatbot backend: runs an MCP server for ArcGIS Portal/feature-layer read tools, brokers client-executed map-action tools back to the browser, and talks to an operator-configured Ollama (or compatible) server - no model, host, port, or tool name is hardcoded, see README.md.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.19.2",
+    "undici": "^6.19.8",
+    "zod": "^3.23.8"
+  }
+}

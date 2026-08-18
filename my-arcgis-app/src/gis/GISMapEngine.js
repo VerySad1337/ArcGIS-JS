@@ -1499,6 +1499,60 @@ export default class GISMapEngine {
     return { fields };
   }
 
+  // Infers WHICH of a layer's own string fields actually contains `value`, by
+  // asking the service instead of guessing from field names - the same
+  // "UPPER(f) LIKE UPPER('%text%')" across-every-string-field query
+  // searchHostedLayer already uses for global feature search, but returning
+  // the matching field name rather than the features. One round trip: the
+  // matched feature's own attributes are read back to see which candidate
+  // field the value was actually found in.
+  //
+  // Added for the Chatbot / MCP System (knowledge/features/chatbot-mcp-system.md):
+  // the chat's model has to name a filter field itself, and a small local
+  // model names a generic one ("name", "title") rather than the layer's real
+  // schema. No UI path needs this - the manual Filter UI's field <select>
+  // makes a wrong field impossible - so nothing else calls it.
+  //
+  // Returns { field, matchedValue } or null. `drawings` and any other
+  // GraphicsLayer return null (no queryFeatures), as does a layer with no
+  // string fields or no feature containing the value; the caller falls back
+  // to reporting the real field list.
+  async inferFieldForValue(id, value) {
+    const text = String(value ?? "").trim();
+    if (!text) return null;
+
+    const layer = this.buildLayerMap()[id];
+    if (!layer || typeof layer.queryFeatures !== "function" || typeof layer.load !== "function") return null;
+
+    try {
+      await layer.load();
+      // `type === "string"` (not "esriFieldTypeString"): the SDK normalizes a
+      // loaded layer's field types to its own lowercase vocabulary, same as
+      // geometryType - see the geometryType-format regression in
+      // knowledge/index.md's Heatmap System section.
+      const stringFields = (layer.fields || []).filter((f) => f.type === "string").map((f) => f.name);
+      if (!stringFields.length) return null;
+
+      const escaped = GISMapEngine.escapeForWhereClause(text);
+      const result = await layer.queryFeatures({
+        where: stringFields.map((f) => `UPPER(${f}) LIKE UPPER('%${escaped}%')`).join(" OR "),
+        outFields: stringFields,
+        returnGeometry: false,
+        num: 1
+      });
+
+      const attributes = result?.features?.[0]?.attributes;
+      if (!attributes) return null;
+
+      const needle = text.toLowerCase();
+      const field = stringFields.find((f) => String(attributes[f] ?? "").toLowerCase().includes(needle));
+      return field ? { field, matchedValue: String(attributes[field]) } : null;
+    } catch (err) {
+      console.error(`Field inference failed for layer "${id}":`, err);
+      return null;
+    }
+  }
+
   // Sets graphic.visible to reflect the currently active drawings filter (if
   // any). Called both when applying/clearing a filter over the whole layer
   // and per-graphic, for a graphic that's created *after* a filter is
@@ -1589,6 +1643,24 @@ export default class GISMapEngine {
   getLayerFilterDescription(id) {
     const filter = this.layerFilters.get(id);
     return filter ? describeFilter(filter) || null : null;
+  }
+
+  // The active filter's own definition, alongside its human-readable summary.
+  // getLayers() used to expose only the summary, so LayerControlPanel's Filter
+  // form had nothing to seed its condition rows from and always rendered a
+  // blank row - next to a "filtered" badge and the summary text, which read as
+  // "the filter is applied but the condition is empty". Worse, pressing Apply
+  // Filter on that blank row cleared the active filter (usableConditions drops
+  // an empty condition, so the where clause comes out null), meaning the UI
+  // invited the user to silently discard a filter they could see was applied.
+  // Conditions are copied, so the panel's local edits can't mutate engine state.
+  filterInfoFor(id) {
+    const filter = this.layerFilters.get(id);
+    return {
+      filterDescription: this.getLayerFilterDescription(id),
+      filterConditions: filter?.conditions?.length ? filter.conditions.map((c) => ({ ...c })) : null,
+      filterLogic: filter?.logic || "AND"
+    };
   }
 
   // ---------------------------------------------------------------------
@@ -2451,12 +2523,15 @@ export default class GISMapEngine {
       touristAttractions: {
         id: "touristAttractions",
         name: "Tourist Attractions",
+        // See the portal-layer loop below's identical `url` field comment -
+        // the chat feature's mapContext is the only current consumer.
+        url: this.touristAttractionLayer?.url,
         visible: this.touristAttractionLayer?.visible,
         styleGroups: touristAttractionSymbol
           ? [this.attachRendererInfo(this.symbolToStyleGroup(touristAttractionSymbol, "Tourist Attractions"), "touristAttractions", undefined, touristAttractionsIsPoint)]
           : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("touristAttractions"),
+        ...this.filterInfoFor("touristAttractions"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("touristAttractions"),
         editable: isEditable(this.touristAttractionLayer),
@@ -2466,12 +2541,13 @@ export default class GISMapEngine {
       mrtStations: {
         id: "mrtStations",
         name: "MRT Stations",
+        url: this.mrtStationLayer?.url,
         visible: this.mrtStationLayer?.visible,
         styleGroups: mrtStationSymbol
           ? [this.attachRendererInfo(this.symbolToStyleGroup(mrtStationSymbol, "Stations"), "mrtStations", undefined, mrtStationsIsPoint)]
           : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("mrtStations"),
+        ...this.filterInfoFor("mrtStations"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("mrtStations"),
         editable: isEditable(this.mrtStationLayer),
@@ -2481,12 +2557,13 @@ export default class GISMapEngine {
       mrtLines: {
         id: "mrtLines",
         name: "MRT Lines",
+        url: this.mrtLineLayer?.url,
         visible: this.mrtLineLayer?.visible,
         styleGroups: mrtLineSymbol
           ? [this.attachRendererInfo(this.symbolToStyleGroup(mrtLineSymbol, "Lines"), "mrtLines")]
           : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("mrtLines"),
+        ...this.filterInfoFor("mrtLines"),
         annotatable: true,
         annotationField: this.getLayerAnnotationField("mrtLines"),
         editable: isEditable(this.mrtLineLayer),
@@ -2499,7 +2576,7 @@ export default class GISMapEngine {
         visible: this.drawLayer?.visible,
         styleGroups: drawingsGroups,
         filterable: true,
-        filterDescription: this.getLayerFilterDescription("drawings"),
+        ...this.filterInfoFor("drawings"),
         // Local, in-memory graphics layer - always editable, signed in or
         // not, same reasoning as ApplicationShell's canEditSelectedFeature.
         editable: true
@@ -2543,12 +2620,18 @@ export default class GISMapEngine {
         removable: true,
         renamable: true,
         createdAt: meta?.createdAt,
+        // Exposes the layer's own REST endpoint so the chat feature
+        // (ApplicationShell's mapContext) can build an allow-list of URLs
+        // the mcp-chat-proxy sidecar is permitted to query on this user's
+        // behalf - see knowledge/features/chatbot-mcp-system.md. Not used
+        // by anything else in the UI.
+        url: layer.url,
         layerType: geometryTypeLabel(layer.geometryType),
         styleGroups: portalSymbol
           ? [this.attachRendererInfo(this.symbolToStyleGroup(portalSymbol, meta?.title || "Portal Layer"), id, undefined, portalIsPoint)]
           : [],
         filterable: true,
-        filterDescription: this.getLayerFilterDescription(id),
+        ...this.filterInfoFor(id),
         annotatable: true,
         annotationField: this.getLayerAnnotationField(id),
         editable: isEditable(layer),
@@ -2572,6 +2655,7 @@ export default class GISMapEngine {
       lookup[id] = {
         id,
         name: meta?.title || "Heatmap",
+        url: meta?.url,
         visible: layer.visible,
         removable: true,
         renamable: true,
@@ -3557,9 +3641,17 @@ export default class GISMapEngine {
     // FeatureLayers (touristAttractions/mrt*) use their
     // service-provided fullExtent, available once loaded.
     if (layer.graphics) {
-      const graphics = layer.graphics.toArray();
+      // Only the graphics an active filter actually left showing - a drawings
+      // filter works by setting graphic.visible (see applyDrawingsFilterToGraphic),
+      // so framing every graphic would frame the ones the filter just hid too.
+      const graphics = layer.graphics.toArray().filter((g) => g.visible !== false);
       if (graphics.length === 0) {
-        msg?.("Nothing to zoom to on this layer yet.", "error");
+        msg?.(
+          this.layerFilters.has(id)
+            ? "No features match this layer's current filter."
+            : "Nothing to zoom to on this layer yet.",
+          "error"
+        );
         return;
       }
       try {
@@ -3572,14 +3664,52 @@ export default class GISMapEngine {
 
     try {
       if (typeof layer.load === "function") await layer.load();
-      if (!layer.fullExtent) {
+
+      // `fullExtent` is the SERVICE's own advertised extent and takes no
+      // account of `definitionExpression` - so zooming a *filtered* layer
+      // framed every feature the service has rather than the handful the
+      // filter left, which reads as "the filter didn't work" even when it
+      // did (one surviving station, drawn as a dot in a Singapore-wide view).
+      // `queryExtent` applies the layer's own definitionExpression, so it
+      // frames what is actually being drawn. Only consulted when a filter is
+      // genuinely active: an unfiltered zoom keeps using fullExtent, with no
+      // added round trip and no change in behavior.
+      const filtered =
+        this.layerFilters.has(id) && typeof layer.queryExtent === "function" ? await layer.queryExtent() : null;
+
+      if (filtered && filtered.count === 0) {
+        msg?.("No features match this layer's current filter.", "error");
+        return;
+      }
+
+      const extent = filtered?.extent || layer.fullExtent;
+      if (!extent) {
         msg?.("Nothing to zoom to on this layer yet.", "error");
         return;
       }
-      await this.currentView.goTo(layer.fullExtent);
+      await this.currentView.goTo(GISMapEngine.zoomTargetForExtent(extent));
     } catch {
       msg?.("Could not zoom to this layer.", "error");
     }
+  }
+
+  // Scale to frame a single feature at, when its extent has no extent to
+  // speak of - roughly neighbourhood level, the same order of magnitude
+  // zoomToSearchResult's own single-feature framing lands on.
+  static SINGLE_FEATURE_SCALE = 5000;
+
+  // A filter that leaves exactly one point feature produces a degenerate
+  // extent (xmin === xmax, ymin === ymax). goTo either rejects that or zooms
+  // absurdly deep, so it's framed by its own center at a fixed scale instead.
+  static zoomTargetForExtent(extent) {
+    const width = (extent.xmax ?? 0) - (extent.xmin ?? 0);
+    const height = (extent.ymax ?? 0) - (extent.ymin ?? 0);
+    if (width > 0 || height > 0) return extent;
+
+    const target =
+      extent.center ||
+      { type: "point", x: extent.xmin ?? 0, y: extent.ymin ?? 0, spatialReference: extent.spatialReference };
+    return { target, scale: GISMapEngine.SINGLE_FEATURE_SCALE };
   }
 
   // Applies Simple-mode symbology - fill/line color, border (outline)

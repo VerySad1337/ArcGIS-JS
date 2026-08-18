@@ -38,10 +38,12 @@ services:
       VITE_ARCGIS_API_KEY: "${VITE_ARCGIS_API_KEY:?missing - rerun with --env-file my-arcgis-app/.env}"
       VITE_ARCGIS_OAUTH_CLIENT_ID: "${VITE_ARCGIS_OAUTH_CLIENT_ID:-}"
       VITE_ARCGIS_PORTAL_URL: "${VITE_ARCGIS_PORTAL_URL:-}"
+      VITE_CHAT_ENABLED: "${VITE_CHAT_ENABLED:-true}"
     ports:
       - "8080:443"
     depends_on:
       - onemap-proxy
+      - mcp-chat-proxy
 
   # Holds the OneMap account credential server-side and hands the frontend
   # short-lived tokens via nginx's /api/onemap/ reverse-proxy rule (see
@@ -56,3 +58,37 @@ services:
     environment:
       ONEMAP_EMAIL: "${ONEMAP_EMAIL:?missing - set in my-arcgis-app/.env or --env-file}"
       ONEMAP_PASSWORD: "${ONEMAP_PASSWORD:?missing - set in my-arcgis-app/.env or --env-file}"
+
+  # Local-model chatbot backend - see mcp-chat-proxy/README.md and
+  # knowledge/features/chatbot-mcp-system.md. Every OLLAMA_*/model/tool
+  # value is env-driven (no default model is assumed) - required vars
+  # below fail the container's own startup check (config.js) if unset.
+  # Not reachable from outside the compose network - only arcgis-app's
+  # nginx talks to it, over the Docker-internal service name below, same
+  # as onemap-proxy.
+  mcp-chat-proxy:
+    build:
+      context: ./mcp-chat-proxy
+    environment:
+      OLLAMA_URL: "${OLLAMA_URL:-http://ollama:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:?missing - set the Ollama model tag to use in my-arcgis-app/.env or --env-file}"
+      OLLAMA_TEMPERATURE: "${OLLAMA_TEMPERATURE:-}"
+      OLLAMA_NUM_CTX: "${OLLAMA_NUM_CTX:-}"
+      OLLAMA_REQUEST_TIMEOUT_MS: "${OLLAMA_REQUEST_TIMEOUT_MS:-}"
+      ARCGIS_PORTAL_URL: "${VITE_ARCGIS_PORTAL_URL:-https://www.arcgis.com}"
+      CHAT_ENABLED_TOOLS: "${CHAT_ENABLED_TOOLS:-}"
+    depends_on:
+      - ollama
+
+  # Optional convenience default, not load-bearing infrastructure: if you
+  # already run Ollama elsewhere, point OLLAMA_URL (above) at it and remove
+  # this service (or `docker compose up --scale ollama=0`) instead of
+  # running a second copy. Named volume persists pulled model weights
+  # across container recreation. Not published to the host.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  ollama-models:
