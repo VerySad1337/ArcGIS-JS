@@ -43,6 +43,16 @@ function buildSystemMessage(mapContext) {
       // model having asked for one - this stops the model from dutifully
       // repeating a rename that has already been applied.
       "Never claim a layer was renamed unless a rename_layer call appears in this conversation with a successful result. If one already applied the name the user asked for, the rename is done - confirm it, do not call rename_layer again.",
+      // Nothing in the transcript tells the model whether the user has
+      // clicked a feature, and it cannot see the map. Left to infer, it
+      // reports "select a feature first" back to a user who just named the
+      // feature in plain words - the request was answerable, the model just
+      // had no way in. select_feature is that way in; this states the
+      // ordering explicitly because a small model does not reliably derive a
+      // two-step plan from two independent tool descriptions.
+      "Buffering acts on the SELECTED feature. If the user names a feature instead of having clicked it (e.g. \"buffer Tampines MRT by 500m\"), call select_feature with their words first, then apply_buffer. Never tell the user to click the map themselves - select_feature is how you do it for them.",
+      "select_feature reports the feature it actually selected, plus any other close matches. Tell the user which one you acted on when there was more than one.",
+      "For \"how many\"/total/average questions about a layer already on the map, prefer get_layer_aggregate - it respects that layer's active filter, and is the only option for the local Drawings layer. Use get_layer_statistics only for a layer you are querying by url.",
       "Only pass a `url` to query_layer_features/get_layer_statistics that appears in the current map layers list below.",
       // Each layer entry in the map state carries a `fields` array (see
       // ApplicationShell's mapContext) precisely so the model never has to

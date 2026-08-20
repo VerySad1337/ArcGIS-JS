@@ -975,6 +975,81 @@ export default function ApplicationShell() {
           showToast(`Added hexagon layer "${result.name}".`, "success");
           return { ok: true, data: result };
         }
+        // The chat's own way to establish a feature selection. Everything
+        // selection-scoped (apply_buffer above all) previously depended on the
+        // user having clicked the map themselves - a model asked to "buffer
+        // Tampines MRT by 500m" could only ever report
+        // "Select a feature on the map first."
+        //
+        // Deliberately routed through searchFeatures + zoomToSearchResult, the
+        // exact pair GlobalSearchPanel's own result list uses, rather than a
+        // new selection path: zoomToSearchResult already sets
+        // selectedGraphic/selectedLayerId and fires onFeatureSelect, so a
+        // chat-driven selection lands the app in the identical state a click
+        // does, attribute popup included.
+        case "select_feature": {
+          const query = String(args.query || "").trim();
+          if (!query) return { ok: false, error: "select_feature needs a non-empty query." };
+
+          const matches = await engine.searchFeatures(query);
+          const scoped = args.layerId ? matches.filter((m) => m.layerId === args.layerId) : matches;
+
+          if (scoped.length === 0) {
+            // Informative rather than bare, same contract as set_layer_filter's
+            // unresolvable-field error: tell the model where it actually looked
+            // so a retry is informed instead of another guess. Un-toasted - a
+            // model-facing correction mid-turn, not a user-facing failure.
+            const scope = args.layerId ? `layer "${args.layerId}"` : "any searchable layer";
+            const elsewhere = args.layerId && matches.length
+              ? ` It does match on: ${[...new Set(matches.map((m) => m.layerId))].join(", ")}.`
+              : "";
+            return { ok: false, error: `No feature matching "${query}" on ${scope}.${elsewhere}` };
+          }
+
+          const match = scoped[0];
+          await engine.zoomToSearchResult(match);
+
+          // zoomToSearchResult returns early (selecting nothing) when there is
+          // no live view or the camera move fails, and reports that only by
+          // leaving the selection untouched. Check rather than assume - an
+          // ok:true the model then describes as done would be a false success.
+          if (engine.selectedLayerId !== match.layerId) {
+            return { ok: false, error: `Found "${match.label}" but could not select it - the map view did not respond.` };
+          }
+
+          refreshLayers();
+          showToast(`Selected "${match.label}" on ${match.layerTitle}.`, "success");
+          return {
+            ok: true,
+            data: {
+              layerId: match.layerId,
+              layerTitle: match.layerTitle,
+              label: match.label,
+              attributes: match.attributes,
+              matchCount: scoped.length,
+              // Capped: a search can return up to 10 per layer, and the point
+              // is to let the model say "I picked X, you may have meant Y",
+              // not to hand it the whole result set to re-rank.
+              otherMatches: scoped.slice(1, 4).map((m) => ({ label: m.label, layerTitle: m.layerTitle }))
+            }
+          };
+        }
+        // Filter-aware counting/aggregation. Distinct from the server-side
+        // get_layer_statistics tool on purpose: that one queries the service
+        // URL and therefore ignores definitionExpression, while this reads the
+        // live engine and so answers "how many are showing right now". It is
+        // also the only aggregate available for `drawings`, which has no
+        // service to query at all.
+        case "get_layer_aggregate": {
+          const aggregate = await engine.getLayerAggregate(args.id, {
+            field: args.field,
+            statistics: Array.isArray(args.statistics) ? args.statistics : []
+          });
+          // No toast: this reads, it does not change the map. The manual
+          // Aggregate control in LayerControlPanel shows its result inline for
+          // the same reason.
+          return { ok: true, data: aggregate };
+        }
         case "apply_buffer": {
           let captured = null;
           engine.bufferSelectedFeature(args.distance, args.unit || "meters", (message, type) => {

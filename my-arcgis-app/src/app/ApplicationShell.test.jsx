@@ -119,6 +119,34 @@ jest.mock("../components/ChatPanel", () => (props) => (
     </button>
     <button
       onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("select_feature", { query: "Tampines" });
+      }}
+    >
+      run-select-feature
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("select_feature", {
+          query: "Tampines",
+          layerId: "touristAttractions"
+        });
+      }}
+    >
+      run-select-feature-scoped
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("get_layer_aggregate", {
+          id: "mrtStations",
+          field: "RIDERSHIP",
+          statistics: ["sum", "avg"]
+        });
+      }}
+    >
+      run-get-layer-aggregate
+    </button>
+    <button
+      onClick={async () => {
         lastClientActionOutcome = await props.onRunClientAction("set_layer_filter", {
           id: "mrtStations",
           conditions: [{ field: "name", operator: "contains", value: "Tampines" }]
@@ -492,6 +520,116 @@ describe("ApplicationShell", () => {
     });
     expect(engine.renameLayer).not.toHaveBeenCalled();
     expect(await screen.findByText('Added "Parks" to layers.')).toBeInTheDocument();
+  });
+
+  // Selection-scoped actions (apply_buffer above all) used to be reachable
+  // only after the user clicked the map themselves, so a model asked to
+  // "buffer Tampines MRT by 500m" could do nothing but tell the user to go
+  // click it. select_feature is the chat's own way in, routed through the
+  // same searchFeatures + zoomToSearchResult pair GlobalSearchPanel uses so
+  // the resulting app state is identical to a click.
+  describe("runClientAction select_feature", () => {
+    const tampines = {
+      type: "feature",
+      layerId: "mrtStations",
+      layerTitle: "MRT Stations",
+      label: "TAMPINES MRT STATION",
+      attributes: { NAME: "TAMPINES MRT STATION" },
+      objectIdField: "OBJECTID",
+      geometry: { type: "point" },
+      graphic: {}
+    };
+
+    test("selects the best match, zooms to it, and reports what it selected", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.searchFeatures.mockResolvedValue([tampines]);
+      engine.zoomToSearchResult.mockImplementation(async () => {
+        engine.selectedLayerId = "mrtStations";
+      });
+
+      await user.click(screen.getByText("run-select-feature"));
+
+      expect(engine.searchFeatures).toHaveBeenCalledWith("Tampines");
+      expect(engine.zoomToSearchResult).toHaveBeenCalledWith(tampines);
+      expect(lastClientActionOutcome.ok).toBe(true);
+      expect(lastClientActionOutcome.data.label).toBe("TAMPINES MRT STATION");
+      expect(await screen.findByText('Selected "TAMPINES MRT STATION" on MRT Stations.')).toBeInTheDocument();
+    });
+
+    test("reports the other close matches so the model can say which one it picked", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.searchFeatures.mockResolvedValue([
+        tampines,
+        { ...tampines, label: "TAMPINES EAST MRT STATION" },
+        { ...tampines, label: "TAMPINES WEST MRT STATION" }
+      ]);
+      engine.zoomToSearchResult.mockImplementation(async () => {
+        engine.selectedLayerId = "mrtStations";
+      });
+
+      await user.click(screen.getByText("run-select-feature"));
+
+      expect(lastClientActionOutcome.data.matchCount).toBe(3);
+      expect(lastClientActionOutcome.data.otherMatches).toEqual([
+        { label: "TAMPINES EAST MRT STATION", layerTitle: "MRT Stations" },
+        { label: "TAMPINES WEST MRT STATION", layerTitle: "MRT Stations" }
+      ]);
+    });
+
+    test("scoping to a layer that has no match says where it does match instead", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.searchFeatures.mockResolvedValue([tampines]);
+
+      await user.click(screen.getByText("run-select-feature-scoped"));
+
+      expect(engine.zoomToSearchResult).not.toHaveBeenCalled();
+      expect(lastClientActionOutcome.ok).toBe(false);
+      expect(lastClientActionOutcome.error).toContain("touristAttractions");
+      expect(lastClientActionOutcome.error).toContain("mrtStations");
+    });
+
+    test("a match the view refuses to select is reported as a failure, not a success", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      engine.searchFeatures.mockResolvedValue([tampines]);
+      // zoomToSearchResult returns early, selecting nothing, when there is no
+      // live view or goTo throws - it signals that only by leaving the
+      // selection untouched.
+      engine.zoomToSearchResult.mockResolvedValue(undefined);
+
+      await user.click(screen.getByText("run-select-feature"));
+
+      expect(lastClientActionOutcome.ok).toBe(false);
+      expect(lastClientActionOutcome.error).toContain("could not select it");
+    });
+  });
+
+  test("runClientAction get_layer_aggregate returns the filter-aware count without toasting", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.getLayerAggregate.mockResolvedValue({
+      id: "mrtStations",
+      name: "MRT Stations",
+      count: 4,
+      stats: { sum: 100, avg: 25 }
+    });
+
+    await user.click(screen.getByText("run-get-layer-aggregate"));
+
+    expect(engine.getLayerAggregate).toHaveBeenCalledWith("mrtStations", {
+      field: "RIDERSHIP",
+      statistics: ["sum", "avg"]
+    });
+    expect(lastClientActionOutcome.ok).toBe(true);
+    expect(lastClientActionOutcome.data.count).toBe(4);
   });
 
   test("runClientAction rename_layer calls engine.renameLayer and shows a toast", async () => {

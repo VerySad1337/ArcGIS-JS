@@ -124,9 +124,54 @@ const CLIENT_TOOLS = [
     domain: "client",
     type: "function",
     function: {
+      name: "select_feature",
+      description:
+        "Select a single map feature by describing it in words, exactly as clicking it on the map would (GISMapEngine.searchFeatures + zoomToSearchResult). Searches every string field of every searchable layer - Tourist Attractions, MRT Stations, MRT Lines, Drawings and any portal layer - zooms to the best match, opens its attribute popup, and makes it the selected feature. This is the ONLY way to establish a selection without the user clicking the map themselves, so call it first whenever the user names a feature and asks for something that acts on a selection (apply_buffer above all). The result reports the feature actually selected and any other close matches, so say which one you acted on.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Text to match against the feature's attribute values, e.g. \"Tampines\" or \"Marina Bay Sands\". Use the words the user used; do not guess a field name - every string field is searched."
+          },
+          layerId: {
+            type: "string",
+            description: "Optional. Restrict the search to one layer id from the map context's layer list. Omit to search every searchable layer."
+          }
+        },
+        required: ["query"]
+      }
+    }
+  },
+  {
+    domain: "client",
+    type: "function",
+    function: {
+      name: "get_layer_aggregate",
+      description:
+        "Count features on a layer already on the map, and optionally compute sum/avg/min/max over one numeric field (GISMapEngine.getLayerAggregate). Unlike get_layer_statistics, this runs in the browser and honours the layer's ACTIVE FILTER, so it answers \"how many are showing now\" rather than \"how many exist in the service\" - use it after set_layer_filter, and for the local Drawings layer, which has no service URL to query. Field names must come from that layer's own `fields` list in the map context.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Layer id from the map context's layer list." },
+          field: { type: "string", description: "Optional numeric field to aggregate. Omit for a plain feature count." },
+          statistics: {
+            type: "array",
+            items: { type: "string", enum: ["sum", "avg", "min", "max"] },
+            description: "Which statistics to compute over `field`. Ignored when no field is given."
+          }
+        },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    domain: "client",
+    type: "function",
+    function: {
       name: "apply_buffer",
       description:
-        "Buffer the currently-selected map feature by a distance (GISMapEngine.bufferSelectedFeature). Requires the user to have a feature selected on the map already.",
+        "Buffer the currently-selected map feature by a distance (GISMapEngine.bufferSelectedFeature). Requires a feature to be selected first - if the user named one rather than clicking it themselves, call select_feature before this.",
       parameters: {
         type: "object",
         properties: {
