@@ -306,3 +306,94 @@ test("the auto-rename's own result resumes the model loop instead of renaming ag
   assert.equal(afterRename.reply, 'Added "Singapore Country Boundary" and renamed it to SCB.');
   assert.equal(modelCalls, 1);
 });
+
+// --- Freeing Ollama's RAM once a turn is over -------------------------------
+// OLLAMA_UNLOAD_AFTER_TURN evicts the model when the turn genuinely ends. The
+// distinction these tests pin down is the whole reason it isn't just
+// OLLAMA_KEEP_ALIVE=0: a pendingAction return is mid-turn, and unloading
+// there would reload the model in the middle of one user request.
+const config = require("./config");
+
+function stubUnload(t) {
+  const originalUnload = ollamaClient.unloadModel;
+  const originalFlag = config.ollamaUnloadAfterTurn;
+  const calls = [];
+  ollamaClient.unloadModel = async () => {
+    calls.push(Date.now());
+  };
+  config.ollamaUnloadAfterTurn = true;
+  t.after(() => {
+    ollamaClient.unloadModel = originalUnload;
+    config.ollamaUnloadAfterTurn = originalFlag;
+  });
+  return calls;
+}
+
+// releaseModelAfterTurn is fire-and-forget, so the unload is queued as a
+// microtask rather than awaited by the caller - let it run before asserting.
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("frees the model's RAM once the model has given a final text answer", async (t) => {
+  const calls = stubUnload(t);
+  stubOllama(t, async () => ({ role: "assistant", content: "There are 42 stations." }));
+
+  const result = await chatLoop.startChat([{ role: "user", content: "how many stations?" }], {});
+  await settle();
+
+  assert.equal(result.pendingAction, null);
+  assert.equal(calls.length, 1, "a finished turn should hand the RAM back");
+});
+
+test("does not free the model mid-turn, while a client action is still owed", async (t) => {
+  const calls = stubUnload(t);
+  stubOllama(t, async () => ({
+    role: "assistant",
+    content: "",
+    tool_calls: [{ type: "function", function: { name: "zoom_to_layer", arguments: { id: "mrtStations" } } }]
+  }));
+
+  const result = await chatLoop.startChat([{ role: "user", content: "zoom to mrt stations" }], {});
+  await settle();
+
+  assert.equal(result.pendingAction.name, "zoom_to_layer");
+  assert.equal(calls.length, 0, "the browser is about to come straight back - unloading here costs a reload");
+});
+
+test("frees the model when the turn fails, and rethrows the original error", async (t) => {
+  const calls = stubUnload(t);
+  stubOllama(t, async () => {
+    throw new Error("Ollama request failed (500): boom");
+  });
+
+  await assert.rejects(
+    () => chatLoop.startChat([{ role: "user", content: "hello" }], {}),
+    /Ollama request failed/
+  );
+  await settle();
+
+  assert.equal(calls.length, 1, "a failed turn is the last thing that should leave RAM pinned");
+});
+
+test("leaves the model resident when the option is off", async (t) => {
+  const calls = stubUnload(t);
+  config.ollamaUnloadAfterTurn = false;
+  stubOllama(t, async () => ({ role: "assistant", content: "hi" }));
+
+  await chatLoop.startChat([{ role: "user", content: "hello" }], {});
+  await settle();
+
+  assert.equal(calls.length, 0, "default behaviour must be unchanged");
+});
+
+test("an unload that fails is logged, not surfaced as a failed chat", async (t) => {
+  stubUnload(t);
+  ollamaClient.unloadModel = async () => {
+    throw new Error("connection refused");
+  };
+  stubOllama(t, async () => ({ role: "assistant", content: "hi" }));
+
+  const result = await chatLoop.startChat([{ role: "user", content: "hello" }], {});
+  await settle();
+
+  assert.equal(result.reply, "hi", "a missed optimisation must not become a user-visible error");
+});

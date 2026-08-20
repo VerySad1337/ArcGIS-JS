@@ -75,6 +75,8 @@ services:
       OLLAMA_TEMPERATURE: "${OLLAMA_TEMPERATURE:-}"
       OLLAMA_NUM_CTX: "${OLLAMA_NUM_CTX:-}"
       OLLAMA_REQUEST_TIMEOUT_MS: "${OLLAMA_REQUEST_TIMEOUT_MS:-}"
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-}"
+      OLLAMA_UNLOAD_AFTER_TURN: "${OLLAMA_UNLOAD_AFTER_TURN:-}"
       ARCGIS_PORTAL_URL: "${VITE_ARCGIS_PORTAL_URL:-https://www.arcgis.com}"
       CHAT_ENABLED_TOOLS: "${CHAT_ENABLED_TOOLS:-}"
     depends_on:
@@ -87,6 +89,20 @@ services:
   # across container recreation. Not published to the host.
   ollama:
     image: ollama/ollama:latest
+    environment:
+      # Ollama sizes a model's KV cache for OLLAMA_NUM_PARALLEL concurrent
+      # slots at load time, so the memory cost is num_ctx x this - leaving
+      # it to Ollama's own auto-selection can quietly allocate several times
+      # the cache this app ever uses. One browser chat panel needs exactly
+      # one slot, and only one model (OLLAMA_MODEL) is ever loaded, so pin
+      # both: the largest single RAM saving available here, and unlike
+      # lowering OLLAMA_NUM_CTX it costs nothing in prompt capacity.
+      OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-1}"
+      OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-1}"
+      # Server-side idle residency default. mcp-chat-proxy also sends
+      # keep_alive per request (which overrides this), so this only governs
+      # anything else talking to the same Ollama.
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-}"
     volumes:
       - ollama-models:/root/.ollama
 

@@ -19,6 +19,8 @@ Nothing about the model, host, port, portal, or tool set is hardcoded — everyt
 | `OLLAMA_TEMPERATURE` | `0.2` | Generation temperature. |
 | `OLLAMA_NUM_CTX` | `8192` | Context window size passed to Ollama. |
 | `OLLAMA_REQUEST_TIMEOUT_MS` | `300000` | Abort a stuck Ollama request after this long. 300s (5min) by default — measured directly against this app's real tool-schema payload on CPU-only Ollama: one turn can legitimately take ~220s, dominated by prompt evaluation, not generation. Kept under `nginx.conf`'s `/api/chat/` `proxy_read_timeout` (340s) so this fires first with a clear error. |
+| `OLLAMA_KEEP_ALIVE` | (Ollama's own, 5m) | How long Ollama keeps the model resident in RAM after a request — `"0"` to unload immediately, `"30s"`/`"5m"` for that much idle time. Sent per request, so it overrides whatever the Ollama server itself was started with. See "Memory" below. |
+| `OLLAMA_UNLOAD_AFTER_TURN` | `false` | `true` frees the model's RAM as soon as a chat turn finishes, instead of waiting out the idle timer above. Prefer this over `OLLAMA_KEEP_ALIVE=0` — see "Memory" below. |
 | `CHAT_PROXY_PORT` | `4001` | Listen port. |
 | `CHAT_ENABLED_TOOLS` | (all tools) | Comma-separated allow-list of tool names (see `toolSchemas.js`) actually offered to the model. Set this to lock a deployment to read-only tools, e.g. `search_portal_layers,query_layer_features,get_layer_statistics` with no map-mutating tools at all. |
 
@@ -37,6 +39,16 @@ docker compose exec ollama ollama pull <model you set OLLAMA_MODEL to>
 ```
 
 If you already run Ollama elsewhere (host machine, another server), just point `OLLAMA_URL` at it and remove/scale the `ollama` service to zero — it isn't load-bearing infrastructure, it's a convenience default. `ensureModelAvailable` works the same way against any reachable Ollama instance.
+
+## Memory
+
+The model's residency in Ollama's RAM — not this service, which holds nothing between requests — is what a small instance actually pays for. Three levers, roughly in order of what they buy:
+
+1. **`OLLAMA_NUM_PARALLEL=1` / `OLLAMA_MAX_LOADED_MODELS=1`** on the *Ollama* container (already the default in `docker-compose.yml` and `deployArcGISReact.sh`). Ollama sizes a model's KV cache for however many concurrent slots it decides to allow, so the cache cost is `OLLAMA_NUM_CTX` × that number. One browser chat panel needs one slot. This is the biggest saving and, unlike lowering `OLLAMA_NUM_CTX`, it costs nothing — see the note under `OLLAMA_NUM_CTX` about what happens when the context window is too small to hold the tool schemas.
+2. **`OLLAMA_UNLOAD_AFTER_TURN=true`.** `chatLoop.js`'s `releaseModelAfterTurn` asks Ollama to evict the model the moment a turn is genuinely over — the model gave a final text answer, or the turn failed. It deliberately does **not** fire when the loop returns a `pendingAction`: the browser executes that map action in milliseconds and comes straight back to `/api/chat/tool-result`, so unloading there would pay a full model reload inside a single user request. The unload is fire-and-forget, so the user's reply never waits on it and a failure is logged rather than surfaced.
+3. **`OLLAMA_KEEP_ALIVE`.** The blunt instrument: a plain idle timer, applied to every call. `OLLAMA_KEEP_ALIVE=0` frees memory fastest but cannot tell mid-turn from end-of-turn, so it reloads the model between a tool call and its result — on CPU-only Ollama that is a real cost. Use a short duration (`"30s"`) as a safety net alongside (2) if you want residency bounded even when a browser never returns to finish a turn.
+
+The trade-off (2) and (3) both buy back is load time on the next message: re-reading the weights from the page cache, typically seconds for a 1.5B–3B model, against the ~200s a CPU-only turn already spends on prompt evaluation.
 
 ## Available tools
 

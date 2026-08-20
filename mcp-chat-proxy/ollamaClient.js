@@ -4,6 +4,15 @@
 // host, or generation parameter is hardcoded in this file.
 const config = require("./config");
 
+// How long Ollama should hold the model in RAM after this request. Only
+// sent when the operator configured it (config.ollamaKeepAlive), so an
+// unset OLLAMA_KEEP_ALIVE leaves Ollama's own default in force rather than
+// this file quietly deciding a residency policy on its behalf.
+function withKeepAlive(body) {
+  if (config.ollamaKeepAlive === null) return body;
+  return { ...body, keep_alive: config.ollamaKeepAlive };
+}
+
 async function chat(messages, tools) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.ollamaRequestTimeoutMs);
@@ -13,7 +22,7 @@ async function chat(messages, tools) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
-      body: JSON.stringify({
+      body: JSON.stringify(withKeepAlive({
         model: config.ollamaModel,
         messages,
         tools,
@@ -22,7 +31,7 @@ async function chat(messages, tools) {
           temperature: config.ollamaTemperature,
           num_ctx: config.ollamaNumCtx
         }
-      })
+      }))
     });
 
     if (!response.ok) {
@@ -32,6 +41,40 @@ async function chat(messages, tools) {
 
     const body = await response.json();
     return body.message; // { role: "assistant", content, tool_calls? }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Ollama's documented way to hand a model's RAM back without stopping the
+// server: name the model with an empty message list and keep_alive: 0. No
+// tokens are generated - it only resets that model's residency timer to
+// zero, so the runner is torn down and the weights + KV cache are freed.
+// Called by chatLoop.js when a turn is over (see releaseModelAfterTurn).
+//
+// Given its own short timeout rather than ollamaRequestTimeoutMs: this
+// does no inference, so the multi-minute allowance that exists for prompt
+// evaluation on CPU would only turn an unreachable Ollama into a 5-minute
+// dangling request for what is an optimisation, not part of any reply.
+const UNLOAD_TIMEOUT_MS = 10_000;
+
+async function unloadModel() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), UNLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${config.ollamaUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ model: config.ollamaModel, messages: [], keep_alive: 0 })
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`Ollama unload request failed (${response.status}): ${text || response.statusText}`);
+    }
+    await response.json().catch(() => null);
   } finally {
     clearTimeout(timeout);
   }
@@ -139,4 +182,4 @@ async function ensureModelAvailable() {
   console.log(`[mcp-chat-proxy] Model "${config.ollamaModel}" ready.`);
 }
 
-module.exports = { chat, ensureModelAvailable };
+module.exports = { chat, unloadModel, ensureModelAvailable };

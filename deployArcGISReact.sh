@@ -114,7 +114,19 @@ docker "${onemap_run_args[@]}"
 # published to the host (no -p) - only mcp-chat-proxy talks to it, over the
 # shared network, and it isn't reachable from outside this deploy either.
 echo "==> Starting ollama container"
-ollama_run_args=(run -d --name "$OLLAMA_CONTAINER_NAME" --network "$NETWORK_NAME" -v ollama-models:/root/.ollama --restart unless-stopped "$OLLAMA_IMAGE")
+# OLLAMA_NUM_PARALLEL/OLLAMA_MAX_LOADED_MODELS are pinned to 1 for the same
+# reason docker-compose.yml pins them: Ollama otherwise sizes each model's
+# KV cache for several concurrent slots at once, multiplying the RAM cost of
+# OLLAMA_NUM_CTX on a deployment that only ever has one chat panel and one
+# model. Overridable from ENV_FILE. Array form for the same paste-corruption
+# immunity the other run_args arrays above have.
+ollama_run_args=(
+  run -d --name "$OLLAMA_CONTAINER_NAME" --network "$NETWORK_NAME"
+  -v ollama-models:/root/.ollama
+  -e "OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}"
+  -e "OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}"
+  --restart unless-stopped "$OLLAMA_IMAGE"
+)
 docker "${ollama_run_args[@]}"
 
 # Not published to the host either - same boundary as onemap-proxy.

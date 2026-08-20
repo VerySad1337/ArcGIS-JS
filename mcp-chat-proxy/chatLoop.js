@@ -462,12 +462,123 @@ async function processToolCall(call, index, hops, messages, mapContext) {
   return null;
 }
 
+// qwen2.5:1.5b (both -instruct and base) has been observed skipping
+// Ollama's native tool_calls protocol entirely and instead writing a JSON
+// object describing the call as plain text in `content` - sometimes with
+// the right tool name, sometimes not, in a few different malformed shapes:
+// {name, arguments}, {function:{name, arguments}}, {type:"function",
+// function:"<name>", arguments}. Left alone, this reads to the model's own
+// next turn (and the user) as a final text answer - nothing happens on the
+// map, and the assistant looks like it refused a request it actually
+// understood. Recover it as a real tool call whenever the JSON names one of
+// THIS deployment's actual enabled tools; a model that used the real
+// protocol is never second-guessed, and a hallucinated/unknown tool name in
+// the text is left as ordinary prose rather than guessed at.
+function extractToolNameAndArgs(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  if (typeof obj.name === "string") return { name: obj.name, arguments: obj.arguments || {} };
+  if (typeof obj.function === "string") return { name: obj.function, arguments: obj.arguments || {} };
+  if (obj.function && typeof obj.function === "object" && typeof obj.function.name === "string") {
+    return { name: obj.function.name, arguments: obj.function.arguments || {} };
+  }
+  return null;
+}
+
+// Scans for top-level balanced {...} substrings (brace-depth tracking, not
+// regex - a naive `/\{[\s\S]*\}/` greedily spans multiple objects and any
+// prose between them) so a JSON blob embedded in surrounding prose or a
+// ```json fenced block is found regardless of what's around it.
+function findBalancedJsonObjects(text) {
+  const candidates = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (text[i] === "}") {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        candidates.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return candidates;
+}
+
+function recoverFallbackToolCall(content, knownToolNames) {
+  if (typeof content !== "string" || !content.includes("{")) return null;
+  for (const candidate of findBalancedJsonObjects(content)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const extracted = extractToolNameAndArgs(parsed);
+    if (extracted && knownToolNames.has(extracted.name)) return extracted;
+  }
+  return null;
+}
+
+// Ollama holds a model resident in RAM after it answers, so the next
+// request skips the load. That is the right default when a turn is still in
+// flight and dead weight once it isn't - on the small instances this app
+// targets (the same ones OLLAMA_NUM_CTX was lowered for), the weights plus
+// KV cache are the largest thing the chat feature costs while nobody is
+// using it. When OLLAMA_UNLOAD_AFTER_TURN is on, ask Ollama to free it the
+// moment the turn is genuinely over.
+//
+// "Genuinely over" is exactly what this layer knows and a plain
+// OLLAMA_KEEP_ALIVE=0 cannot: a pendingAction return is NOT the end of a
+// turn - the browser runs that action in milliseconds and comes straight
+// back to /api/chat/tool-result, so unloading there would pay a full model
+// reload in the middle of one user request. Only a final text reply (or a
+// failed turn, which still shouldn't leave the RAM pinned) releases it.
+//
+// Fire-and-forget by design: the user's reply must not wait on an unload,
+// and a failed unload is a missed optimisation, not a failed chat. If the
+// user sends a new message while it's in flight, the worst case is that
+// model reloading - correctness never depends on it.
+function releaseModelAfterTurn() {
+  if (!config.ollamaUnloadAfterTurn) return;
+  ollamaClient.unloadModel().then(
+    () => console.log(`[mcp-chat-proxy] turn finished - released "${config.ollamaModel}" from Ollama's memory.`),
+    (err) => console.warn(`[mcp-chat-proxy] could not unload "${config.ollamaModel}": ${err.message}`)
+  );
+}
+
+// Thin wrapper over runLoopUntilDone so the release decision lives in one
+// place, covering every way a turn can end - including a throw, which is
+// precisely when a model left resident is least wanted.
 async function runLoop(messages, mapContext) {
+  try {
+    const result = await runLoopUntilDone(messages, mapContext);
+    if (!result.pendingAction) releaseModelAfterTurn();
+    return result;
+  } catch (err) {
+    releaseModelAfterTurn();
+    throw err;
+  }
+}
+
+async function runLoopUntilDone(messages, mapContext) {
   const tools = enabledTools();
+  const knownToolNames = new Set(tools.map((t) => t.function.name));
   let hops = 0;
 
   while (true) {
     const assistantMessage = await ollamaClient.chat(messages, tools);
+
+    if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+      const recovered = recoverFallbackToolCall(assistantMessage.content, knownToolNames);
+      if (recovered) {
+        console.log(`[mcp-chat-proxy] recovered fallback tool call from text content: ${recovered.name} ${JSON.stringify(recovered.arguments)}`);
+        assistantMessage.tool_calls = [{ type: "function", function: { name: recovered.name, arguments: recovered.arguments } }];
+      }
+    }
+
     messages.push(assistantMessage);
 
     const toolCalls = assistantMessage.tool_calls || [];
