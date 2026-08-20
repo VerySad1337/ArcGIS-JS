@@ -102,6 +102,12 @@ What all this buys back is model load time on the next message - seconds from pa
 - `deployArcGISReact.sh`'s manual multi-container path starts `ollama` then `mcp-chat-proxy` on the same shared `arcgis-network`, mirroring `onemap-proxy`'s existing build-and-push-the-image-yourself precedent.
 - `docker-entrypoint.sh` forwards `VITE_CHAT_ENABLED` into `env-config.js` alongside the existing `VITE_ARCGIS_*` values, so it's a true runtime (not build-time) toggle.
 
+## The transcript is bounded (2026-08)
+
+`ChatPanel`'s `protocolMessages` is round-tripped in full on every request, and until now it only ever grew. `services/chatTranscript.js`'s `trimTranscript` caps the retained array at 128 KB, dropping whole oldest exchanges. It cuts **only on user-turn boundaries** and runs **only at the start of a new user turn** - both because an assistant `tool_calls` entry and its answering `tool` message are paired by `tool_call_id`, and `knownPortalItems`/`renameOwedAfterAdd` above walk this array relying on exactly that pairing. See `knowledge/features/performance.md` §4 for the full rationale and the memory cost it removes.
+
+Note the interaction with this service's statelessness: because `chatLoop` echoes back the messages it was sent, a trim on the client propagates into what the model sees on later turns. Dropping the oldest exchanges therefore drops that context for the model too - an accepted trade, since `OLLAMA_NUM_CTX` truncates the prompt long before a 128 KB transcript could reach the model anyway.
+
 ## Deliberately excluded
 
 - No conversation persistence - `mcp-chat-proxy` holds nothing in memory or on disk beyond the in-flight request; a page refresh clears the chat history (`ChatPanel`'s local component state).

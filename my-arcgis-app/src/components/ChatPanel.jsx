@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
 import PropTypes from "prop-types";
 import Icon from "./Icon";
+import { trimTranscript } from "../services/chatTranscript";
 
 // A single user turn can trigger a chain of client (map-mutating) actions -
 // e.g. "add the parks layer and buffer it" resolves to add_portal_layer
@@ -10,6 +11,7 @@ import Icon from "./Icon";
 // counter resets on every /api/chat/tool-result call, so a runaway chain of
 // client actions across many round trips needs its own, client-side cap.
 const MAX_ACTION_CHAIN = 5;
+
 
 function describeAction(pendingAction) {
   const label = pendingAction.name.replace(/_/g, " ");
@@ -78,7 +80,7 @@ function ChatPanel({ mapContext, onSendMessage, onSubmitToolResult, onRunClientA
     appendTimeline("user", text);
     setSending(true);
     try {
-      const nextMessages = [...protocolMessages, { role: "user", content: text }];
+      const nextMessages = [...trimTranscript(protocolMessages), { role: "user", content: text }];
       const result = await onSendMessage(nextMessages, mapContext);
       await handleLoopResult(result, 0);
     } catch (err) {

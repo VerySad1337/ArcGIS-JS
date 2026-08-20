@@ -91,6 +91,43 @@ Both now go through `ThrottledRangeInput`, built on `useThrottledCallback` (`src
 
 ---
 
+## 4. Retained browser memory (2026-08)
+
+The three sections above are all about CPU and bytes on the wire. The one thing none of them bounded is memory the tab *keeps*.
+
+**`ChatPanel`'s `protocolMessages` grew for the whole session.** It is the literal array `mcp-chat-proxy` round-trips, so every tool result the model ever saw stayed in it - whole `search_portal_layers` payloads, feature-query JSON, statistics results - and because the service is stateless by design (see `knowledge/features/chatbot-mcp-system.md`) the entire array was also re-uploaded on every request. Both costs grow without limit on a tab left open all day.
+
+`services/chatTranscript.js`'s `trimTranscript` caps it at 128 KB by dropping whole oldest exchanges. Two constraints shape it, and neither is optional:
+
+- **It cuts only on user-turn boundaries.** An assistant `tool_calls` entry and the `tool` message answering it are paired by `tool_call_id`, and `chatLoop.js` walks the array relying on that pairing (`knownPortalItems`, `renameOwedAfterAdd`). A `user` message is the only position guaranteed not to sit between the two, so it is the only safe cut point.
+- **It runs only at the start of a new user turn, never mid-chain.** A turn in flight still owes a tool result under a specific `callId`; trimming underneath it would strand that pairing. `handleSubmit` calls it; `handleLoopResult` deliberately does not.
+
+The most recent exchange is never dropped however large, and a leading system message is preserved. The trimmed array propagates back into component state naturally, because the server echoes back the messages it was sent - so the memory is genuinely released, not merely excluded from the next request.
+
+**`mapContext` was three passes over `layers`, on every engine mutation.** It allocated a copy of every layer object, and `refreshLayers()` replaces `layers` after essentially every engine mutation - including each throttled commit of a colour or opacity drag (see §3). Now one pass, and short-circuited to a frozen module constant when `CHAT_ENABLED` is off: nothing renders `ChatPanel` then and nothing reads it, so the whole derivation was waste, and the stable identity is what lets `ChatPanel`'s `memo` boundary hold. Same gating the `chatLayerFields` prefetch beside it already used.
+
+**Dead dependencies removed.** `shpjs` and `file-saver` were declared in `package.json` and imported nowhere in the app (nothing else in the lockfile depended on them either). Not a runtime win - they were never bundled - but install size and supply-chain surface. `@esri/calcite-components` stays: it is a real peer dependency of `@arcgis/map-components`.
+
+---
+
+## Measured state as of 2026-08
+
+A fresh `vite build` after the above, for comparison against §1's table:
+
+| | Value |
+| --- | --- |
+| Entry chunk, raw | 2,373,310 B |
+| Entry chunk, gzipped | 613,295 B |
+| `modulepreload` links | 298 |
+| Emitted chunks in `dist/assets` | 1,402 |
+| `dist/` total (all lazy chunks included) | 23 MB |
+
+No regression against §1's post-change figures. `VideoLayer` (731 KB) and `arcgis-scene` (898 KB) are confirmed *not* preloaded - they stay lazy.
+
+**The largest remaining lever, not taken.** `@arcgis/map-components` pulls the whole Calcite/Lumina custom-element runtime into the entry chunk (3,308 `calcite` references in it). Constructing `MapView`/`SceneView` directly from `@arcgis/core` instead of using `<arcgis-map>`/`<arcgis-scene>` would drop that weight from first paint. Deliberately left alone: it rewrites `GISMapView.jsx`, its tests, and the lazy-3D design §1 exists to protect. That is an architecture decision, not an optimization - raise it as one.
+
+---
+
 ## Costs consciously left in place
 
 - **`getLayers()` is recomputed in full on every engine mutation** — see §2.
@@ -101,7 +138,7 @@ Both now go through `ThrottledRangeInput`, built on `useThrottledCallback` (`src
 
 ## Verification
 
-- Full suite: 465 tests across 24 suites, all passing, including new coverage for `useThrottledCallback` (leading edge, coalescing, stable identity, unmount safety) and `ThrottledRangeInput` (immediate single commit, thumb tracking during a coalesced burst, no snap-back on a stale prop).
+- Full suite: 545 tests across 28 suites, all passing (was 465 across 24 at the time of §1-§3), including new coverage for `useThrottledCallback` (leading edge, coalescing, stable identity, unmount safety) and `ThrottledRangeInput` (immediate single commit, thumb tracking during a coalesced burst, no snap-back on a stale prop).
 - `npx eslint` on the touched files reports the same pre-existing errors as before the change (`react-hooks/refs` on `AnalysisPanel`'s `hasRoute`/`hasBuffer` props, `react-hooks/set-state-in-effect` on the draw-target auto-select) and one fewer warning.
 - `nginx -t` against `nginx:alpine` validates the gzip and HTTP/2 additions.
 - **Not verified in a browser.** The byte and request-count figures above come from build output; no live profiling session (Lighthouse, React Profiler, or a real 2D/3D switch) was run.

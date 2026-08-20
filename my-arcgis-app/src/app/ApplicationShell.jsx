@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Stable identity for the chat-disabled case, so mapContext's memo hands back
+// the same object every render instead of an equivalent fresh one.
+const EMPTY_MAP_CONTEXT = Object.freeze({ is3D: false, layers: [], queryableLayerUrls: [] });
+
 const TOAST_DURATION_MS = 4000;
 import GISMapView from "../components/GISMapView";
 import ViewModeToggle from "../components/ViewModeToggle";
@@ -899,14 +903,32 @@ export default function ApplicationShell() {
     };
   }, [layerIdsKey]);
 
-  const mapContext = useMemo(
-    () => ({
-      is3D,
-      layers: layers.filter(Boolean).map((l) => (chatLayerFields[l.id] ? { ...l, fields: chatLayerFields[l.id] } : l)),
-      queryableLayerUrls: layers.filter(Boolean).map((l) => l.url).filter(Boolean)
-    }),
-    [is3D, layers, chatLayerFields]
-  );
+  // One pass over `layers`, not three. This is derived from `layers`, which
+  // refreshLayers() replaces after *every* engine mutation - including each
+  // throttled commit of a colour or opacity drag (see
+  // knowledge/features/performance.md 2/3) - so it re-runs far more often
+  // than the chat itself is ever used.
+  //
+  // Gated on CHAT_ENABLED for the same reason the chatLayerFields prefetch
+  // above is: with chat off nothing renders ChatPanel and nothing reads this,
+  // so deriving it per drag frame is pure waste. The frozen constant also
+  // keeps the identity stable in that case, which is what lets ChatPanel's
+  // own memo() boundary hold.
+  const mapContext = useMemo(() => {
+    if (!CHAT_ENABLED) return EMPTY_MAP_CONTEXT;
+
+    const contextLayers = [];
+    const queryableLayerUrls = [];
+    for (const layer of layers) {
+      if (!layer) continue;
+      const fields = chatLayerFields[layer.id];
+      contextLayers.push(fields ? { ...layer, fields } : layer);
+      // The allow-list assertUrlIsOnCurrentMap validates a model-supplied
+      // `url` against - only URL-backed layers have one.
+      if (layer.url) queryableLayerUrls.push(layer.url);
+    }
+    return { is3D, layers: contextLayers, queryableLayerUrls };
+  }, [is3D, layers, chatLayerFields]);
 
   // Thin, un-toasted pass-throughs to ChatService - ChatPanel already shows
   // a failure inline in its own timeline, so there's no separate toast to
