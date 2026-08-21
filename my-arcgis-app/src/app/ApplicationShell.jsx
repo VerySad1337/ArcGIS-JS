@@ -1067,6 +1067,42 @@ export default function ApplicationShell() {
           showToast(`Added buffer layer "${result.name}".`, "success");
           return { ok: true, data: result };
         }
+        // Routing analysis from the chat - mirrors handleRoute exactly
+        // (same geocodeAddress + solveRoute + drawRoute/drawStops sequence
+        // the manual Route Search form drives), so a chat-driven route looks
+        // identical, on the map, to one typed into that form. Geocoding and
+        // route-solving each throw their own descriptive message
+        // ("Location not found", "No route returned") on failure, which the
+        // catch block below turns into the { ok: false, error } outcome the
+        // model reports back to the user.
+        case "calculate_route": {
+          const startAddress = String(args.startAddress || "").trim();
+          const endAddress = String(args.endAddress || "").trim();
+          if (!startAddress || !endAddress) {
+            return { ok: false, error: "calculate_route needs both a startAddress and an endAddress." };
+          }
+
+          const s = await geocodeAddress(startAddress);
+          const e = await geocodeAddress(endAddress);
+          const route = await solveRoute(
+            { type: "point", longitude: s.longitude, latitude: s.latitude },
+            { type: "point", longitude: e.longitude, latitude: e.latitude }
+          );
+          engine.drawRoute(route);
+          engine.drawStops(
+            { type: "point", longitude: s.longitude, latitude: s.latitude },
+            { type: "point", longitude: e.longitude, latitude: e.latitude }
+          );
+          refreshLayers();
+          showToast("Route calculated.", "success");
+          return { ok: true, data: { startAddress, endAddress } };
+        }
+        case "create_route_result_layer": {
+          const result = engine.createRouteResultLayer(args.name);
+          refreshLayers();
+          showToast(`Added route layer "${result.name}".`, "success");
+          return { ok: true, data: result };
+        }
         case "add_portal_layer": {
           if (!args.item?.id || !args.item?.url) {
             return { ok: false, error: "item must be an object with id/title/url from a prior search_portal_layers result." };

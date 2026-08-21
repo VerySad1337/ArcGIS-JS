@@ -199,6 +199,36 @@ const CLIENT_TOOLS = [
     domain: "client",
     type: "function",
     function: {
+      name: "calculate_route",
+      description:
+        "Calculate and draw a route between two addresses (GeocodingService.geocodeAddress + RoutingService.solveRoute + GISMapEngine.drawRoute/drawStops) - the same flow the app's own Route Search form uses. Geocodes both addresses via OneMap, then draws the route line plus its start (green circle) and end (red square) stop markers on the map. Both addresses are geocoded independently, so a locally-known place name, a full street address, or a 6-digit postal code all work, exactly as typed by the user - never ask the user which format they mean or to restate it. If the user's message already names both a start and an end (e.g. \"520897 to ICA Service centre\"), call this right away with those two values; do not ask a clarifying question first.",
+      parameters: {
+        type: "object",
+        properties: {
+          startAddress: { type: "string", description: "Starting address, building/place name, or 6-digit postal code, exactly as the user wrote it." },
+          endAddress: { type: "string", description: "Destination address, building/place name, or 6-digit postal code, exactly as the user wrote it." }
+        },
+        required: ["startAddress", "endAddress"]
+      }
+    }
+  },
+  {
+    domain: "client",
+    type: "function",
+    function: {
+      name: "create_route_result_layer",
+      description: "Save the current route search result (route line plus its two stop markers) as a new named, permanent layer (GISMapEngine.createRouteResultLayer). Requires a route to already exist (call calculate_route first).",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string", description: "Name for the new layer." } },
+        required: ["name"]
+      }
+    }
+  },
+  {
+    domain: "client",
+    type: "function",
+    function: {
       name: "add_portal_layer",
       description:
         "Add a portal Feature Service layer to the map by name (GISMapEngine.addPortalLayer). item.title is matched against real portal search results server-side - prefer using the exact title from a prior search_portal_layers call, but a close/approximate title is resolved automatically too. Any id/url you supply are ignored; only the title is used to find the layer. The layer is added under its own real portal title. If the user wants it displayed under a DIFFERENT custom name, do NOT try to pass that here - call add_portal_layer first, read the new layer's id back from this call's result, then call rename_layer with that id and the requested name as a separate, second tool call.",

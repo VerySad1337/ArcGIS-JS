@@ -70,6 +70,8 @@ The full menu of tools the model can call, defined in `toolSchemas.js`. All are 
 | `create_hexagon_layer` | Bins a point/polygon/line source layer into a hexagon grid. |
 | `apply_buffer` | Buffers the feature currently selected on the map. |
 | `create_buffer_result_layer` | Saves the current buffer result as a permanent named layer. |
+| `calculate_route` | Geocodes two addresses and draws a route between them (same flow as the manual Route Search form). |
+| `create_route_result_layer` | Saves the current route result as a permanent named layer. |
 | `add_portal_layer` | Finds and adds a portal layer by title (fuzzy-matched server-side against real search results — see `chatLoop.js`'s `resolveAddPortalLayerItem`), under its own real portal title. |
 | `rename_layer` | Renames an existing layer — a separate call from `add_portal_layer`/`create_heatmap_layer`/etc. on purpose, see the note below. |
 | `set_layer_filter` | Applies a where-style filter (one or more conditions, AND/OR) to a layer. |

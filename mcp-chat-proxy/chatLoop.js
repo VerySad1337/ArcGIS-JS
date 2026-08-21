@@ -53,6 +53,17 @@ function buildSystemMessage(mapContext) {
       "Buffering acts on the SELECTED feature. If the user names a feature instead of having clicked it (e.g. \"buffer Tampines MRT by 500m\"), call select_feature with their words first, then apply_buffer. Never tell the user to click the map themselves - select_feature is how you do it for them.",
       "select_feature reports the feature it actually selected, plus any other close matches. Tell the user which one you acted on when there was more than one.",
       "For \"how many\"/total/average questions about a layer already on the map, prefer get_layer_aggregate - it respects that layer's active filter, and is the only option for the local Drawings layer. Use get_layer_statistics only for a layer you are querying by url.",
+      // Observed directly: "i want to get from 520897 to ICA Service centre"
+      // - a single message naming both ends - still got "Could you please
+      // provide me with the address... for both your starting point and
+      // destination?" instead of an immediate calculate_route call, forcing
+      // the user to repeat themselves. The tool was capable the whole time;
+      // the model just defaulted to asking rather than acting on what it
+      // already had. Stated explicitly, the same fix this file already
+      // applies to select_feature ordering and field-name guessing: a small
+      // model does not reliably infer "you already have this, use it"
+      // on its own.
+      "To route between two places, call calculate_route with the two addresses/place names/postal codes as the user wrote them - do not geocode or look up coordinates yourself, calculate_route does that. Either value can be a full street address, a building/place name (e.g. \"ICA Service Centre\", \"Marina Bay Sands\"), or a postal code (6-digit, e.g. \"520897\") - pass the user's own wording through as-is, never ask them to reformat it or specify which kind it is. If a single message already names both a start and an end - \"520897 to ICA Service centre\", \"from Tampines to Marina Bay Sands\", \"route me from X to Y\" - call calculate_route immediately with those two values in that same turn. Do NOT ask a clarifying question restating what the user already told you; only ask if one of the two locations is genuinely absent from the message. If the user also wants the route kept as a permanent layer (e.g. \"save this route\"), call create_route_result_layer as a separate, second tool call once calculate_route succeeds.",
       "Only pass a `url` to query_layer_features/get_layer_statistics that appears in the current map layers list below.",
       // Each layer entry in the map state carries a `fields` array (see
       // ApplicationShell's mapContext) precisely so the model never has to
@@ -412,6 +423,69 @@ function applyFilterIntent(args, messages) {
   return changed.length ? { intent: narrowing ? "narrow" : "exclude", changed } : null;
 }
 
+// Even the strengthened system prompt/tool description above (see the
+// system message's routing rule) did not fix this: observed directly,
+// TWICE, against the same model - "i want to get from 520897 to ICA
+// Service centre help me route" still got "Could you please provide me
+// with the address... for both your starting point and destination?" on
+// the VERY FIRST message, despite both locations being right there. This
+// is the same lesson add_portal_layer's custom-name rename and
+// set_layer_filter's dropped zoom already taught this codebase: a step
+// that must happen is not something to ask a small local model for, and a
+// prompt rule alone does not reliably change that (see
+// knowledge/features/chatbot-mcp-system.md). Those two derive a *second*,
+// follow-up call from an already-completed tool result; this one differs
+// only in that there is no completed call yet to key off - it derives the
+// FIRST call of the turn, from the user's raw message, before Ollama is
+// ever invoked at all.
+//
+// Deliberately conservative about what it recognises: only the explicit
+// "from X to Y" phrasing (not a bare "X to Y", which collides with too
+// much of this app's own vocabulary - "change the color from red to
+// blue", "move the layer from position 3 to 5"), and only when a
+// routing-ish word also appears somewhere in the message ("route",
+// "direction(s)", "navigate", "drive/driving", "way", or the "get" in "how
+// do I get from X to Y" - deliberately broad, since "from X to Y" is
+// already the more selective half of the pair). A message that looks like
+// a route request but isn't quite this shape simply falls through to the
+// model, which still has the system-prompt rule above as a second line of
+// defense. A false positive here fails safely: geocoding a non-address
+// string just comes back "Location not found" as an ordinary failed tool
+// result - it never mutates the map incorrectly, unlike a wrongly-inferred
+// filter or rename would.
+const ROUTING_CUE = /\b(?:rout\w*|direction\w*|navigat\w*|driv\w*|way|get)\b/i;
+const FROM_TO_SPAN = /\bfrom\s+(.+?)\s+to\s+(.+)$/i;
+
+// Trims conversational tail words a from/to span's greedy back half tends
+// to swallow ("...to ICA Service centre help me route" -> "ICA Service
+// centre"). Applied repeatedly since more than one filler phrase can stack
+// ("...to Tampines please, thanks!").
+const TRAILING_FILLER =
+  /\s*[.,!?]*\s*\b(?:please|now|for me|help me(?: route(?: me)?| get there)?|can you help(?: me)?(?: route(?: me)?)?|route me|thanks?|thank you)\b[.,!?]*\s*$/i;
+
+function stripTrailingFiller(text) {
+  let result = text.trim();
+  for (let i = 0; i < 5; i += 1) {
+    const next = result.replace(TRAILING_FILLER, "").trim();
+    if (next === result) break;
+    result = next;
+  }
+  return result.replace(/^["'`]+|["'`]+$/g, "").trim();
+}
+
+// Returns { startAddress, endAddress } when `text` reads as a one-shot
+// route request, else null.
+function detectRouteRequest(text) {
+  if (typeof text !== "string" || !ROUTING_CUE.test(text)) return null;
+
+  const match = FROM_TO_SPAN.exec(text.replace(/\s+/g, " "));
+  if (!match) return null;
+
+  const startAddress = stripTrailingFiller(match[1]);
+  const endAddress = stripTrailingFiller(match[2]);
+  return startAddress && endAddress ? { startAddress, endAddress } : null;
+}
+
 // Handles exactly one tool call: executes/validates it and mutates
 // `messages` accordingly, returning a final runLoop result to short-circuit
 // on (a client tool handoff), or null to mean "keep processing this batch".
@@ -614,6 +688,24 @@ async function runLoopUntilDone(messages, mapContext) {
 
 async function startChat(userMessages, mapContext) {
   const messages = withSystemMessage(userMessages, mapContext);
+
+  // Deterministic one-shot routing (see detectRouteRequest above) - only
+  // for a genuinely new user turn, and only when the tool hasn't been
+  // disabled on this deployment (CHAT_ENABLED_TOOLS), same restriction
+  // runServerTool enforces for every other tool.
+  const lastUser = [...userMessages].reverse().find((m) => m.role === "user");
+  const routeArgs = config.isToolEnabled("calculate_route") ? detectRouteRequest(lastUser?.content) : null;
+  if (routeArgs) {
+    const callId = `calculate_route_auto_${Date.now().toString(36)}`;
+    console.log(`[mcp-chat-proxy] auto tool call: calculate_route ${JSON.stringify(routeArgs)}`);
+    messages.push({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: callId, type: "function", function: { name: "calculate_route", arguments: routeArgs } }]
+    });
+    return { reply: null, pendingAction: { name: "calculate_route", args: routeArgs, callId }, messages };
+  }
+
   return runLoop(messages, mapContext);
 }
 

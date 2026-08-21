@@ -140,6 +140,71 @@ test("no rename is emitted when the add itself failed", async (t) => {
   assert.equal(result.pendingAction, null);
 });
 
+// Even with the system prompt and calculate_route's own tool description
+// telling the model to act immediately on a one-shot "from X to Y" request,
+// it kept asking a clarifying question for information already in the
+// message (observed directly, twice: "i want to get from 520897 to ICA
+// Service centre help me route"). detectRouteRequest derives the tool call
+// deterministically from the user's own message instead, so startChat
+// never has to consult the model for this shape of request at all - each
+// test here stubs the model to throw, proving that.
+for (const [userText, startAddress, endAddress] of [
+  ["i want to get from 520897 to ICA Service centre help me route", "520897", "ICA Service centre"],
+  ["route from Tampines to Marina Bay Sands please", "Tampines", "Marina Bay Sands"],
+  ["how do i get from Changi Airport to Orchard Road", "Changi Airport", "Orchard Road"],
+  ["give me directions from 520897 to 018956, thanks!", "520897", "018956"],
+  ["navigate from    Bishan   MRT   to   Raffles Place", "Bishan MRT", "Raffles Place"]
+]) {
+  test(`"${userText}" resolves to calculate_route without consulting the model`, async (t) => {
+    stubOllama(t, async () => {
+      throw new Error("the model must not be consulted for a one-shot route request");
+    });
+
+    const result = await chatLoop.startChat([{ role: "user", content: userText }], {});
+
+    assert.equal(result.reply, null);
+    assert.equal(result.pendingAction.name, "calculate_route");
+    assert.deepEqual(result.pendingAction.args, { startAddress, endAddress });
+  });
+}
+
+for (const [label, userText] of [
+  // No "from...to" span at all - the reply to a clarifying question, not a
+  // one-shot request. Left to the model, which still has the system-prompt
+  // rule as a second line of defense.
+  ["a bare 'X to Y' with no routing cue", "520897 to ICA Service centre"],
+  // "from...to" present, but nothing routing-ish about it - this app's own
+  // vocabulary is full of unrelated "from X to Y" phrasing.
+  ["a color change", "change the color from red to blue"],
+  ["a layer reorder", "move the layer from position 3 to 5"]
+]) {
+  test(`${label} is left for the model to handle`, async (t) => {
+    stubOllama(t, async () => ({ role: "assistant", content: "asked the model", tool_calls: [] }));
+
+    const result = await chatLoop.startChat([{ role: "user", content: userText }], {});
+
+    assert.equal(result.pendingAction, null);
+    assert.equal(result.reply, "asked the model");
+  });
+}
+
+test("calculate_route is not auto-derived when the tool is disabled on this deployment", async (t) => {
+  const config = require("./config");
+  const originalIsToolEnabled = config.isToolEnabled;
+  config.isToolEnabled = (name) => name !== "calculate_route";
+  t.after(() => {
+    config.isToolEnabled = originalIsToolEnabled;
+  });
+  stubOllama(t, async () => ({ role: "assistant", content: "asked the model", tool_calls: [] }));
+
+  const result = await chatLoop.startChat(
+    [{ role: "user", content: "route from Tampines to Marina Bay Sands" }],
+    {}
+  );
+
+  assert.equal(result.pendingAction, null);
+});
+
 // "Filter out the Tampines stations" is ambiguous English. Observed in docker
 // logs: qwen2.5:1.5b read it as exclusion, calling set_layer_filter with "="
 // (matches nothing - the real value is "TAMPINES MRT STATION") and then

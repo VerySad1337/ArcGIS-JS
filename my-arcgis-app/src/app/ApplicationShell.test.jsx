@@ -119,6 +119,25 @@ jest.mock("../components/ChatPanel", () => (props) => (
     </button>
     <button
       onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("calculate_route", {
+          startAddress: "Start",
+          endAddress: "End"
+        });
+      }}
+    >
+      run-calculate-route
+    </button>
+    <button
+      onClick={async () => {
+        lastClientActionOutcome = await props.onRunClientAction("create_route_result_layer", {
+          name: "My Commute"
+        });
+      }}
+    >
+      run-create-route-result-layer
+    </button>
+    <button
+      onClick={async () => {
         lastClientActionOutcome = await props.onRunClientAction("select_feature", { query: "Tampines" });
       }}
     >
@@ -520,6 +539,69 @@ describe("ApplicationShell", () => {
     });
     expect(engine.renameLayer).not.toHaveBeenCalled();
     expect(await screen.findByText('Added "Parks" to layers.')).toBeInTheDocument();
+  });
+
+  // calculate_route mirrors handleRoute (submit-route above) exactly, so the
+  // chat's own way to drive Route Search reuses the identical
+  // geocodeAddress -> solveRoute -> drawRoute/drawStops sequence rather than
+  // a second implementation of the same flow.
+  describe("runClientAction calculate_route", () => {
+    test("geocodes both ends, solves the route, and draws it", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+
+      await user.click(screen.getByText("run-calculate-route"));
+
+      expect(geocodeAddress).toHaveBeenNthCalledWith(1, "Start");
+      expect(geocodeAddress).toHaveBeenNthCalledWith(2, "End");
+      expect(solveRoute).toHaveBeenCalledWith(
+        { type: "point", longitude: 1, latitude: 3 },
+        { type: "point", longitude: 2, latitude: 4 }
+      );
+      expect(engine.drawRoute).toHaveBeenCalledWith({ type: "polyline" });
+      expect(engine.drawStops).toHaveBeenCalledWith(
+        { type: "point", longitude: 1, latitude: 3 },
+        { type: "point", longitude: 2, latitude: 4 }
+      );
+      expect(lastClientActionOutcome).toEqual({
+        ok: true,
+        data: { startAddress: "Start", endAddress: "End" }
+      });
+      expect(await screen.findByText("Route calculated.")).toBeInTheDocument();
+    });
+
+    // A failed geocode (OneMap down, or the model naming a place OneMap
+    // can't resolve) must be reported back to the model as a failure, not
+    // leave it to guess why nothing was drawn.
+    test("a geocoding failure is reported as a failure, and nothing is drawn", async () => {
+      const user = userEvent.setup();
+      render(<ApplicationShell />);
+      const engine = getEngineInstance();
+      geocodeAddress.mockRejectedValueOnce(new Error("Location not found"));
+
+      await user.click(screen.getByText("run-calculate-route"));
+
+      expect(engine.drawRoute).not.toHaveBeenCalled();
+      expect(lastClientActionOutcome).toEqual({ ok: false, error: "Location not found" });
+    });
+  });
+
+  // Same "save the live, always-overwritten result as a permanent layer"
+  // shape as create_buffer_result_layer, reusing engine.createRouteResultLayer
+  // directly - the same method AnalysisPanel's own "Add to Layers" button
+  // calls.
+  test("runClientAction create_route_result_layer saves the current route as a new named layer", async () => {
+    const user = userEvent.setup();
+    render(<ApplicationShell />);
+    const engine = getEngineInstance();
+    engine.createRouteResultLayer.mockReturnValue({ id: "route_abc", name: "My Commute" });
+
+    await user.click(screen.getByText("run-create-route-result-layer"));
+
+    expect(engine.createRouteResultLayer).toHaveBeenCalledWith("My Commute");
+    expect(lastClientActionOutcome).toEqual({ ok: true, data: { id: "route_abc", name: "My Commute" } });
+    expect(await screen.findByText('Added route layer "My Commute".')).toBeInTheDocument();
   });
 
   // Selection-scoped actions (apply_buffer above all) used to be reachable
